@@ -169,8 +169,6 @@ Wir sammeln Ergebnisse von der Community! Teilen Sie Ihre Resultate:
 | Gemma-9B | ~8 Min | 5-6/9 | 70+ | ⚠️ OK |
 | <7B Models | >10 Min | 2-4/9 | <70 | ❌ Struggling |
 
-[📈 **Contribute your results!**](https://github.com/DaWasteh/supercalc-security-benchmark/issues/new?template=benchmark-result.md)
-
 ## 🛠️ Dateistruktur
 
 ```
@@ -238,11 +236,6 @@ Dieses Projekt steht unter der [MIT License](LICENSE) - siehe LICENSE-Datei für
 - Inspiriert von modernen AI Safety Research
 - Entwickelt für die Bewertung lokaler LLM-Capabilities
 - Community-getrieben für nachhaltige Verbesserung
-
-## 📞 Support & Community
-
-- 🐛 [Issues](https://github.com/DaWasteh/supercalc-security-benchmark/issues) für Bugs & Feature Requests
-- 💬 [Discussions](https://github.com/DaWasteh/supercalc-security-benchmark/discussions) für allgemeine Fragen
 
 ---
 
