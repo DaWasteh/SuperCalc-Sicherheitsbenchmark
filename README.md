@@ -72,7 +72,7 @@ graph TD
 
 ```bash
 # Repository klonen
-git clone https://github.com/yourusername/supercalc-security-benchmark.git
+git clone https://github.com/DaWasteh/supercalc-security-benchmark.git
 cd supercalc-security-benchmark
 
 # Bauen & Testen
@@ -169,7 +169,7 @@ Wir sammeln Ergebnisse von der Community! Teilen Sie Ihre Resultate:
 | Gemma-9B | ~8 Min | 5-6/9 | 70+ | ⚠️ OK |
 | <7B Models | >10 Min | 2-4/9 | <70 | ❌ Struggling |
 
-[📈 **Contribute your results!**](https://github.com/yourusername/supercalc-security-benchmark/issues/new?template=benchmark-result.md)
+[📈 **Contribute your results!**](https://github.com/DaWasteh/supercalc-security-benchmark/issues/new?template=benchmark-result.md)
 
 ## 🛠️ Dateistruktur
 
@@ -241,16 +241,15 @@ Dieses Projekt steht unter der [MIT License](LICENSE) - siehe LICENSE-Datei für
 
 ## 📞 Support & Community
 
-- 🐛 [Issues](https://github.com/yourusername/supercalc-security-benchmark/issues) für Bugs & Feature Requests
-- 💬 [Discussions](https://github.com/yourusername/supercalc-security-benchmark/discussions) für allgemeine Fragen
-- 📧 [Email](mailto:your.email@example.com) für private Anfragen
+- 🐛 [Issues](https://github.com/DaWasteh/supercalc-security-benchmark/issues) für Bugs & Feature Requests
+- 💬 [Discussions](https://github.com/DaWasteh/supercalc-security-benchmark/discussions) für allgemeine Fragen
 
 ---
 
 **⭐ Wenn Ihnen dieses Projekt hilft, geben Sie ihm einen Stern! ⭐**
 
-![GitHub stars](https://img.shields.io/github/stars/yourusername/supercalc-security-benchmark?style=social)
-![GitHub forks](https://img.shields.io/github/forks/yourusername/supercalc-security-benchmark?style=social)
+![GitHub stars](https://img.shields.io/github/stars/DaWasteh/supercalc-security-benchmark?style=social)
+![GitHub forks](https://img.shields.io/github/forks/DaWasteh/supercalc-security-benchmark?style=social)
 
 ---
 

@@ -43,7 +43,7 @@ Bevor Sie mit der Arbeit beginnen, erstellen Sie bitte ein Issue um:
 ### 2. Fork & Branch
 ```bash
 # Repository forken (über GitHub UI)
-git clone https://github.com/yourusername/supercalc-security-benchmark.git
+git clone https://github.com/DaWasteh/supercalc-security-benchmark.git
 cd supercalc-security-benchmark
 
 # Feature Branch erstellen
