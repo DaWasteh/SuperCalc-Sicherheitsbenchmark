@@ -2,206 +2,228 @@ name: SuperCalc Sicherheitsbenchmark CI
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [main, develop]
   pull_request:
-    branches: [ main ]
+    branches: [main]
 
 env:
   BUILD_TYPE: Release
 
+# Top-level minimum permissions; individual jobs widen as needed.
+permissions:
+  contents: read
+
 jobs:
+  # ---------------------------------------------------------------------------
+  # 1. Build & Test on supported Ubuntu runners with both compilers.
+  #    NOTE: ubuntu-20.04 was retired by GitHub on 2025-04-15. Use 22.04 / 24.04.
+  # ---------------------------------------------------------------------------
   build-and-test:
+    name: Build & Test (${{ matrix.os }} / ${{ matrix.compiler }})
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
-        os: [ubuntu-latest, ubuntu-20.04]
+        os: [ubuntu-22.04, ubuntu-24.04]
         compiler: [g++, clang++]
-        
-    steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-      
-    - name: Install dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y build-essential cmake valgrind
-        
-    - name: Verify compiler
-      run: |
-        ${{ matrix.compiler }} --version
-        
-    - name: Build SuperCalc (Release)
-      run: |
-        ${{ matrix.compiler }} -std=c++20 -O2 -Wall -Wextra -Wpedantic \
-          -o supercalc enhanced_calc.cpp -pthread
-          
-    - name: Build SuperCalc (Debug with Sanitizers)
-      run: |
-        ${{ matrix.compiler }} -std=c++20 -g -fsanitize=address -fsanitize=undefined \
-          -Wall -Wextra -Wpedantic \
-          -o supercalc_debug enhanced_calc.cpp -pthread
-          
-    - name: Basic functionality test
-      run: |
-        chmod +x build_and_test.sh
-        timeout 30s ./build_and_test.sh
-        
-    - name: Test individual calculations
-      run: |
-        echo "Testing basic arithmetic..."
-        echo "2+3" | timeout 5s ./supercalc | grep -q "Result:"
-        echo "5*7" | timeout 5s ./supercalc | grep -q "Result:"
-        echo "10/2" | timeout 5s ./supercalc | grep -q "Result:"
-        
-    - name: Test vulnerability triggers (should not crash)
-      run: |
-        echo "Testing vulnerability triggers..."
-        # Note: These should trigger vulnerabilities but not crash in CI
-        echo "fact(10)" | timeout 5s ./supercalc || true
-        echo "var set test 123" | timeout 5s ./supercalc || true
-        
-    - name: Memory leak detection (Valgrind)
-      if: matrix.compiler == 'g++'
-      run: |
-        echo "Running Valgrind memory leak detection..."
-        echo -e "2+3\nquit" | timeout 30s valgrind --leak-check=summary --error-exitcode=0 ./supercalc
-        
-    - name: Static analysis (basic)
-      run: |
-        echo "Running basic static analysis..."
-        # Check for common issues
-        grep -n "system(" enhanced_calc.cpp || echo "No direct system calls found"
-        grep -n "strcpy" enhanced_calc.cpp || echo "No strcpy calls found"
-        grep -n "printf.*%" enhanced_calc.cpp || echo "No printf format strings found"
 
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake valgrind clang
+
+      - name: Verify compiler
+        run: ${{ matrix.compiler }} --version
+
+      - name: Build SuperCalc (Release)
+        run: |
+          ${{ matrix.compiler }} -std=c++20 -O2 -Wall -Wextra -Wpedantic \
+            -o supercalc enhanced_calc.cpp -pthread
+
+      - name: Build SuperCalc (Debug + Sanitizers)
+        run: |
+          ${{ matrix.compiler }} -std=c++20 -g \
+            -fsanitize=address -fsanitize=undefined \
+            -Wall -Wextra -Wpedantic \
+            -o supercalc_debug enhanced_calc.cpp -pthread
+
+      - name: Basic functionality test
+        run: |
+          chmod +x build_and_test.sh
+          timeout 30s ./build_and_test.sh
+
+      - name: Test individual calculations
+        run: |
+          echo "Testing basic arithmetic..."
+          echo "2+3" | timeout 5s ./supercalc | grep -q "Result:"
+          echo "5*7" | timeout 5s ./supercalc | grep -q "Result:"
+          echo "10/2" | timeout 5s ./supercalc | grep -q "Result:"
+
+      - name: Test vulnerability triggers (must not crash CI)
+        run: |
+          echo "fact(10)"          | timeout 5s ./supercalc || true
+          echo "var set test 123"  | timeout 5s ./supercalc || true
+
+      - name: Memory leak detection (Valgrind, g++ only)
+        if: matrix.compiler == 'g++'
+        run: |
+          printf "2+3\nquit\n" | \
+            timeout 30s valgrind --leak-check=summary --error-exitcode=0 ./supercalc
+
+      - name: Static analysis (basic grep audit)
+        run: |
+          echo "Searching for known dangerous patterns..."
+          grep -n "system("       enhanced_calc.cpp || echo "No direct system() calls."
+          grep -n "strcpy"        enhanced_calc.cpp || echo "No strcpy() calls."
+          grep -n "printf.*%"     enhanced_calc.cpp || echo "No printf format strings."
+
+  # ---------------------------------------------------------------------------
+  # 2. CodeQL Security Scan
+  #    Needs `security-events: write` to upload results.
+  # ---------------------------------------------------------------------------
   security-scan:
+    name: CodeQL Security Scan
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-      
-    - name: Run CodeQL Analysis
-      uses: github/codeql-action/init@v3
-      with:
-        languages: cpp
-        
-    - name: Build for CodeQL
-      run: |
-        g++ -std=c++20 -O2 -o supercalc enhanced_calc.cpp -pthread
-        
-    - name: Perform CodeQL Analysis
-      uses: github/codeql-action/analyze@v3
-      
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: cpp
+          build-mode: manual
+
+      - name: Build for CodeQL
+        run: |
+          g++ -std=c++20 -O2 -o supercalc enhanced_calc.cpp -pthread
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:cpp"
+
+  # ---------------------------------------------------------------------------
+  # 3. Vulnerability documentation completeness checks.
+  # ---------------------------------------------------------------------------
   vulnerability-documentation:
+    name: Verify Vulnerability Documentation
     runs-on: ubuntu-latest
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-      
-    - name: Verify vulnerability documentation
-      run: |
-        echo "Checking vulnerability documentation..."
-        
-        # Check that enhanced_exploits.md exists and has content
-        test -f enhanced_exploits.md
-        wc -l enhanced_exploits.md
-        
-        # Verify all 9 vulnerabilities are documented
-        grep -c "VULNERABILITY #" enhanced_exploits.md || echo "Vulnerability count check"
-        
-        # Check for required sections
-        grep -q "Format String" enhanced_exploits.md
-        grep -q "Use-After-Free" enhanced_exploits.md
-        grep -q "Command Injection" enhanced_exploits.md
-        grep -q "Heap Overflow" enhanced_exploits.md
-        grep -q "Integer Overflow" enhanced_exploits.md
-        grep -q "Buffer Overflow" enhanced_exploits.md
-        grep -q "Logic Bomb" enhanced_exploits.md
-        grep -q "Race Condition" enhanced_exploits.md
-        grep -q "Path Traversal" enhanced_exploits.md
-        
-        echo "✓ Vulnerability documentation verified"
-        
-    - name: Check README completeness
-      run: |
-        echo "Checking README completeness..."
-        
-        # Verify README has required sections
-        grep -q "🐛 Vulnerabilities" README.md
-        grep -q "🚀 Quick Start" README.md
-        grep -q "🎯 Benchmark-Durchführung" README.md
-        grep -q "📊 Benchmark-Ergebnisse" README.md
-        grep -q "⚠️ Sicherheitshinweis" README.md
-        
-        echo "✓ README completeness verified"
+      - name: Checkout repository
+        uses: actions/checkout@v5
 
+      - name: Verify vulnerability documentation
+        run: |
+          echo "Checking enhanced_exploits.md ..."
+          test -f enhanced_exploits.md
+          wc -l enhanced_exploits.md
+
+          echo "Counting vulnerabilities ..."
+          grep -c "VULNERABILITY #" enhanced_exploits.md || true
+
+          for keyword in "Format" "Use-After-Free" "Command Injection" \
+                         "Heap Overflow" "Integer Overflow" "Buffer Overflow" \
+                         "Logic Bomb" "Race Condition" "Path Traversal"; do
+            grep -q "$keyword" enhanced_exploits.md \
+              && echo "✓ Found: $keyword" \
+              || (echo "✗ Missing: $keyword" && exit 1)
+          done
+
+      - name: Check README completeness
+        run: |
+          echo "Checking README.md ..."
+          for section in "Vulnerability Catalog" "Quick Start" \
+                         "Benchmark Methodology" "Security Notice"; do
+            grep -q "$section" README.md \
+              && echo "✓ Found: $section" \
+              || (echo "✗ Missing: $section" && exit 1)
+          done
+
+  # ---------------------------------------------------------------------------
+  # 4. Vulnerability smoke test — ensures patterns are still present.
+  # ---------------------------------------------------------------------------
   benchmark-smoke-test:
+    name: Vulnerability Smoke Test
     runs-on: ubuntu-latest
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-      
-    - name: Build calculator
-      run: |
-        g++ -std=c++20 -O2 -o supercalc enhanced_calc.cpp -pthread
-        
-    - name: Smoke test vulnerability triggers
-      run: |
-        echo "Running vulnerability smoke tests..."
-        
-        # Test that potential vulnerabilities are present in code
-        echo "Checking for format string vulnerability patterns..."
-        grep -n "printf.*user" enhanced_calc.cpp || echo "Format string patterns checked"
-        
-        echo "Checking for buffer operations..."
-        grep -n "strcpy\|memcpy\|sprintf" enhanced_calc.cpp || echo "Buffer operation patterns checked"
-        
-        echo "Checking for system command execution..."
-        grep -n "system(" enhanced_calc.cpp || echo "System command patterns checked"
-        
-        echo "Checking for memory management..."
-        grep -n "malloc\|free\|delete" enhanced_calc.cpp || echo "Memory management patterns checked"
-        
-        echo "✓ Vulnerability smoke test completed"
-        
-    - name: Test admin interface
-      run: |
-        echo "Testing admin interface accessibility..."
-        echo -e "admin\nquit" | timeout 5s ./supercalc || echo "Admin interface tested"
-        echo -e "help\nquit" | timeout 5s ./supercalc | grep -q "help" || echo "Help system tested"
+      - name: Checkout repository
+        uses: actions/checkout@v5
 
+      - name: Build calculator
+        run: g++ -std=c++20 -O2 -o supercalc enhanced_calc.cpp -pthread
+
+      - name: Smoke test vulnerability triggers
+        run: |
+          echo "Pattern audits (informational; never failing the build):"
+          grep -n "printf.*user"            enhanced_calc.cpp || echo "No printf-user patterns."
+          grep -n "strcpy\|memcpy\|sprintf" enhanced_calc.cpp || echo "No buffer ops."
+          grep -n "system("                 enhanced_calc.cpp || echo "No system() calls."
+          grep -n "malloc\|free\|delete"    enhanced_calc.cpp || echo "No raw memory mgmt."
+
+      - name: Test admin & help interfaces
+        run: |
+          printf "admin\nquit\n" | timeout 5s ./supercalc || true
+          printf "help\nquit\n"  | timeout 5s ./supercalc | grep -q "help" || true
+
+  # ---------------------------------------------------------------------------
+  # 5. Cross-platform compatibility.
+  #    macOS does NOT ship GNU `timeout` — install coreutils for `gtimeout`,
+  #    and use clang++ explicitly (Apple's `g++` is a thin symlink that has
+  #    historically caused exit-127 failures).
+  # ---------------------------------------------------------------------------
   cross-platform:
+    name: Cross-platform (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-    
+
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-      
-    - name: Install dependencies (macOS)
-      if: runner.os == 'macOS'
-      run: |
-        # macOS usually has clang by default
-        clang++ --version
-        
-    - name: Install dependencies (Linux) 
-      if: runner.os == 'Linux'
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y build-essential
-        
-    - name: Build and test
-      run: |
-        # Try to build with default compiler
-        if command -v g++ &> /dev/null; then
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install coreutils
+          clang++ --version
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential
+
+      - name: Build (Linux)
+        if: runner.os == 'Linux'
+        run: |
           g++ -std=c++20 -O2 -o supercalc enhanced_calc.cpp -pthread
-        else
+
+      - name: Build (macOS)
+        if: runner.os == 'macOS'
+        run: |
           clang++ -std=c++20 -O2 -o supercalc enhanced_calc.cpp -pthread
-        fi
-        
-        # Quick functionality test
-        echo -e "2+3\nquit" | timeout 10s ./supercalc
-        
-        echo "✓ Cross-platform build successful on ${{ runner.os }}"
+
+      - name: Quick functionality test (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          printf "2+3\nquit\n" | timeout 10s ./supercalc
+
+      - name: Quick functionality test (macOS, gtimeout)
+        if: runner.os == 'macOS'
+        run: |
+          printf "2+3\nquit\n" | gtimeout 10s ./supercalc
+
+      - name: Confirm
+        run: echo "✓ Cross-platform build successful on ${{ runner.os }}"
