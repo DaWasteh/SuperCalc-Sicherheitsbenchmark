@@ -34,22 +34,28 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake valgrind clang
+          sudo apt-get install -y build-essential cmake valgrind clang libc++-dev libc++abi-dev
 
       - name: Verify compiler
         run: ${{ matrix.compiler }} --version
 
       - name: Build SuperCalc (Release)
         run: |
-          ${{ matrix.compiler }} -std=c++20 -O2 -Wall -Wextra -Wpedantic \
-            -o supercalc enhanced_calc.cpp -pthread
+          COMPILER="${{ matrix.compiler }}"
+          FLAGS="-std=c++20 -O2 -Wall -Wextra -Wpedantic"
+          if [ "$COMPILER" = "clang++" ]; then
+            FLAGS="$FLAGS -stdlib=libc++"
+          fi
+          $COMPILER $FLAGS -o supercalc enhanced_calc.cpp -pthread
 
       - name: Build SuperCalc (Debug + Sanitizers)
         run: |
-          ${{ matrix.compiler }} -std=c++20 -g \
-            -fsanitize=address -fsanitize=undefined \
-            -Wall -Wextra -Wpedantic \
-            -o supercalc_debug enhanced_calc.cpp -pthread
+          COMPILER="${{ matrix.compiler }}"
+          FLAGS="-std=c++20 -g -fsanitize=address -fsanitize=undefined -Wall -Wextra -Wpedantic"
+          if [ "$COMPILER" = "clang++" ]; then
+            FLAGS="$FLAGS -stdlib=libc++"
+          fi
+          $COMPILER $FLAGS -o supercalc_debug enhanced_calc.cpp -pthread
 
       - name: Basic functionality test
         run: |
