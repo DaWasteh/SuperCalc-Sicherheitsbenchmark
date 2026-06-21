@@ -47,13 +47,14 @@
                 <Expander Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="7" Header="Optionen" Margin="4,8,4,0" IsExpanded="False">
                     <WrapPanel Margin="0,8,0,0">
                         <TextBlock Text="Max Tokens (-1=max)" VerticalAlignment="Center" Margin="4" />
-                        <TextBox x:Name="MaxTokensTextBox" Text="-1" Width="90" />
+                        <TextBox x:Name="MaxTokensTextBox" Text="8192" Width="90" ToolTip="8192 entspricht eher typischen Web-UI-Limits. -1 lässt llama.cpp bis EOS/Kontext/Timeout weitergenerieren." />
                         <TextBlock Text="Timeout (Sek.)" VerticalAlignment="Center" Margin="12,4,4,4" />
                         <TextBox x:Name="TimeoutTextBox" Text="1200" Width="90" />
                         <TextBlock Text="Seed" VerticalAlignment="Center" Margin="12,4,4,4" />
                         <TextBox x:Name="SeedTextBox" Text="12345" Width="90" />
-                        <CheckBox x:Name="SkipResponseFormatCheckBox" Content="response_format überspringen" VerticalAlignment="Center" Margin="16,4,4,4" />
+                        <CheckBox x:Name="SkipResponseFormatCheckBox" Content="response_format überspringen" IsChecked="True" VerticalAlignment="Center" Margin="16,4,4,4" ToolTip="Kompatibler mit llama-web-ui; JSON wird weiterhin per Parser extrahiert." />
                         <CheckBox x:Name="DisableThinkingCheckBox" Content="Thinking deaktivieren (Debug)" IsChecked="False" VerticalAlignment="Center" Margin="16,4,4,4" />
+                        <Button x:Name="PreviewPromptButton" Content="Prompt anzeigen" Margin="16,4,4,4" Click="PreviewPromptButton_Click" ToolTip="Zeigt den generierten Prompt und die erste Request-JSON, ohne den Server aufzurufen." />
                         <TextBlock Text="Output-Ordner optional" VerticalAlignment="Center" Margin="16,4,4,4" />
                         <TextBox x:Name="OutputDirectoryTextBox" Width="320" ToolTip="Leer lassen für %LOCALAPPDATA%\SuperCalcBenchmark\Runs" />
                     </WrapPanel>

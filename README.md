@@ -193,7 +193,9 @@ In the app:
 
 Official/fair runs should leave thinking/reasoning enabled so each model can use its full capability. The GUI still has **Thinking deaktivieren (Debug)** for compatibility tests; when enabled, the client sends `chat_template_kwargs: { "enable_thinking": false }` for Qwen-style templates.
 
-The **Raw Outputs** tab exposes the exact request JSON, the generated user prompt, final assistant output, reasoning/thinking content, and the raw API response. Thinking is collapsed by default and rendered gray/italic; final output is highlighted red. The same completion diagnostics and loop/repetition checks are written to `report.md`.
+For day-to-day GUI runs the default output cap is `8192` tokens and **response_format überspringen** is enabled, which is closer to llama-web-ui behavior and avoids JSON-mode hangs on models that do not handle OpenAI JSON mode well. For maximum-capability official runs you can still set Max Tokens to `-1` and clear **response_format überspringen** if the loaded server/model supports it reliably.
+
+The **Raw Outputs** tab exposes the exact request JSON, the generated user prompt, final assistant output, reasoning/thinking content, and the raw API response. Thinking is collapsed by default and rendered gray/italic; final output is highlighted red. **Prompt anzeigen** renders the Run-1 prompt and first request JSON before anything is sent to the server. The same completion diagnostics and loop/repetition checks are written to `report.md`.
 
 CLI quick start:
 

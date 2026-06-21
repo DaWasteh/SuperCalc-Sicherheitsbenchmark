@@ -99,6 +99,7 @@ public partial class MainWindow : Window
         StatusTextBlock.Text = "Benchmark läuft... Run 1 + Run 2 können je nach Modell einige Minuten dauern.";
         AppendLog($"Benchmark startet für Modell: {model}");
         AppendLog($"Repository: {_repositoryRoot}");
+        AppendLog($"Request-Settings: max_tokens={options.MaxTokens}, response_format={!options.SkipResponseFormat}, disable_thinking={options.DisableThinking}, timeout={options.Timeout.TotalSeconds:0}s");
 
         try
         {
@@ -138,6 +139,48 @@ public partial class MainWindow : Window
         CancelBenchmarkButton.IsEnabled = false;
         StatusTextBlock.Text = "Abbruch angefordert...";
         AppendLog("Abbruch angefordert...");
+    }
+
+    private void PreviewPromptButton_Click(object sender, RoutedEventArgs e)
+    {
+        var model = ModelComboBox.SelectedItem?.ToString();
+        if (string.IsNullOrWhiteSpace(model))
+        {
+            model = "<model-from-refresh-models>";
+        }
+
+        try
+        {
+            var options = BuildOptions(model);
+            var source = SourceDocument.Load(options.SourcePath);
+            var promptBuilder = new PromptBuilder();
+            var run1Prompt = promptBuilder.BuildAnalysisPrompt(source, options.AnalysisPromptPath, options.SchemaPath);
+            var run1Request = LlamaCppClient.BuildChatRequestJsonForDiagnostics(
+                options.Model,
+                BenchmarkRunner.BuildSystemPrompt("Run 1 blind security analysis"),
+                run1Prompt,
+                options);
+
+            var run2Prompt = promptBuilder.BuildSelfValidationPrompt(
+                source,
+                options.SelfValidatePromptPath,
+                options.SchemaPath,
+                "<Run-1 response will be inserted here after Run 1>");
+            var run2Request = LlamaCppClient.BuildChatRequestJsonForDiagnostics(
+                options.Model,
+                BenchmarkRunner.BuildSystemPrompt("Run 2 self-validation"),
+                run2Prompt,
+                options);
+
+            PopulatePromptPreviewPanel(Run1RawPanel, "Run 1 Prompt Preview — nichts wurde an den Server gesendet", run1Prompt, run1Request);
+            PopulatePromptPreviewPanel(Run2RawPanel, "Run 2 Prompt Preview — Platzhalter statt echter Run-1-Antwort", run2Prompt, run2Request);
+            StatusTextBlock.Text = "Prompt/Request Preview erzeugt. Benchmark wurde nicht gestartet.";
+            AppendLog($"Prompt Preview erzeugt: Run1 {run1Prompt.Length:N0} chars, Run2+Platzhalter {run2Prompt.Length:N0} chars.");
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Prompt Preview fehlgeschlagen", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
     }
 
     private void OpenReportButton_Click(object sender, RoutedEventArgs e)
@@ -272,6 +315,41 @@ public partial class MainWindow : Window
         {
             AppendLog($"WARNUNG {artifacts.RunName}: möglicher Loop im Thinking — {reasoningLoop.Summary}");
         }
+    }
+
+    private static void PopulatePromptPreviewPanel(StackPanel panel, string title, string prompt, string requestJson)
+    {
+        panel.Children.Clear();
+        panel.Children.Add(new Border
+        {
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(4),
+            Padding = new Thickness(8),
+            Margin = new Thickness(0, 0, 0, 8),
+            BorderBrush = Brushes.SteelBlue,
+            Background = new SolidColorBrush(Color.FromRgb(240, 247, 255)),
+            Child = new TextBlock
+            {
+                Text = title,
+                Foreground = Brushes.SteelBlue,
+                FontWeight = FontWeights.SemiBold,
+                TextWrapping = TextWrapping.Wrap
+            }
+        });
+        panel.Children.Add(CreateTextExpander(
+            "Erste Request-JSON (System + User + Parameter)",
+            requestJson,
+            Brushes.DarkSlateBlue,
+            FontStyles.Normal,
+            isExpanded: true,
+            background: Color.FromRgb(246, 248, 255)));
+        panel.Children.Add(CreateTextExpander(
+            $"User-Prompt ({prompt.Length:N0} chars)",
+            prompt,
+            Brushes.Black,
+            FontStyles.Normal,
+            isExpanded: true,
+            background: Colors.White));
     }
 
     private static void PopulateRawOutputPanel(StackPanel panel, BenchmarkRunArtifacts artifacts)
@@ -454,6 +532,7 @@ public partial class MainWindow : Window
         OutputDirectoryTextBox.IsEnabled = !busy;
         SkipResponseFormatCheckBox.IsEnabled = !busy;
         DisableThinkingCheckBox.IsEnabled = !busy;
+        PreviewPromptButton.IsEnabled = !busy;
         CancelBenchmarkButton.IsEnabled = benchmarkRunning;
     }
 

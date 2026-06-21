@@ -105,6 +105,17 @@ public sealed class LlamaCppClient : IDisposable
         return null;
     }
 
+    public static string BuildChatRequestJsonForDiagnostics(
+        string model,
+        string systemPrompt,
+        string userPrompt,
+        BenchmarkOptions options)
+    {
+        var firstAttempt = BuildAttempts(options)[0];
+        var request = BuildChatRequest(model, systemPrompt, userPrompt, options, firstAttempt.IncludeResponseFormat, firstAttempt.IncludeThinkingControl);
+        return JsonSerializer.Serialize(request, JsonOptions);
+    }
+
     public async Task<ChatCompletionResult> CreateChatCompletionAsync(
         string serverUrl,
         string model,

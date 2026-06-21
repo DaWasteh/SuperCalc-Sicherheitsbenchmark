@@ -237,7 +237,7 @@ public sealed class BenchmarkRunner
         }
     }
 
-    private static string BuildSystemPrompt(string runKind)
+    public static string BuildSystemPrompt(string runKind)
     {
         return "You are participating in the SuperCalc local LLM security benchmark. "
                + $"Task: {runKind}. "
