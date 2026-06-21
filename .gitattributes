@@ -1,0 +1,25 @@
+# Enforce LF for all text so the source hash in ground_truth.json is reproducible
+# across Linux/macOS/Windows runners. The benchmark validates a byte-level SHA-256
+# of enhanced_calc.cpp; CRLF conversion at checkout would break that check.
+* text=auto eol=lf
+
+# Source / docs explicitly LF
+*.cpp   text eol=lf
+*.h     text eol=lf
+*.cs    text eol=lf
+*.md    text eol=lf
+*.json  text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.sh    text eol=lf
+*.xaml  text eol=lf
+
+# Project/solution files
+*.csproj text eol=lf
+*.slnx   text eol=lf
+
+# Binary files: never touch
+*.png   binary
+*.jpg   binary
+*.xlsx  binary
+*.docx  binary
