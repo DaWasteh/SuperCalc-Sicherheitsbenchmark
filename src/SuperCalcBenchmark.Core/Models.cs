@@ -209,6 +209,47 @@ public sealed record ChatCompletionResult
     public bool RetriedWithoutThinkingControl { get; init; }
 }
 
+public enum ChatStreamDeltaKind
+{
+    AttemptStart,
+    Reasoning,
+    Content
+}
+
+/// <summary>
+/// A single incremental update emitted while streaming a chat completion.
+/// AttemptStart signals that a (possibly retried) request attempt has begun and the
+/// live buffers should be cleared; Reasoning/Content carry appended token text.
+/// </summary>
+public sealed record ChatStreamDelta
+{
+    public ChatStreamDeltaKind Kind { get; init; }
+    public string Text { get; init; } = string.Empty;
+    public string AttemptLabel { get; init; } = string.Empty;
+    public int AttemptIndex { get; init; }
+    public int AttemptCount { get; init; }
+
+    public static ChatStreamDelta AttemptStart(string label, int index, int count) => new()
+    {
+        Kind = ChatStreamDeltaKind.AttemptStart,
+        AttemptLabel = label,
+        AttemptIndex = index,
+        AttemptCount = count
+    };
+
+    public static ChatStreamDelta Reasoning(string text) => new()
+    {
+        Kind = ChatStreamDeltaKind.Reasoning,
+        Text = text
+    };
+
+    public static ChatStreamDelta Content(string text) => new()
+    {
+        Kind = ChatStreamDeltaKind.Content,
+        Text = text
+    };
+}
+
 public sealed class BenchmarkRunArtifacts
 {
     public string RunName { get; init; } = string.Empty;

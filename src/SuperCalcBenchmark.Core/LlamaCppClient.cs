@@ -122,6 +122,7 @@ public sealed class LlamaCppClient : IDisposable
         string systemPrompt,
         string userPrompt,
         BenchmarkOptions options,
+        IProgress<ChatStreamDelta>? streamProgress = null,
         CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(model))
@@ -131,11 +132,22 @@ public sealed class LlamaCppClient : IDisposable
 
         var errors = new List<string>();
         ChatCompletionResult? firstSuccessful = null;
+        var attempts = BuildAttempts(options);
 
-        foreach (var attempt in BuildAttempts(options))
+        for (var i = 0; i < attempts.Count; i++)
         {
-            var request = BuildChatRequest(model, systemPrompt, userPrompt, options, attempt.IncludeResponseFormat, attempt.IncludeThinkingControl);
-            var completion = await PostChatCompletionAsync(serverUrl, request, cancellationToken).ConfigureAwait(false);
+            var attempt = attempts[i];
+
+            // Tell the UI a fresh attempt is starting so it can reset the live buffers
+            // (otherwise tokens from a retried attempt would append to the failed one).
+            streamProgress?.Report(ChatStreamDelta.AttemptStart(attempt.Label, i, attempts.Count));
+
+            var request = BuildChatRequest(model, systemPrompt, userPrompt, options, attempt.IncludeResponseFormat, attempt.IncludeThinkingControl, stream: streamProgress is not null);
+
+            var completion = streamProgress is not null
+                ? await PostChatCompletionStreamingAsync(serverUrl, request, streamProgress, cancellationToken).ConfigureAwait(false)
+                : await PostChatCompletionAsync(serverUrl, request, cancellationToken).ConfigureAwait(false);
+
             if (!completion.Success)
             {
                 errors.Add($"{attempt.Label}: {completion.Error}");
@@ -178,21 +190,33 @@ public sealed class LlamaCppClient : IDisposable
                 return;
             }
 
+            // "Retried without X" is only meaningful if an earlier attempt actually used X.
+            // Since the unconstrained attempt now runs first, base the flag on history,
+            // not on the option alone.
+            var anyEarlierUsedResponseFormat = attempts.Any(a => a.IncludeResponseFormat);
+            var anyEarlierUsedThinkingControl = attempts.Any(a => a.IncludeThinkingControl);
+
             attempts.Add(new ChatRequestAttempt(
                 includeResponseFormat,
                 includeThinkingControl,
-                RetriedWithoutResponseFormat: !includeResponseFormat && !options.SkipResponseFormat,
-                RetriedWithoutThinkingControl: !includeThinkingControl && options.DisableThinking));
+                RetriedWithoutResponseFormat: !includeResponseFormat && anyEarlierUsedResponseFormat,
+                RetriedWithoutThinkingControl: !includeThinkingControl && anyEarlierUsedThinkingControl));
         }
 
         if (!options.SkipResponseFormat)
         {
-            Add(includeResponseFormat: true, includeThinkingControl: options.DisableThinking);
+            // Try WITHOUT response_format first. Forcing a json_object grammar on a
+            // reasoning model frequently collides with its thinking phase (the model
+            // either has its reasoning suppressed/garbled or exhausts the budget before
+            // it can emit the constrained JSON). The parser already extracts JSON from
+            // free-form output (fenced, balanced, partial), so the unconstrained attempt
+            // is both more compatible and usually sufficient. json_object stays as a fallback.
             Add(includeResponseFormat: false, includeThinkingControl: options.DisableThinking);
+            Add(includeResponseFormat: true, includeThinkingControl: options.DisableThinking);
             if (options.DisableThinking)
             {
-                Add(includeResponseFormat: true, includeThinkingControl: false);
                 Add(includeResponseFormat: false, includeThinkingControl: false);
+                Add(includeResponseFormat: true, includeThinkingControl: false);
             }
         }
         else
@@ -213,7 +237,8 @@ public sealed class LlamaCppClient : IDisposable
         string userPrompt,
         BenchmarkOptions options,
         bool includeResponseFormat,
-        bool includeThinkingControl)
+        bool includeThinkingControl,
+        bool stream = false)
     {
         var messages = new[]
         {
@@ -227,9 +252,25 @@ public sealed class LlamaCppClient : IDisposable
             ["messages"] = messages,
             ["temperature"] = options.Temperature,
             ["top_p"] = options.TopP,
-            ["seed"] = options.Seed,
-            ["max_tokens"] = options.MaxTokens
+            ["seed"] = options.Seed
         };
+
+        if (stream)
+        {
+            request["stream"] = true;
+        }
+
+        // Only send max_tokens when it is a real positive budget. A value of -1
+        // (our "no cap" default) must NOT be forwarded: llama-server treats a
+        // literal "max_tokens": -1 inconsistently across builds, and a too-small
+        // cap is the main reason reasoning models burn the whole budget inside
+        // reasoning_content and return empty message.content. Omitting the field
+        // lets the server generate until EOS / context / timeout, exactly like
+        // the web UI.
+        if (options.MaxTokens > 0)
+        {
+            request["max_tokens"] = options.MaxTokens;
+        }
 
         if (includeResponseFormat)
         {
@@ -279,6 +320,180 @@ public sealed class LlamaCppClient : IDisposable
         {
             return (false, null, $"Could not parse chat response: {ex.Message}. Raw: {TrimForError(responseText)}");
         }
+    }
+
+    private async Task<(bool Success, ChatCompletionResult? Result, string Error)> PostChatCompletionStreamingAsync(
+        string serverUrl,
+        object request,
+        IProgress<ChatStreamDelta> streamProgress,
+        CancellationToken cancellationToken)
+    {
+        var requestJson = JsonSerializer.Serialize(request, JsonOptions);
+        using var content = new StringContent(requestJson, Encoding.UTF8, "application/json");
+        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, BuildUri(serverUrl, "/v1/chat/completions"))
+        {
+            Content = content
+        };
+        httpRequest.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
+
+        using var response = await _httpClient
+            .SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            var errorBody = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            return (false, null, $"HTTP {(int)response.StatusCode} {response.ReasonPhrase}: {TrimForError(errorBody)}");
+        }
+
+        var contentBuilder = new StringBuilder();
+        var reasoningBuilder = new StringBuilder();
+        var rawBuilder = new StringBuilder();
+        var finishReason = string.Empty;
+
+        try
+        {
+            await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+            using var reader = new StreamReader(stream, Encoding.UTF8);
+
+            string? line;
+            while ((line = await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false)) is not null)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                if (line.Length == 0)
+                {
+                    continue;
+                }
+
+                // SSE comment / keep-alive lines start with ':' — ignore.
+                if (line[0] == ':')
+                {
+                    continue;
+                }
+
+                if (!line.StartsWith("data:", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                var payload = line.Substring("data:".Length).Trim();
+                if (payload.Length == 0)
+                {
+                    continue;
+                }
+
+                if (string.Equals(payload, "[DONE]", StringComparison.Ordinal))
+                {
+                    break;
+                }
+
+                rawBuilder.AppendLine(payload);
+
+                finishReason = ConsumeStreamChunk(payload, contentBuilder, reasoningBuilder, finishReason, streamProgress);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is IOException or HttpRequestException or JsonException)
+        {
+            // If we already accumulated something, fall through and return it as a partial
+            // success so the run still has data; otherwise report the error.
+            if (contentBuilder.Length == 0 && reasoningBuilder.Length == 0)
+            {
+                return (false, null, $"Streaming read failed: {ex.Message}");
+            }
+        }
+
+        var assistantContent = contentBuilder.ToString();
+        var reasoningContent = reasoningBuilder.ToString();
+
+        return (true, new ChatCompletionResult
+        {
+            AssistantContent = assistantContent,
+            ReasoningContent = reasoningContent,
+            FinishReason = finishReason,
+            RawResponse = rawBuilder.ToString().TrimEnd(),
+            RequestJson = requestJson,
+            UsedResponseFormat = requestJson.Contains("response_format", StringComparison.Ordinal),
+            UsedThinkingControl = requestJson.Contains("chat_template_kwargs", StringComparison.Ordinal),
+            RetriedWithoutResponseFormat = false,
+            RetriedWithoutThinkingControl = false
+        }, string.Empty);
+    }
+
+    private static string ConsumeStreamChunk(
+        string payloadJson,
+        StringBuilder contentBuilder,
+        StringBuilder reasoningBuilder,
+        string finishReason,
+        IProgress<ChatStreamDelta> streamProgress)
+    {
+        JsonDocument document;
+        try
+        {
+            document = JsonDocument.Parse(payloadJson);
+        }
+        catch (JsonException)
+        {
+            // A single malformed chunk should not abort the whole stream.
+            return finishReason;
+        }
+
+        using (document)
+        {
+            var root = document.RootElement;
+            if (!root.TryGetProperty("choices", out var choices) ||
+                choices.ValueKind != JsonValueKind.Array ||
+                choices.GetArrayLength() == 0)
+            {
+                return finishReason;
+            }
+
+            var firstChoice = choices[0];
+
+            if (firstChoice.TryGetProperty("finish_reason", out var finishReasonElement) &&
+                finishReasonElement.ValueKind == JsonValueKind.String)
+            {
+                var value = finishReasonElement.GetString();
+                if (!string.IsNullOrEmpty(value))
+                {
+                    finishReason = value;
+                }
+            }
+
+            // Streaming responses put incremental text under choices[0].delta.
+            // (We intentionally do NOT also read choices[0].message here: in streaming
+            // mode llama.cpp emits delta chunks only, and treating a final "message"
+            // object as a delta would re-append the entire accumulated text.)
+            if (!firstChoice.TryGetProperty("delta", out var deltaContainer))
+            {
+                return finishReason;
+            }
+
+            var contentPiece = deltaContainer.TryGetProperty("content", out var contentElement)
+                ? ReadElementAsString(contentElement)
+                : string.Empty;
+            var reasoningPiece = deltaContainer.TryGetProperty("reasoning_content", out var reasoningElement)
+                ? ReadElementAsString(reasoningElement)
+                : string.Empty;
+
+            if (!string.IsNullOrEmpty(reasoningPiece))
+            {
+                reasoningBuilder.Append(reasoningPiece);
+                streamProgress.Report(ChatStreamDelta.Reasoning(reasoningPiece));
+            }
+
+            if (!string.IsNullOrEmpty(contentPiece))
+            {
+                contentBuilder.Append(contentPiece);
+                streamProgress.Report(ChatStreamDelta.Content(contentPiece));
+            }
+        }
+
+        return finishReason;
     }
 
     private static (string AssistantContent, string ReasoningContent, string FinishReason) ExtractChatMessageContent(string responseText)

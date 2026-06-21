@@ -27,7 +27,9 @@ public sealed class BenchmarkRunner
     public async Task<BenchmarkRunResult> RunAsync(
         BenchmarkOptions options,
         Action<string>? progress = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Action<BenchmarkRunArtifacts>? onRunCompleted = null,
+        IProgress<ChatStreamDelta>? streamProgress = null)
     {
         if (string.IsNullOrWhiteSpace(options.Model))
         {
@@ -70,6 +72,7 @@ public sealed class BenchmarkRunner
             BuildSystemPrompt("Run 1 blind security analysis"),
             run1Prompt,
             options,
+            streamProgress,
             cancellationToken).ConfigureAwait(false);
 
         progress?.Invoke("Parsing and scoring Run 1...");
@@ -92,6 +95,10 @@ public sealed class BenchmarkRunner
             Score = run1Score
         };
 
+        // Surface Run 1 to the caller immediately so the UI can render its score,
+        // matrix and raw output while Run 2 is still in flight.
+        onRunCompleted?.Invoke(result.Run1);
+
         progress?.Invoke("Building Run 2 self-validation prompt...");
         var run2Prompt = _promptBuilder.BuildSelfValidationPrompt(source, options.SelfValidatePromptPath, options.SchemaPath, run1Completion.AssistantContent);
         progress?.Invoke("Sending Run 2 self-validation to llama-server...");
@@ -101,6 +108,7 @@ public sealed class BenchmarkRunner
             BuildSystemPrompt("Run 2 self-validation"),
             run2Prompt,
             options,
+            streamProgress,
             cancellationToken).ConfigureAwait(false);
 
         progress?.Invoke("Parsing and scoring Run 2...");
@@ -122,6 +130,8 @@ public sealed class BenchmarkRunner
             Parse = run2Parse,
             Score = run2Score
         };
+
+        onRunCompleted?.Invoke(result.Run2);
 
         result.Comparison = _scoringEngine.Compare(run1Score, run2Score);
         result.CompletedAt = DateTimeOffset.UtcNow;

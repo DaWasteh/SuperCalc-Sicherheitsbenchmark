@@ -47,7 +47,7 @@
                 <Expander Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="7" Header="Optionen" Margin="4,8,4,0" IsExpanded="False">
                     <WrapPanel Margin="0,8,0,0">
                         <TextBlock Text="Max Tokens (-1=max)" VerticalAlignment="Center" Margin="4" />
-                        <TextBox x:Name="MaxTokensTextBox" Text="8192" Width="90" ToolTip="8192 entspricht eher typischen Web-UI-Limits. -1 lässt llama.cpp bis EOS/Kontext/Timeout weitergenerieren." />
+                        <TextBox x:Name="MaxTokensTextBox" Text="-1" Width="90" ToolTip="-1 (empfohlen für Reasoning-Modelle): kein Limit, llama.cpp generiert bis EOS/Kontext/Timeout — Thinking UND finale Antwort haben Platz. Eine feste Zahl teilt sich das Budget zwischen Thinking und Antwort; bei denkenden Modellen kann dann die Antwort leer bleiben." />
                         <TextBlock Text="Timeout (Sek.)" VerticalAlignment="Center" Margin="12,4,4,4" />
                         <TextBox x:Name="TimeoutTextBox" Text="1200" Width="90" />
                         <TextBlock Text="Seed" VerticalAlignment="Center" Margin="12,4,4,4" />

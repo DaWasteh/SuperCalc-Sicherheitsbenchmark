@@ -15,6 +15,16 @@ public partial class MainWindow : Window
     private CancellationTokenSource? _benchmarkCancellation;
     private BenchmarkRunResult? _lastResult;
 
+    // Live-streaming UI state. Tokens arrive via IProgress and are appended to these
+    // text boxes in real time. _activeLivePanel points at whichever run is currently
+    // streaming (Run 1 first, then Run 2).
+    private StackPanel? _activeLivePanel;
+    private TextBox? _liveReasoningBox;
+    private TextBox? _liveContentBox;
+    private TextBlock? _liveStatusBlock;
+    private int _liveReasoningChars;
+    private int _liveContentChars;
+
     public MainWindow()
     {
         InitializeComponent();
@@ -104,9 +114,25 @@ public partial class MainWindow : Window
         try
         {
             var runner = new BenchmarkRunner();
-            var result = await runner.RunAsync(options, Progress, _benchmarkCancellation.Token);
+
+            // IProgress created on the UI thread → Report() callbacks are marshalled
+            // back to the UI thread automatically, so we can touch controls directly.
+            var streamProgress = new Progress<ChatStreamDelta>(OnStreamDelta);
+
+            // Prepare the live view for Run 1 before the first token arrives.
+            BeginLiveRun(Run1RawPanel, "Run 1 — Blind Analysis");
+
+            var result = await runner.RunAsync(
+                options,
+                Progress,
+                _benchmarkCancellation.Token,
+                onRunCompleted: OnRunCompleted,
+                streamProgress: streamProgress);
+
             _lastResult = result;
-            ApplyResult(result);
+
+            // Final pass: comparison panel + open buttons (per-run UI already rendered).
+            ApplyComparisonAndPaths(result);
             StatusTextBlock.Text = "Benchmark abgeschlossen.";
             AppendLog("Benchmark abgeschlossen.");
         }
@@ -232,25 +258,151 @@ public partial class MainWindow : Window
         };
     }
 
-    private void ApplyResult(BenchmarkRunResult result)
-    {
-        Run1ScoreTextBlock.Text = $"{result.Run1.Score.ScorePercent:0.##}/100";
-        Run1DetailsTextBlock.Text = FormatScoreDetails(result.Run1);
-        Run1MatrixGrid.ItemsSource = result.Run1.Score.Vulnerabilities;
-        Run1FindingsGrid.ItemsSource = result.Run1.Score.Findings;
-        PopulateRawOutputPanel(Run1RawPanel, result.Run1);
-        AppendLoopWarnings(result.Run1);
+    // ---- Live streaming + per-run rendering ---------------------------------
 
-        if (result.Run2 is not null)
+    private void BeginLiveRun(StackPanel panel, string runLabel)
+    {
+        _activeLivePanel = panel;
+        _liveReasoningChars = 0;
+        _liveContentChars = 0;
+
+        panel.Children.Clear();
+
+        _liveStatusBlock = new TextBlock
         {
-            Run2ScoreTextBlock.Text = $"{result.Run2.Score.ScorePercent:0.##}/100";
-            Run2DetailsTextBlock.Text = FormatScoreDetails(result.Run2);
-            Run2MatrixGrid.ItemsSource = result.Run2.Score.Vulnerabilities;
-            Run2FindingsGrid.ItemsSource = result.Run2.Score.Findings;
-            PopulateRawOutputPanel(Run2RawPanel, result.Run2);
-            AppendLoopWarnings(result.Run2);
+            Text = $"{runLabel}: warte auf erste Tokens vom Server...",
+            FontWeight = FontWeights.SemiBold,
+            Foreground = Brushes.SteelBlue,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 0, 0, 6)
+        };
+        panel.Children.Add(_liveStatusBlock);
+
+        _liveReasoningBox = CreateLiveBox();
+        _liveContentBox = CreateLiveBox();
+
+        panel.Children.Add(new Expander
+        {
+            Header = "LIVE Thinking (reasoning_content)",
+            IsExpanded = true,
+            Margin = new Thickness(0, 4, 0, 0),
+            Content = _liveReasoningBox
+        });
+        panel.Children.Add(new Expander
+        {
+            Header = "LIVE Output (message.content)",
+            IsExpanded = true,
+            Margin = new Thickness(0, 6, 0, 0),
+            Content = _liveContentBox
+        });
+    }
+
+    private static TextBox CreateLiveBox()
+    {
+        return new TextBox
+        {
+            IsReadOnly = true,
+            AcceptsReturn = true,
+            TextWrapping = TextWrapping.Wrap,
+            FontFamily = new FontFamily("Consolas"),
+            FontSize = 12,
+            MinHeight = 90,
+            MaxHeight = 300,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+            BorderBrush = Brushes.LightGray
+        };
+    }
+
+    private void OnStreamDelta(ChatStreamDelta delta)
+    {
+        switch (delta.Kind)
+        {
+            case ChatStreamDeltaKind.AttemptStart:
+                // A new (possibly retried) attempt began. Clear live buffers so tokens
+                // from a failed attempt don't bleed into the next one.
+                _liveReasoningChars = 0;
+                _liveContentChars = 0;
+                if (_liveReasoningBox is not null) _liveReasoningBox.Clear();
+                if (_liveContentBox is not null) _liveContentBox.Clear();
+                if (_liveStatusBlock is not null)
+                {
+                    var attemptNo = delta.AttemptIndex + 1;
+                    _liveStatusBlock.Text = delta.AttemptCount > 1
+                        ? $"Versuch {attemptNo}/{delta.AttemptCount} ({delta.AttemptLabel}) — streamt..."
+                        : $"Streamt... ({delta.AttemptLabel})";
+                }
+                break;
+
+            case ChatStreamDeltaKind.Reasoning:
+                if (_liveReasoningBox is not null)
+                {
+                    _liveReasoningBox.AppendText(delta.Text);
+                    _liveReasoningBox.ScrollToEnd();
+                }
+                _liveReasoningChars += delta.Text.Length;
+                UpdateLiveStatusCounts();
+                break;
+
+            case ChatStreamDeltaKind.Content:
+                if (_liveContentBox is not null)
+                {
+                    _liveContentBox.AppendText(delta.Text);
+                    _liveContentBox.ScrollToEnd();
+                }
+                _liveContentChars += delta.Text.Length;
+                UpdateLiveStatusCounts();
+                break;
+        }
+    }
+
+    private void UpdateLiveStatusCounts()
+    {
+        if (_liveStatusBlock is null)
+        {
+            return;
         }
 
+        _liveStatusBlock.Text = $"Streamt... Thinking: {_liveReasoningChars:N0} chars | Output: {_liveContentChars:N0} chars";
+    }
+
+    private void OnRunCompleted(BenchmarkRunArtifacts artifacts)
+    {
+        // The runner awaits with ConfigureAwait(false), so this callback fires on a
+        // thread-pool thread. Marshal onto the UI thread before touching any controls.
+        Dispatcher.Invoke(() =>
+        {
+            // Render the finished run's score, matrix, findings and the full (non-live)
+            // raw-output panel right away. For Run 2, also flip the live view over first.
+            var isRun2 = string.Equals(artifacts.RunName, "Run 2", StringComparison.OrdinalIgnoreCase);
+
+            if (!isRun2)
+            {
+                Run1ScoreTextBlock.Text = $"{artifacts.Score.ScorePercent:0.##}/100";
+                Run1DetailsTextBlock.Text = FormatScoreDetails(artifacts);
+                Run1MatrixGrid.ItemsSource = artifacts.Score.Vulnerabilities;
+                Run1FindingsGrid.ItemsSource = artifacts.Score.Findings;
+                PopulateRawOutputPanel(Run1RawPanel, artifacts);
+                AppendLoopWarnings(artifacts);
+
+                // Run 1 done → spin up the live view for Run 2.
+                Run2ScoreTextBlock.Text = "Läuft...";
+                BeginLiveRun(Run2RawPanel, "Run 2 — Self-Validation");
+            }
+            else
+            {
+                Run2ScoreTextBlock.Text = $"{artifacts.Score.ScorePercent:0.##}/100";
+                Run2DetailsTextBlock.Text = FormatScoreDetails(artifacts);
+                Run2MatrixGrid.ItemsSource = artifacts.Score.Vulnerabilities;
+                Run2FindingsGrid.ItemsSource = artifacts.Score.Findings;
+                PopulateRawOutputPanel(Run2RawPanel, artifacts);
+                AppendLoopWarnings(artifacts);
+            }
+        });
+    }
+
+    private void ApplyComparisonAndPaths(BenchmarkRunResult result)
+    {
         if (result.Comparison is not null)
         {
             ComparisonTextBlock.Text =
@@ -269,6 +421,12 @@ public partial class MainWindow : Window
     private void ResetResultUi()
     {
         _lastResult = null;
+        _activeLivePanel = null;
+        _liveReasoningBox = null;
+        _liveContentBox = null;
+        _liveStatusBlock = null;
+        _liveReasoningChars = 0;
+        _liveContentChars = 0;
         Run1ScoreTextBlock.Text = "Läuft...";
         Run1DetailsTextBlock.Text = string.Empty;
         Run2ScoreTextBlock.Text = "Wartet auf Run 1";
