@@ -2,6 +2,9 @@ using System.Diagnostics;
 using System.IO;
 using System.Text;
 using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Documents;
+using System.Windows.Media;
 using SuperCalcBenchmark.Core;
 
 namespace SuperCalcBenchmark.App;
@@ -17,6 +20,8 @@ public partial class MainWindow : Window
         InitializeComponent();
         _repositoryRoot = FindRepositoryRoot();
         DotNetInfoTextBlock.Text = $".NET {Environment.Version.Major} | {_repositoryRoot}";
+        ShowRawOutputPlaceholder(Run1RawPanel, "Noch kein Run-1-Output. Nach dem Benchmark siehst du hier Prompt, Thinking, Output und Raw API Response.");
+        ShowRawOutputPlaceholder(Run2RawPanel, "Noch kein Run-2-Output. Nach dem Benchmark siehst du hier Prompt, Thinking, Output und Raw API Response.");
         AppendLog("Bereit. Wenn du ein neues Modell in llama-server geladen hast: Refresh Models klicken, Modell wählen, Benchmark starten.");
     }
 
@@ -190,7 +195,8 @@ public partial class MainWindow : Window
         Run1DetailsTextBlock.Text = FormatScoreDetails(result.Run1);
         Run1MatrixGrid.ItemsSource = result.Run1.Score.Vulnerabilities;
         Run1FindingsGrid.ItemsSource = result.Run1.Score.Findings;
-        Run1RawTextBox.Text = FormatRawOutput(result.Run1);
+        PopulateRawOutputPanel(Run1RawPanel, result.Run1);
+        AppendLoopWarnings(result.Run1);
 
         if (result.Run2 is not null)
         {
@@ -198,7 +204,8 @@ public partial class MainWindow : Window
             Run2DetailsTextBlock.Text = FormatScoreDetails(result.Run2);
             Run2MatrixGrid.ItemsSource = result.Run2.Score.Vulnerabilities;
             Run2FindingsGrid.ItemsSource = result.Run2.Score.Findings;
-            Run2RawTextBox.Text = FormatRawOutput(result.Run2);
+            PopulateRawOutputPanel(Run2RawPanel, result.Run2);
+            AppendLoopWarnings(result.Run2);
         }
 
         if (result.Comparison is not null)
@@ -228,8 +235,8 @@ public partial class MainWindow : Window
         Run2MatrixGrid.ItemsSource = null;
         Run1FindingsGrid.ItemsSource = null;
         Run2FindingsGrid.ItemsSource = null;
-        Run1RawTextBox.Clear();
-        Run2RawTextBox.Clear();
+        ShowRawOutputPlaceholder(Run1RawPanel, "Run 1 läuft bzw. wartet auf Server-Antwort...");
+        ShowRawOutputPlaceholder(Run2RawPanel, "Run 2 wartet auf Run 1...");
         ProgressLogTextBox.Clear();
         OutputPathTextBlock.Text = "Run läuft...";
         OpenReportButton.IsEnabled = false;
@@ -252,19 +259,173 @@ public partial class MainWindow : Window
         return details;
     }
 
-    private static string FormatRawOutput(BenchmarkRunArtifacts artifacts)
+    private void AppendLoopWarnings(BenchmarkRunArtifacts artifacts)
     {
-        var builder = new StringBuilder();
-        builder.AppendLine("=== assistant message.content ===");
-        builder.AppendLine(string.IsNullOrEmpty(artifacts.Response) ? "<empty>" : artifacts.Response);
-        builder.AppendLine();
-        builder.AppendLine("=== assistant message.reasoning_content ===");
-        builder.AppendLine(string.IsNullOrEmpty(artifacts.ReasoningContent) ? "<empty>" : artifacts.ReasoningContent);
-        builder.AppendLine();
-        builder.AppendLine("=== raw API response ===");
-        builder.AppendLine(string.IsNullOrEmpty(artifacts.RawResponse) ? "<empty>" : artifacts.RawResponse);
-        return builder.ToString();
+        var responseLoop = OutputLoopDetector.Analyze(artifacts.Response);
+        var reasoningLoop = OutputLoopDetector.Analyze(artifacts.ReasoningContent);
+        if (responseLoop.HasSuspectedLoop)
+        {
+            AppendLog($"WARNUNG {artifacts.RunName}: möglicher Loop im finalen Output — {responseLoop.Summary}");
+        }
+
+        if (reasoningLoop.HasSuspectedLoop)
+        {
+            AppendLog($"WARNUNG {artifacts.RunName}: möglicher Loop im Thinking — {reasoningLoop.Summary}");
+        }
     }
+
+    private static void PopulateRawOutputPanel(StackPanel panel, BenchmarkRunArtifacts artifacts)
+    {
+        panel.Children.Clear();
+        panel.Children.Add(CreateDiagnosticsBlock(artifacts));
+        panel.Children.Add(CreateTextExpander(
+            "Gesendeter Request JSON (System + User + Parameter)",
+            artifacts.RequestJson,
+            Brushes.DarkSlateBlue,
+            FontStyles.Normal,
+            isExpanded: false,
+            background: Color.FromRgb(246, 248, 255)));
+        panel.Children.Add(CreateTextExpander(
+            "User-Prompt aus dem Programm",
+            artifacts.Prompt,
+            Brushes.Black,
+            FontStyles.Normal,
+            isExpanded: false,
+            background: Colors.White));
+        panel.Children.Add(CreateTextExpander(
+            $"assistant message.content — OUTPUT ({artifacts.Response.Length:N0} chars)",
+            artifacts.Response,
+            Brushes.Red,
+            FontStyles.Normal,
+            isExpanded: true,
+            background: Color.FromRgb(255, 246, 246)));
+        panel.Children.Add(CreateTextExpander(
+            $"assistant message.reasoning_content — THINKING ({artifacts.ReasoningContent.Length:N0} chars)",
+            artifacts.ReasoningContent,
+            Brushes.DimGray,
+            FontStyles.Italic,
+            isExpanded: false,
+            background: Color.FromRgb(248, 248, 248)));
+        panel.Children.Add(CreateTextExpander(
+            $"Raw API response, unverändert ({artifacts.RawResponse.Length:N0} chars)",
+            artifacts.RawResponse,
+            Brushes.Black,
+            FontStyles.Normal,
+            isExpanded: false,
+            background: Colors.White));
+    }
+
+    private static void ShowRawOutputPlaceholder(StackPanel panel, string message)
+    {
+        panel.Children.Clear();
+        panel.Children.Add(new TextBlock
+        {
+            Text = message,
+            Foreground = Brushes.DimGray,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(4)
+        });
+    }
+
+    private static Border CreateDiagnosticsBlock(BenchmarkRunArtifacts artifacts)
+    {
+        var responseLoop = OutputLoopDetector.Analyze(artifacts.Response);
+        var reasoningLoop = OutputLoopDetector.Analyze(artifacts.ReasoningContent);
+        var hasWarning = responseLoop.HasSuspectedLoop
+            || reasoningLoop.HasSuspectedLoop
+            || (string.IsNullOrWhiteSpace(artifacts.Response) && !string.IsNullOrWhiteSpace(artifacts.ReasoningContent));
+
+        var builder = new StringBuilder();
+        builder.AppendLine($"Finish: {EmptyFallback(artifacts.FinishReason)} | Output: {artifacts.Response.Length:N0} chars | Thinking: {artifacts.ReasoningContent.Length:N0} chars");
+        builder.AppendLine($"response_format: {artifacts.UsedResponseFormat} | retry ohne response_format: {artifacts.RetriedWithoutResponseFormat} | thinking-disable hint: {artifacts.UsedThinkingControl}");
+        builder.AppendLine($"Loop-Check Output: {responseLoop.Summary}");
+        builder.AppendLine($"Loop-Check Thinking: {reasoningLoop.Summary}");
+
+        if (string.IsNullOrWhiteSpace(artifacts.Response) && !string.IsNullOrWhiteSpace(artifacts.ReasoningContent))
+        {
+            builder.AppendLine("WARNUNG: Server lieferte nur reasoning_content, aber keine finale message.content. Das sieht oft nach Max-Token-Erschöpfung oder endlosem Thinking aus.");
+        }
+
+        AppendRepetitionDetails(builder, "Output", responseLoop);
+        AppendRepetitionDetails(builder, "Thinking", reasoningLoop);
+
+        return new Border
+        {
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(4),
+            Padding = new Thickness(8),
+            Margin = new Thickness(0, 0, 0, 8),
+            BorderBrush = hasWarning ? Brushes.DarkOrange : Brushes.LightGray,
+            Background = new SolidColorBrush(hasWarning ? Color.FromRgb(255, 248, 225) : Color.FromRgb(247, 247, 247)),
+            Child = new TextBlock
+            {
+                Text = builder.ToString().TrimEnd(),
+                FontFamily = new FontFamily("Segoe UI"),
+                Foreground = hasWarning ? Brushes.DarkRed : Brushes.DimGray,
+                TextWrapping = TextWrapping.Wrap
+            }
+        };
+    }
+
+    private static void AppendRepetitionDetails(StringBuilder builder, string label, OutputLoopDiagnostics diagnostics)
+    {
+        if (!diagnostics.HasSuspectedLoop)
+        {
+            return;
+        }
+
+        foreach (var repetition in diagnostics.Repetitions.Take(3))
+        {
+            builder.AppendLine($"{label} Wiederholung: {repetition.Kind} x{repetition.Occurrences} → {repetition.Snippet}");
+        }
+    }
+
+    private static Expander CreateTextExpander(
+        string header,
+        string text,
+        Brush foreground,
+        FontStyle fontStyle,
+        bool isExpanded,
+        Color background)
+    {
+        var displayText = string.IsNullOrEmpty(text) ? "<empty>" : text;
+        var document = new FlowDocument
+        {
+            PagePadding = new Thickness(8),
+            FontFamily = new FontFamily("Consolas"),
+            FontSize = 12,
+            PageWidth = 20000,
+            Background = new SolidColorBrush(background)
+        };
+        document.Blocks.Add(new Paragraph(new Run(displayText))
+        {
+            Margin = new Thickness(0),
+            Foreground = foreground,
+            FontStyle = fontStyle
+        });
+
+        return new Expander
+        {
+            Header = header,
+            IsExpanded = isExpanded,
+            Margin = new Thickness(0, 6, 0, 0),
+            Content = new RichTextBox
+            {
+                IsReadOnly = true,
+                FontFamily = new FontFamily("Consolas"),
+                FontSize = 12,
+                MinHeight = 90,
+                MaxHeight = 360,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+                BorderBrush = Brushes.LightGray,
+                Background = new SolidColorBrush(background),
+                Document = document
+            }
+        };
+    }
+
+    private static string EmptyFallback(string value) => string.IsNullOrWhiteSpace(value) ? "<empty>" : value;
 
     private void Progress(string message)
     {

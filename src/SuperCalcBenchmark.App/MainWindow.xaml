@@ -170,11 +170,15 @@
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="*" />
                     </Grid.ColumnDefinitions>
-                    <GroupBox Header="Run 1 Response" Grid.Column="0">
-                        <TextBox x:Name="Run1RawTextBox" IsReadOnly="True" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" TextWrapping="NoWrap" FontFamily="Consolas" />
+                    <GroupBox Header="Run 1 — Prompt / Thinking / Output / Raw" Grid.Column="0" Margin="0,0,4,0">
+                        <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                            <StackPanel x:Name="Run1RawPanel" Margin="8" />
+                        </ScrollViewer>
                     </GroupBox>
-                    <GroupBox Header="Run 2 Response" Grid.Column="1">
-                        <TextBox x:Name="Run2RawTextBox" IsReadOnly="True" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" TextWrapping="NoWrap" FontFamily="Consolas" />
+                    <GroupBox Header="Run 2 — Prompt / Thinking / Output / Raw" Grid.Column="1" Margin="4,0,0,0">
+                        <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                            <StackPanel x:Name="Run2RawPanel" Margin="8" />
+                        </ScrollViewer>
                     </GroupBox>
                 </Grid>
             </TabItem>

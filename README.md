@@ -193,6 +193,8 @@ In the app:
 
 Official/fair runs should leave thinking/reasoning enabled so each model can use its full capability. The GUI still has **Thinking deaktivieren (Debug)** for compatibility tests; when enabled, the client sends `chat_template_kwargs: { "enable_thinking": false }` for Qwen-style templates.
 
+The **Raw Outputs** tab exposes the exact request JSON, the generated user prompt, final assistant output, reasoning/thinking content, and the raw API response. Thinking is collapsed by default and rendered gray/italic; final output is highlighted red. The same completion diagnostics and loop/repetition checks are written to `report.md`.
+
 CLI quick start:
 
 ```powershell

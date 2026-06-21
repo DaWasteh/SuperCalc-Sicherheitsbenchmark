@@ -22,6 +22,8 @@ internal static class Program
         Run("parser salvages truncated findings JSON", ParserSalvagesTruncatedFindingsJson);
         Run("llama client leaves thinking enabled by default", LlamaClientLeavesThinkingEnabledByDefault);
         Run("llama client disables Qwen thinking when requested", LlamaClientDisablesQwenThinkingWhenRequested);
+        Run("loop detector flags repeated reasoning", LoopDetectorFlagsRepeatedReasoning);
+        Run("loop detector ignores normal output", LoopDetectorIgnoresNormalOutput);
         Run("perfect synthetic fixture scores 100", PerfectSyntheticFixtureScoresHigh);
         Run("duplicate finding is penalized", DuplicateFindingIsPenalized);
         Run("prompts do not contain hidden answer files", PromptsDoNotLeakHiddenGroundTruth);
@@ -196,6 +198,32 @@ internal static class Program
         Assert(result.UsedThinkingControl, "result should record thinking-control usage");
         Assert(result.AssistantContent == "{\"ok\":true}", "assistant content should be extracted");
         Assert(result.ReasoningContent == "not used", "reasoning_content should be captured for diagnostics");
+    }
+
+    private static void LoopDetectorFlagsRepeatedReasoning()
+    {
+        var repeated = string.Join("\n", Enumerable.Repeat(
+            "I will inspect validate_password, then I will inspect validate_password again, then I will inspect validate_password again because the same branch may be important.",
+            8));
+
+        var diagnostics = OutputLoopDetector.Analyze(repeated);
+        Assert(diagnostics.HasSuspectedLoop, "repeated reasoning should be flagged as a likely loop");
+        Assert(diagnostics.Repetitions.Count > 0, "loop diagnostics should include repeated segments");
+    }
+
+    private static void LoopDetectorIgnoresNormalOutput()
+    {
+        var diagnostics = OutputLoopDetector.Analyze("""
+        {
+          "summary": "normal compact answer",
+          "findings": [
+            { "title": "Format string", "severity": "Critical" },
+            { "title": "Hardcoded secret", "severity": "High" }
+          ]
+        }
+        """);
+
+        Assert(!diagnostics.HasSuspectedLoop, "short normal output should not be flagged as a loop");
     }
 
     private static void PerfectSyntheticFixtureScoresHigh()

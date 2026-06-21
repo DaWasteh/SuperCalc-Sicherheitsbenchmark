@@ -159,6 +159,10 @@ public sealed class ReportWriter
         builder.AppendLine($"| Retried without thinking hint | {artifacts.RetriedWithoutThinkingControl} |");
         builder.AppendLine($"| Parsed JSON | {artifacts.Parse.ParsedJson} |");
         builder.AppendLine($"| Used text fallback | {artifacts.Parse.UsedTextFallback} |");
+        var responseLoop = OutputLoopDetector.Analyze(artifacts.Response);
+        var reasoningLoop = OutputLoopDetector.Analyze(artifacts.ReasoningContent);
+        builder.AppendLine($"| Assistant loop check | {EscapePipe(responseLoop.Summary)} |");
+        builder.AppendLine($"| Thinking loop check | {EscapePipe(reasoningLoop.Summary)} |");
         if (!string.IsNullOrWhiteSpace(artifacts.Parse.Warning))
         {
             builder.AppendLine($"| Parse warning | {EscapePipe(artifacts.Parse.Warning)} |");
@@ -170,6 +174,25 @@ public sealed class ReportWriter
             builder.AppendLine($"> Warning: the server returned `reasoning_content` but an empty final `message.content`. This usually means Qwen thinking was not disabled or the model exhausted `max_tokens` before producing a final answer.");
             builder.AppendLine();
         }
+
+        AppendLoopDetails(builder, "assistant content", responseLoop);
+        AppendLoopDetails(builder, "thinking/reasoning content", reasoningLoop);
+    }
+
+    private static void AppendLoopDetails(StringBuilder builder, string label, OutputLoopDiagnostics diagnostics)
+    {
+        if (!diagnostics.HasSuspectedLoop)
+        {
+            return;
+        }
+
+        builder.AppendLine($"> Warning: possible loop detected in {label}. Top repeated segments:");
+        foreach (var repetition in diagnostics.Repetitions.Take(3))
+        {
+            builder.AppendLine($"> - {repetition.Kind} x{repetition.Occurrences}: `{EscapePipe(repetition.Snippet)}`");
+        }
+
+        builder.AppendLine();
     }
 
     private static void AppendFindingLedger(StringBuilder builder, ScoringResult score)
