@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO;
+using System.Text;
 using System.Windows;
 using SuperCalcBenchmark.Core;
 
@@ -156,7 +157,7 @@ public partial class MainWindow : Window
 
     private BenchmarkOptions BuildOptions(string model)
     {
-        var maxTokens = ParseInt(MaxTokensTextBox.Text, "Max Tokens", 12000, min: 512);
+        var maxTokens = ParseInt(MaxTokensTextBox.Text, "Max Tokens", -1, min: -1);
         var timeoutSeconds = ParseInt(TimeoutTextBox.Text, "Timeout", 1200, min: 30);
         var seed = ParseInt(SeedTextBox.Text, "Seed", 12345, min: int.MinValue);
         var outputDirectory = string.IsNullOrWhiteSpace(OutputDirectoryTextBox.Text)
@@ -178,25 +179,26 @@ public partial class MainWindow : Window
             MaxTokens = maxTokens,
             Seed = seed,
             Timeout = TimeSpan.FromSeconds(timeoutSeconds),
-            SkipResponseFormat = SkipResponseFormatCheckBox.IsChecked == true
+            SkipResponseFormat = SkipResponseFormatCheckBox.IsChecked == true,
+            DisableThinking = DisableThinkingCheckBox.IsChecked == true
         };
     }
 
     private void ApplyResult(BenchmarkRunResult result)
     {
         Run1ScoreTextBlock.Text = $"{result.Run1.Score.ScorePercent:0.##}/100";
-        Run1DetailsTextBlock.Text = FormatScoreDetails(result.Run1.Score);
+        Run1DetailsTextBlock.Text = FormatScoreDetails(result.Run1);
         Run1MatrixGrid.ItemsSource = result.Run1.Score.Vulnerabilities;
         Run1FindingsGrid.ItemsSource = result.Run1.Score.Findings;
-        Run1RawTextBox.Text = result.Run1.Response;
+        Run1RawTextBox.Text = FormatRawOutput(result.Run1);
 
         if (result.Run2 is not null)
         {
             Run2ScoreTextBlock.Text = $"{result.Run2.Score.ScorePercent:0.##}/100";
-            Run2DetailsTextBlock.Text = FormatScoreDetails(result.Run2.Score);
+            Run2DetailsTextBlock.Text = FormatScoreDetails(result.Run2);
             Run2MatrixGrid.ItemsSource = result.Run2.Score.Vulnerabilities;
             Run2FindingsGrid.ItemsSource = result.Run2.Score.Findings;
-            Run2RawTextBox.Text = result.Run2.Response;
+            Run2RawTextBox.Text = FormatRawOutput(result.Run2);
         }
 
         if (result.Comparison is not null)
@@ -234,11 +236,34 @@ public partial class MainWindow : Window
         OpenFolderButton.IsEnabled = false;
     }
 
-    private static string FormatScoreDetails(ScoringResult score)
+    private static string FormatScoreDetails(BenchmarkRunArtifacts artifacts)
     {
-        return $"TP: {score.FullTruePositives} full + {score.PartialTruePositives} partial | " +
-               $"FP: {score.FalsePositives} | FN: {score.Missed}\n" +
-               $"Precision: {score.Precision:P1} | Recall: {score.Recall:P1} | F1: {score.F1:P1}";
+        var score = artifacts.Score;
+        var details = $"TP: {score.FullTruePositives} full + {score.PartialTruePositives} partial | " +
+                      $"FP: {score.FalsePositives} | FN: {score.Missed}\n" +
+                      $"Precision: {score.Precision:P1} | Recall: {score.Recall:P1} | F1: {score.F1:P1}\n" +
+                      $"Finish: {artifacts.FinishReason} | Content: {artifacts.Response.Length} chars | Reasoning: {artifacts.ReasoningContent.Length} chars";
+
+        if (!string.IsNullOrWhiteSpace(artifacts.Parse.Warning))
+        {
+            details += $"\nParse: {artifacts.Parse.Warning}";
+        }
+
+        return details;
+    }
+
+    private static string FormatRawOutput(BenchmarkRunArtifacts artifacts)
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine("=== assistant message.content ===");
+        builder.AppendLine(string.IsNullOrEmpty(artifacts.Response) ? "<empty>" : artifacts.Response);
+        builder.AppendLine();
+        builder.AppendLine("=== assistant message.reasoning_content ===");
+        builder.AppendLine(string.IsNullOrEmpty(artifacts.ReasoningContent) ? "<empty>" : artifacts.ReasoningContent);
+        builder.AppendLine();
+        builder.AppendLine("=== raw API response ===");
+        builder.AppendLine(string.IsNullOrEmpty(artifacts.RawResponse) ? "<empty>" : artifacts.RawResponse);
+        return builder.ToString();
     }
 
     private void Progress(string message)
@@ -267,6 +292,7 @@ public partial class MainWindow : Window
         SeedTextBox.IsEnabled = !busy;
         OutputDirectoryTextBox.IsEnabled = !busy;
         SkipResponseFormatCheckBox.IsEnabled = !busy;
+        DisableThinkingCheckBox.IsEnabled = !busy;
         CancelBenchmarkButton.IsEnabled = benchmarkRunning;
     }
 

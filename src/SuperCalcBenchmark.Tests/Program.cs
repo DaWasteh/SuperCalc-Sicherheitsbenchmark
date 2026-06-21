@@ -1,3 +1,5 @@
+using System.Net;
+using System.Text;
 using System.Text.Json;
 using SuperCalcBenchmark.Core;
 
@@ -16,6 +18,10 @@ internal static class Program
         Run("ground truth validates", GroundTruthValidates);
         Run("parser handles valid JSON", ParserHandlesValidJson);
         Run("parser handles markdown JSON fence", ParserHandlesMarkdownJsonFence);
+        Run("parser treats schema echo as no findings", ParserTreatsSchemaEchoAsNoFindings);
+        Run("parser salvages truncated findings JSON", ParserSalvagesTruncatedFindingsJson);
+        Run("llama client leaves thinking enabled by default", LlamaClientLeavesThinkingEnabledByDefault);
+        Run("llama client disables Qwen thinking when requested", LlamaClientDisablesQwenThinkingWhenRequested);
         Run("perfect synthetic fixture scores 100", PerfectSyntheticFixtureScoresHigh);
         Run("duplicate finding is penalized", DuplicateFindingIsPenalized);
         Run("prompts do not contain hidden answer files", PromptsDoNotLeakHiddenGroundTruth);
@@ -101,6 +107,97 @@ internal static class Program
         Assert(result.Findings[0].Cwe == "CWE-798", "CWE array should normalize");
     }
 
+    private static void ParserTreatsSchemaEchoAsNoFindings()
+    {
+        var parser = new ResponseParser();
+        var result = parser.Parse("""
+        ```json
+        {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "title": "SuperCalc LLM Findings Response",
+          "type": "object",
+          "properties": {
+            "findings": { "type": "array" }
+          }
+        }
+        ```
+        """);
+
+        Assert(result.ParsedJson, "schema echo should be treated as JSON");
+        Assert(result.UsedMarkdownJsonBlock, "schema echo came from a fenced JSON block");
+        Assert(result.Findings.Count == 0, "schema echo should not become a false finding");
+        Assert(result.Warning?.Contains("echo", StringComparison.OrdinalIgnoreCase) == true, "schema echo should carry a diagnostic warning");
+    }
+
+    private static void ParserSalvagesTruncatedFindingsJson()
+    {
+        var parser = new ResponseParser();
+        var result = parser.Parse("""
+        {
+          "summary": "truncated",
+          "findings": [
+            {
+              "title": "Format string",
+              "vulnerability_type": "format string",
+              "cwe": "CWE-134",
+              "severity": "Critical",
+              "confidence": 0.92,
+              "file": "enhanced_calc.cpp",
+              "line_start": 237,
+              "line_end": 238,
+              "function_or_symbol": "string_utils::log_debug_message",
+              "evidence": "printf(active_format.c_str(), user_input)",
+              "impact": "attacker controlled format string",
+              "fix": "Use printf with fixed format"
+            },
+            {
+              "title": "unfinished"
+        Then the model started writing prose instead of closing JSON.
+        """);
+
+        Assert(result.ParsedJson, "truncated JSON should still be parsed via salvage mode");
+        Assert(result.Findings.Count == 1, $"expected one salvaged complete finding, got {result.Findings.Count}");
+        Assert(result.Findings[0].Title == "Format string", "complete finding title should parse");
+        Assert(result.Warning?.Contains("salvaged", StringComparison.OrdinalIgnoreCase) == true, "salvage warning should be present");
+    }
+
+    private static void LlamaClientLeavesThinkingEnabledByDefault()
+    {
+        var handler = new CapturingHandler();
+        using var client = new LlamaCppClient(TimeSpan.FromSeconds(5), handler);
+        var result = client.CreateChatCompletionAsync(
+            "http://unit.test",
+            "Qwen3.5-4B",
+            "system",
+            "user",
+            new BenchmarkOptions { Model = "Qwen3.5-4B", MaxTokens = 16 },
+            CancellationToken.None).GetAwaiter().GetResult();
+
+        Assert(!handler.RequestBody.Contains("\"chat_template_kwargs\"", StringComparison.Ordinal), "request should leave thinking enabled by default");
+        Assert(!result.UsedThinkingControl, "result should record no thinking-control usage by default");
+        Assert(result.AssistantContent == "{\"ok\":true}", "assistant content should be extracted");
+        Assert(result.ReasoningContent == "not used", "reasoning_content should be captured for diagnostics");
+    }
+
+    private static void LlamaClientDisablesQwenThinkingWhenRequested()
+    {
+        var handler = new CapturingHandler();
+        using var client = new LlamaCppClient(TimeSpan.FromSeconds(5), handler);
+        var result = client.CreateChatCompletionAsync(
+            "http://unit.test",
+            "Qwen3.5-4B",
+            "system",
+            "user",
+            new BenchmarkOptions { Model = "Qwen3.5-4B", MaxTokens = 16, DisableThinking = true },
+            CancellationToken.None).GetAwaiter().GetResult();
+
+        Assert(handler.RequestBody.Contains("\"chat_template_kwargs\"", StringComparison.Ordinal), "request should include chat_template_kwargs when disable-thinking is requested");
+        Assert(handler.RequestBody.Contains("\"enable_thinking\": false", StringComparison.Ordinal), "request should disable Qwen thinking when requested");
+        Assert(result.UsedThinkingControl, "result should record thinking-control usage");
+        Assert(result.AssistantContent == "{\"ok\":true}", "assistant content should be extracted");
+        Assert(result.ReasoningContent == "not used", "reasoning_content should be captured for diagnostics");
+    }
+
     private static void PerfectSyntheticFixtureScoresHigh()
     {
         var (groundTruth, source) = LoadGroundTruthAndSource();
@@ -167,6 +264,39 @@ internal static class Program
             trigger = vulnerability.Trigger ?? string.Empty,
             fix = "Validate input and use safe APIs."
         };
+    }
+
+    private sealed class CapturingHandler : HttpMessageHandler
+    {
+        public string RequestBody { get; private set; } = string.Empty;
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            RequestBody = request.Content is null
+                ? string.Empty
+                : await request.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+
+            const string responseJson = """
+            {
+              "choices": [
+                {
+                  "finish_reason": "stop",
+                  "index": 0,
+                  "message": {
+                    "role": "assistant",
+                    "content": "{\"ok\":true}",
+                    "reasoning_content": "not used"
+                  }
+                }
+              ]
+            }
+            """;
+
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(responseJson, Encoding.UTF8, "application/json")
+            };
+        }
     }
 
     private static void Assert(bool condition, string message)

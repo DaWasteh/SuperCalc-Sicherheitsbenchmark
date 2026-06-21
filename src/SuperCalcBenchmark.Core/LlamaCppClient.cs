@@ -75,6 +75,36 @@ public sealed class LlamaCppClient : IDisposable
             $"Could not fetch models from '{serverUrl}'. Is llama-server running on that URL? Errors: {string.Join(" | ", errors.Select(e => e.Message))}");
     }
 
+    public async Task<int?> GetServerContextSizeAsync(string serverUrl, CancellationToken cancellationToken = default)
+    {
+        var endpoints = new[] { "/props", "/v1/models", "/slots" };
+
+        foreach (var endpoint in endpoints)
+        {
+            try
+            {
+                using var response = await _httpClient.GetAsync(BuildUri(serverUrl, endpoint), cancellationToken).ConfigureAwait(false);
+                if (!response.IsSuccessStatusCode)
+                {
+                    continue;
+                }
+
+                var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+                var nCtx = ParseContextSize(body);
+                if (nCtx is > 0)
+                {
+                    return nCtx;
+                }
+            }
+            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException)
+            {
+                // Best-effort diagnostics only; benchmark runs must still work on OpenAI-compatible servers without /props.
+            }
+        }
+
+        return null;
+    }
+
     public async Task<ChatCompletionResult> CreateChatCompletionAsync(
         string serverUrl,
         string model,
@@ -88,36 +118,91 @@ public sealed class LlamaCppClient : IDisposable
             throw new ArgumentException("A model id is required.", nameof(model));
         }
 
-        if (!options.SkipResponseFormat)
+        var errors = new List<string>();
+        ChatCompletionResult? firstSuccessful = null;
+
+        foreach (var attempt in BuildAttempts(options))
         {
-            var withFormat = BuildChatRequest(model, systemPrompt, userPrompt, options, includeResponseFormat: true);
-            var first = await PostChatCompletionAsync(serverUrl, withFormat, cancellationToken).ConfigureAwait(false);
-            if (first.Success)
+            var request = BuildChatRequest(model, systemPrompt, userPrompt, options, attempt.IncludeResponseFormat, attempt.IncludeThinkingControl);
+            var completion = await PostChatCompletionAsync(serverUrl, request, cancellationToken).ConfigureAwait(false);
+            if (!completion.Success)
             {
-                return first.Result! with { UsedResponseFormat = true };
+                errors.Add($"{attempt.Label}: {completion.Error}");
+                continue;
             }
 
-            var withoutFormat = BuildChatRequest(model, systemPrompt, userPrompt, options, includeResponseFormat: false);
-            var second = await PostChatCompletionAsync(serverUrl, withoutFormat, cancellationToken).ConfigureAwait(false);
-            if (second.Success)
+            var result = completion.Result! with
             {
-                return second.Result! with { UsedResponseFormat = false, RetriedWithoutResponseFormat = true };
+                UsedResponseFormat = attempt.IncludeResponseFormat,
+                RetriedWithoutResponseFormat = attempt.RetriedWithoutResponseFormat,
+                UsedThinkingControl = attempt.IncludeThinkingControl,
+                RetriedWithoutThinkingControl = attempt.RetriedWithoutThinkingControl
+            };
+
+            firstSuccessful ??= result;
+            if (!ReturnedOnlyReasoning(result))
+            {
+                return result;
             }
 
-            throw new InvalidOperationException($"Chat completion failed. With response_format: {first.Error}; without response_format: {second.Error}");
+            errors.Add($"{attempt.Label}: server returned empty assistant content with {result.ReasoningContent.Length} chars reasoning_content (finish_reason='{result.FinishReason}').");
         }
 
-        var request = BuildChatRequest(model, systemPrompt, userPrompt, options, includeResponseFormat: false);
-        var completion = await PostChatCompletionAsync(serverUrl, request, cancellationToken).ConfigureAwait(false);
-        if (completion.Success)
+        if (firstSuccessful is not null)
         {
-            return completion.Result!;
+            return firstSuccessful;
         }
 
-        throw new InvalidOperationException($"Chat completion failed: {completion.Error}");
+        throw new InvalidOperationException($"Chat completion failed. Attempts: {string.Join(" | ", errors)}");
     }
 
-    private static object BuildChatRequest(string model, string systemPrompt, string userPrompt, BenchmarkOptions options, bool includeResponseFormat)
+    private static IReadOnlyList<ChatRequestAttempt> BuildAttempts(BenchmarkOptions options)
+    {
+        var attempts = new List<ChatRequestAttempt>();
+
+        void Add(bool includeResponseFormat, bool includeThinkingControl)
+        {
+            if (attempts.Any(a => a.IncludeResponseFormat == includeResponseFormat && a.IncludeThinkingControl == includeThinkingControl))
+            {
+                return;
+            }
+
+            attempts.Add(new ChatRequestAttempt(
+                includeResponseFormat,
+                includeThinkingControl,
+                RetriedWithoutResponseFormat: !includeResponseFormat && !options.SkipResponseFormat,
+                RetriedWithoutThinkingControl: !includeThinkingControl && options.DisableThinking));
+        }
+
+        if (!options.SkipResponseFormat)
+        {
+            Add(includeResponseFormat: true, includeThinkingControl: options.DisableThinking);
+            Add(includeResponseFormat: false, includeThinkingControl: options.DisableThinking);
+            if (options.DisableThinking)
+            {
+                Add(includeResponseFormat: true, includeThinkingControl: false);
+                Add(includeResponseFormat: false, includeThinkingControl: false);
+            }
+        }
+        else
+        {
+            Add(includeResponseFormat: false, includeThinkingControl: options.DisableThinking);
+            if (options.DisableThinking)
+            {
+                Add(includeResponseFormat: false, includeThinkingControl: false);
+            }
+        }
+
+        return attempts;
+    }
+
+    private static object BuildChatRequest(
+        string model,
+        string systemPrompt,
+        string userPrompt,
+        BenchmarkOptions options,
+        bool includeResponseFormat,
+        bool includeThinkingControl)
     {
         var messages = new[]
         {
@@ -125,29 +210,27 @@ public sealed class LlamaCppClient : IDisposable
             new { role = "user", content = userPrompt }
         };
 
+        var request = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["model"] = model,
+            ["messages"] = messages,
+            ["temperature"] = options.Temperature,
+            ["top_p"] = options.TopP,
+            ["seed"] = options.Seed,
+            ["max_tokens"] = options.MaxTokens
+        };
+
         if (includeResponseFormat)
         {
-            return new
-            {
-                model,
-                messages,
-                temperature = options.Temperature,
-                top_p = options.TopP,
-                seed = options.Seed,
-                max_tokens = options.MaxTokens,
-                response_format = new { type = "json_object" }
-            };
+            request["response_format"] = new { type = "json_object" };
         }
 
-        return new
+        if (includeThinkingControl)
         {
-            model,
-            messages,
-            temperature = options.Temperature,
-            top_p = options.TopP,
-            seed = options.Seed,
-            max_tokens = options.MaxTokens
-        };
+            request["chat_template_kwargs"] = new { enable_thinking = false };
+        }
+
+        return request;
     }
 
     private async Task<(bool Success, ChatCompletionResult? Result, string Error)> PostChatCompletionAsync(
@@ -167,14 +250,18 @@ public sealed class LlamaCppClient : IDisposable
 
         try
         {
-            var assistantContent = ExtractAssistantContent(responseText);
+            var extracted = ExtractChatMessageContent(responseText);
             return (true, new ChatCompletionResult
             {
-                AssistantContent = assistantContent,
+                AssistantContent = extracted.AssistantContent,
+                ReasoningContent = extracted.ReasoningContent,
+                FinishReason = extracted.FinishReason,
                 RawResponse = responseText,
                 RequestJson = requestJson,
                 UsedResponseFormat = requestJson.Contains("response_format", StringComparison.Ordinal),
-                RetriedWithoutResponseFormat = false
+                UsedThinkingControl = requestJson.Contains("chat_template_kwargs", StringComparison.Ordinal),
+                RetriedWithoutResponseFormat = false,
+                RetriedWithoutThinkingControl = false
             }, string.Empty);
         }
         catch (Exception ex) when (ex is JsonException or InvalidOperationException)
@@ -183,7 +270,7 @@ public sealed class LlamaCppClient : IDisposable
         }
     }
 
-    private static string ExtractAssistantContent(string responseText)
+    private static (string AssistantContent, string ReasoningContent, string FinishReason) ExtractChatMessageContent(string responseText)
     {
         using var document = JsonDocument.Parse(responseText);
         var root = document.RootElement;
@@ -191,23 +278,114 @@ public sealed class LlamaCppClient : IDisposable
         if (root.TryGetProperty("choices", out var choices) && choices.ValueKind == JsonValueKind.Array && choices.GetArrayLength() > 0)
         {
             var firstChoice = choices[0];
-            if (firstChoice.TryGetProperty("message", out var message) && message.TryGetProperty("content", out var content))
+            var finishReason = firstChoice.TryGetProperty("finish_reason", out var finishReasonElement)
+                ? ReadElementAsString(finishReasonElement)
+                : string.Empty;
+
+            if (firstChoice.TryGetProperty("message", out var message))
             {
-                return content.ValueKind == JsonValueKind.String ? content.GetString() ?? string.Empty : content.GetRawText();
+                var assistantContent = message.TryGetProperty("content", out var content)
+                    ? ReadElementAsString(content)
+                    : string.Empty;
+                var reasoningContent = message.TryGetProperty("reasoning_content", out var reasoning)
+                    ? ReadElementAsString(reasoning)
+                    : string.Empty;
+
+                if (!string.IsNullOrEmpty(assistantContent) || !string.IsNullOrEmpty(reasoningContent) || message.TryGetProperty("content", out _))
+                {
+                    return (assistantContent, reasoningContent, finishReason);
+                }
             }
 
             if (firstChoice.TryGetProperty("text", out var text))
             {
-                return text.GetString() ?? text.GetRawText();
+                return (ReadElementAsString(text), string.Empty, finishReason);
             }
         }
 
         if (root.TryGetProperty("content", out var directContent))
         {
-            return directContent.GetString() ?? directContent.GetRawText();
+            return (ReadElementAsString(directContent), string.Empty, string.Empty);
         }
 
-        throw new InvalidOperationException("The response does not contain choices[0].message.content.");
+        throw new InvalidOperationException("The response does not contain choices[0].message.content or reasoning_content.");
+    }
+
+    private static string ReadElementAsString(JsonElement element)
+    {
+        return element.ValueKind switch
+        {
+            JsonValueKind.Null or JsonValueKind.Undefined => string.Empty,
+            JsonValueKind.String => element.GetString() ?? string.Empty,
+            _ => element.GetRawText()
+        };
+    }
+
+    private static bool ReturnedOnlyReasoning(ChatCompletionResult result)
+    {
+        return string.IsNullOrWhiteSpace(result.AssistantContent) && !string.IsNullOrWhiteSpace(result.ReasoningContent);
+    }
+
+    private sealed record ChatRequestAttempt(
+        bool IncludeResponseFormat,
+        bool IncludeThinkingControl,
+        bool RetriedWithoutResponseFormat,
+        bool RetriedWithoutThinkingControl)
+    {
+        public string Label
+        {
+            get
+            {
+                var responseFormat = IncludeResponseFormat ? "with response_format" : "without response_format";
+                var thinking = IncludeThinkingControl ? "with thinking disabled" : "without thinking control";
+                return $"{responseFormat}, {thinking}";
+            }
+        }
+    }
+
+    private static int? ParseContextSize(string body)
+    {
+        using var document = JsonDocument.Parse(body);
+        var root = document.RootElement;
+
+        if (root.ValueKind == JsonValueKind.Object)
+        {
+            if (root.TryGetProperty("default_generation_settings", out var settings) &&
+                settings.TryGetProperty("n_ctx", out var settingsContext) &&
+                settingsContext.TryGetInt32(out var nCtx))
+            {
+                return nCtx;
+            }
+
+            if (root.TryGetProperty("data", out var data) && data.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var item in data.EnumerateArray())
+                {
+                    if (item.ValueKind == JsonValueKind.Object &&
+                        item.TryGetProperty("meta", out var meta) &&
+                        meta.TryGetProperty("n_ctx", out var metaContext) &&
+                        metaContext.TryGetInt32(out nCtx))
+                    {
+                        return nCtx;
+                    }
+                }
+            }
+        }
+
+        if (root.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in root.EnumerateArray())
+            {
+                if (item.ValueKind == JsonValueKind.Object &&
+                    item.TryGetProperty("n_ctx", out var slotContext) &&
+                    slotContext.TryGetInt32(out var nCtx))
+                {
+                    return nCtx;
+                }
+            }
+        }
+
+        return null;
     }
 
     private static IReadOnlyList<string> ParseModels(string body)

@@ -151,11 +151,12 @@ internal static class Program
             OutputDirectory = args.GetNullable("--out"),
             Temperature = args.GetDouble("--temperature", 0.0),
             TopP = args.GetDouble("--top-p", 1.0),
-            MaxTokens = args.GetInt("--max-tokens", 8192),
+            MaxTokens = args.GetInt("--max-tokens", -1),
             Seed = args.GetInt("--seed", 12345),
             Timeout = TimeSpan.FromSeconds(args.GetInt("--timeout-seconds", 1200)),
             AllowHashMismatch = args.Has("--allow-hash-mismatch"),
-            SkipResponseFormat = args.Has("--skip-response-format")
+            SkipResponseFormat = args.Has("--skip-response-format"),
+            DisableThinking = args.Has("--disable-thinking")
         };
     }
 
@@ -190,7 +191,7 @@ internal static class Program
         Console.WriteLine("Examples:");
         Console.WriteLine("  dotnet run --project src/SuperCalcBenchmark.Cli -- models --server http://127.0.0.1:1234");
         Console.WriteLine("  dotnet run --project src/SuperCalcBenchmark.Cli -- validate");
-        Console.WriteLine("  dotnet run --project src/SuperCalcBenchmark.Cli -- run --model MODEL_ID --max-tokens 12000");
+        Console.WriteLine("  dotnet run --project src/SuperCalcBenchmark.Cli -- run --model MODEL_ID");
         Console.WriteLine("  dotnet run --project src/SuperCalcBenchmark.Cli -- score-fixture --response tools/response-fixtures/perfect.json --out results/perfect");
         Console.WriteLine();
         Console.WriteLine("Common options:");
@@ -202,9 +203,10 @@ internal static class Program
         Console.WriteLine("  --temperature <number>     Default: 0.0");
         Console.WriteLine("  --top-p <number>           Default: 1.0");
         Console.WriteLine("  --seed <int>               Default: 12345");
-        Console.WriteLine("  --max-tokens <int>         Default: 8192");
+        Console.WriteLine("  --max-tokens <int>         Default: -1 (llama.cpp max/unbounded; server ctx/timeout still apply)");
         Console.WriteLine("  --timeout-seconds <int>    Default: 1200");
         Console.WriteLine("  --skip-response-format     Do not send llama.cpp response_format");
+        Console.WriteLine("  --disable-thinking         Send chat_template_kwargs.enable_thinking=false for Qwen/debug runs");
         Console.WriteLine("  --allow-hash-mismatch      Development escape hatch; do not use for official scoring");
     }
 
@@ -234,7 +236,7 @@ internal static class Program
                     continue;
                 }
 
-                if (index + 1 < args.Length && !args[index + 1].StartsWith("-", StringComparison.Ordinal))
+                if (index + 1 < args.Length && IsValueToken(args[index + 1]))
                 {
                     parsed._options[current] = args[index + 1];
                     index += 2;
@@ -247,6 +249,16 @@ internal static class Program
             }
 
             return parsed;
+        }
+
+        private static bool IsValueToken(string value)
+        {
+            if (!value.StartsWith("-", StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            return double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out _);
         }
 
         public bool Has(string name) => _options.ContainsKey(name);

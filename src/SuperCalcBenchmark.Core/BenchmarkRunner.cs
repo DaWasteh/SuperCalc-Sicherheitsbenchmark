@@ -40,6 +40,10 @@ public sealed class BenchmarkRunner
         var groundTruth = _groundTruthStore.Load(options.GroundTruthPath);
         ValidatePreflight(options, source, groundTruth);
 
+        using var client = new LlamaCppClient(options.Timeout);
+        progress?.Invoke("Reading server context window...");
+        var serverContextSize = await client.GetServerContextSizeAsync(options.ServerUrl, cancellationToken).ConfigureAwait(false);
+
         var result = new BenchmarkRunResult
         {
             ToolVersion = ToolVersion,
@@ -47,14 +51,15 @@ public sealed class BenchmarkRunner
             StartedAt = startedAt,
             ServerUrl = options.ServerUrl,
             Model = options.Model,
+            MaxTokens = options.MaxTokens,
+            DisableThinking = options.DisableThinking,
+            ServerContextSize = serverContextSize,
             SourceFile = options.SourcePath,
             SourceSha256 = source.Sha256,
             ExpectedSourceSha256 = groundTruth.SourceSha256,
             SourceHashMatches = string.Equals(source.Sha256, groundTruth.SourceSha256, StringComparison.OrdinalIgnoreCase),
             OutputDirectory = _reportWriter.CreateRunDirectory(options, startedAt)
         };
-
-        using var client = new LlamaCppClient(options.Timeout);
 
         progress?.Invoke("Building Run 1 prompt...");
         var run1Prompt = _promptBuilder.BuildAnalysisPrompt(source, options.AnalysisPromptPath, options.SchemaPath);
@@ -75,9 +80,14 @@ public sealed class BenchmarkRunner
             RunName = "Run 1",
             Prompt = run1Prompt,
             Response = run1Completion.AssistantContent,
+            ReasoningContent = run1Completion.ReasoningContent,
             RawResponse = run1Completion.RawResponse,
             RequestJson = run1Completion.RequestJson,
+            FinishReason = run1Completion.FinishReason,
             UsedResponseFormat = run1Completion.UsedResponseFormat,
+            RetriedWithoutResponseFormat = run1Completion.RetriedWithoutResponseFormat,
+            UsedThinkingControl = run1Completion.UsedThinkingControl,
+            RetriedWithoutThinkingControl = run1Completion.RetriedWithoutThinkingControl,
             Parse = run1Parse,
             Score = run1Score
         };
@@ -101,9 +111,14 @@ public sealed class BenchmarkRunner
             RunName = "Run 2",
             Prompt = run2Prompt,
             Response = run2Completion.AssistantContent,
+            ReasoningContent = run2Completion.ReasoningContent,
             RawResponse = run2Completion.RawResponse,
             RequestJson = run2Completion.RequestJson,
+            FinishReason = run2Completion.FinishReason,
             UsedResponseFormat = run2Completion.UsedResponseFormat,
+            RetriedWithoutResponseFormat = run2Completion.RetriedWithoutResponseFormat,
+            UsedThinkingControl = run2Completion.UsedThinkingControl,
+            RetriedWithoutThinkingControl = run2Completion.RetriedWithoutThinkingControl,
             Parse = run2Parse,
             Score = run2Score
         };
@@ -140,6 +155,8 @@ public sealed class BenchmarkRunner
             CompletedAt = DateTimeOffset.UtcNow,
             ServerUrl = "fixture",
             Model = string.IsNullOrWhiteSpace(options.Model) ? runName : options.Model,
+            MaxTokens = options.MaxTokens,
+            DisableThinking = options.DisableThinking,
             SourceFile = options.SourcePath,
             SourceSha256 = source.Sha256,
             ExpectedSourceSha256 = groundTruth.SourceSha256,
@@ -179,7 +196,8 @@ public sealed class BenchmarkRunner
                 Seed = original.Seed,
                 Timeout = original.Timeout,
                 AllowHashMismatch = original.AllowHashMismatch,
-                SkipResponseFormat = original.SkipResponseFormat
+                SkipResponseFormat = original.SkipResponseFormat,
+                DisableThinking = original.DisableThinking
             };
         }
     }

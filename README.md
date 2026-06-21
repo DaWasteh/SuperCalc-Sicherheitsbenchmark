@@ -191,6 +191,8 @@ In the app:
 4. Click **Benchmark starten**.
 5. Read Run-1/Run-2 scores, TP/FP/FN matrix, raw outputs, and open the generated report.
 
+Official/fair runs should leave thinking/reasoning enabled so each model can use its full capability. The GUI still has **Thinking deaktivieren (Debug)** for compatibility tests; when enabled, the client sends `chat_template_kwargs: { "enable_thinking": false }` for Qwen-style templates.
+
 CLI quick start:
 
 ```powershell
@@ -201,11 +203,12 @@ dotnet run --project src/SuperCalcBenchmark.Cli -- models --server http://127.0.
 
 dotnet run --project src/SuperCalcBenchmark.Cli -- run `
   --server http://127.0.0.1:1234 `
-  --model MODEL_ID `
-  --max-tokens 12000
+  --model MODEL_ID
 ```
 
-The tool writes `run.json`, prompts, raw responses, CSV ledgers, and `report.md` to `%LOCALAPPDATA%\SuperCalcBenchmark\Runs\YYYYMMDD-HHMMSS_model\` unless `--out <dir>` is supplied. Fixture scoring is available without a live LLM server:
+By default the CLI leaves model thinking/reasoning enabled and sends `--max-tokens -1` to llama.cpp, meaning no client-side completion cap; the server's configured context window (`--ctx-size` / `n_ctx`) and timeout still apply. Use `--max-tokens <positive>` to cap completion length, or `--disable-thinking` for Qwen/debug runs where you want final JSON without a thinking phase.
+
+The tool writes `run.json`, prompts, visible responses, reasoning diagnostics, raw API responses, CSV ledgers, and `report.md` to `%LOCALAPPDATA%\SuperCalcBenchmark\Runs\YYYYMMDD-HHMMSS_model\` unless `--out <dir>` is supplied. Fixture scoring is available without a live LLM server:
 
 ```powershell
 dotnet run --project src/SuperCalcBenchmark.Cli -- score-fixture `

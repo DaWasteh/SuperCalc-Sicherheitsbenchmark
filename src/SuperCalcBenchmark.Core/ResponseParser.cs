@@ -21,6 +21,17 @@ public sealed partial class ResponseParser
             };
         }
 
+        if (TryParseJsonWithoutFindings(trimmed, out var directJsonWarning))
+        {
+            return new ParseResult
+            {
+                AssistantContent = assistantContent,
+                Findings = [],
+                ParsedJson = true,
+                Warning = directJsonWarning
+            };
+        }
+
         var fencedJson = ExtractFencedJson(trimmed);
         if (!string.IsNullOrWhiteSpace(fencedJson) && TryParseJsonFindings(fencedJson, out var fencedFindings, out var fencedWarning))
         {
@@ -34,6 +45,18 @@ public sealed partial class ResponseParser
             };
         }
 
+        if (!string.IsNullOrWhiteSpace(fencedJson) && TryParseJsonWithoutFindings(fencedJson, out var fencedJsonWarning))
+        {
+            return new ParseResult
+            {
+                AssistantContent = assistantContent,
+                Findings = [],
+                ParsedJson = true,
+                UsedMarkdownJsonBlock = true,
+                Warning = fencedJsonWarning
+            };
+        }
+
         var balanced = ExtractBalancedJson(trimmed);
         if (!string.IsNullOrWhiteSpace(balanced) && TryParseJsonFindings(balanced, out var balancedFindings, out var balancedWarning))
         {
@@ -44,6 +67,30 @@ public sealed partial class ResponseParser
                 ParsedJson = true,
                 UsedMarkdownJsonBlock = trimmed.Contains("```", StringComparison.Ordinal),
                 Warning = balancedWarning
+            };
+        }
+
+        if (!string.IsNullOrWhiteSpace(balanced) && TryParseJsonWithoutFindings(balanced, out var balancedJsonWarning))
+        {
+            return new ParseResult
+            {
+                AssistantContent = assistantContent,
+                Findings = [],
+                ParsedJson = true,
+                UsedMarkdownJsonBlock = trimmed.Contains("```", StringComparison.Ordinal),
+                Warning = balancedJsonWarning
+            };
+        }
+
+        if (TryParsePartialFindingsArray(trimmed, out var partialFindings, out var partialWarning))
+        {
+            return new ParseResult
+            {
+                AssistantContent = assistantContent,
+                Findings = Reindex(partialFindings),
+                ParsedJson = true,
+                UsedMarkdownJsonBlock = trimmed.Contains("```", StringComparison.Ordinal),
+                Warning = partialWarning
             };
         }
 
@@ -159,6 +206,159 @@ public sealed partial class ResponseParser
         {
             return false;
         }
+    }
+
+    private static bool TryParsePartialFindingsArray(string text, out List<LlmFinding> findings, out string warning)
+    {
+        findings = [];
+        warning = string.Empty;
+
+        var findingsProperty = text.IndexOf("\"findings\"", StringComparison.OrdinalIgnoreCase);
+        if (findingsProperty < 0)
+        {
+            return false;
+        }
+
+        var arrayStart = text.IndexOf('[', findingsProperty);
+        if (arrayStart < 0)
+        {
+            return false;
+        }
+
+        var objectJson = ExtractCompleteObjectsFromArray(text, arrayStart);
+        if (objectJson.Count == 0)
+        {
+            return false;
+        }
+
+        var salvagedJson = "{\"findings\":[" + string.Join(',', objectJson) + "]}";
+        if (!TryParseJsonFindings(salvagedJson, out findings, out var parseWarning) || findings.Count == 0)
+        {
+            return false;
+        }
+
+        warning = $"Response JSON was incomplete or had trailing non-JSON text; salvaged {findings.Count} complete finding object(s) from the findings array.";
+        if (!string.IsNullOrWhiteSpace(parseWarning))
+        {
+            warning += " " + parseWarning;
+        }
+
+        return true;
+    }
+
+    private static List<string> ExtractCompleteObjectsFromArray(string text, int arrayStart)
+    {
+        var objects = new List<string>();
+        var inString = false;
+        var escaped = false;
+        var objectDepth = 0;
+        var objectStart = -1;
+
+        for (var i = arrayStart + 1; i < text.Length; i++)
+        {
+            var c = text[i];
+
+            if (inString)
+            {
+                if (escaped)
+                {
+                    escaped = false;
+                }
+                else if (c == '\\')
+                {
+                    escaped = true;
+                }
+                else if (c == '"')
+                {
+                    inString = false;
+                }
+
+                continue;
+            }
+
+            if (c == '"')
+            {
+                inString = true;
+                continue;
+            }
+
+            if (c == '{')
+            {
+                if (objectDepth == 0)
+                {
+                    objectStart = i;
+                }
+
+                objectDepth++;
+                continue;
+            }
+
+            if (c == '}')
+            {
+                if (objectDepth <= 0)
+                {
+                    continue;
+                }
+
+                objectDepth--;
+                if (objectDepth == 0 && objectStart >= 0)
+                {
+                    objects.Add(text[objectStart..(i + 1)]);
+                    objectStart = -1;
+                }
+
+                continue;
+            }
+
+            if (c == ']' && objectDepth == 0)
+            {
+                break;
+            }
+        }
+
+        return objects;
+    }
+
+    private static bool TryParseJsonWithoutFindings(string json, out string warning)
+    {
+        warning = string.Empty;
+
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return false;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(RemoveTrailingCommas(json.Trim()), new JsonDocumentOptions
+            {
+                AllowTrailingCommas = true,
+                CommentHandling = JsonCommentHandling.Skip
+            });
+
+            if (document.RootElement.ValueKind is not (JsonValueKind.Object or JsonValueKind.Array))
+            {
+                return false;
+            }
+
+            warning = LooksLikeSchemaEcho(document.RootElement)
+                ? "Response appears to echo the JSON schema instead of returning findings."
+                : "Valid JSON response did not contain a findings array.";
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static bool LooksLikeSchemaEcho(JsonElement root)
+    {
+        return root.ValueKind == JsonValueKind.Object &&
+               (TryGetProperty(root, "$schema", out _) || TryGetProperty(root, "properties", out _)) &&
+               TryGetProperty(root, "title", out var title) &&
+               title.ValueKind == JsonValueKind.String &&
+               title.GetString()?.Contains("Findings Response", StringComparison.OrdinalIgnoreCase) == true;
     }
 
     private static string? ReadString(JsonElement item, params string[] names)

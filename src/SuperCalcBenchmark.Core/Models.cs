@@ -199,10 +199,14 @@ public sealed class RunComparison
 public sealed record ChatCompletionResult
 {
     public string AssistantContent { get; init; } = string.Empty;
+    public string ReasoningContent { get; init; } = string.Empty;
     public string RawResponse { get; init; } = string.Empty;
     public string RequestJson { get; init; } = string.Empty;
+    public string FinishReason { get; init; } = string.Empty;
     public bool UsedResponseFormat { get; init; }
     public bool RetriedWithoutResponseFormat { get; init; }
+    public bool UsedThinkingControl { get; init; }
+    public bool RetriedWithoutThinkingControl { get; init; }
 }
 
 public sealed class BenchmarkRunArtifacts
@@ -210,9 +214,14 @@ public sealed class BenchmarkRunArtifacts
     public string RunName { get; init; } = string.Empty;
     public string Prompt { get; init; } = string.Empty;
     public string Response { get; init; } = string.Empty;
+    public string ReasoningContent { get; init; } = string.Empty;
     public string RawResponse { get; init; } = string.Empty;
     public string RequestJson { get; init; } = string.Empty;
+    public string FinishReason { get; init; } = string.Empty;
     public bool UsedResponseFormat { get; init; }
+    public bool RetriedWithoutResponseFormat { get; init; }
+    public bool UsedThinkingControl { get; init; }
+    public bool RetriedWithoutThinkingControl { get; init; }
     public ParseResult Parse { get; init; } = new();
     public ScoringResult Score { get; init; } = new();
 }
@@ -225,6 +234,9 @@ public sealed class BenchmarkRunResult
     public DateTimeOffset CompletedAt { get; set; }
     public string ServerUrl { get; init; } = string.Empty;
     public string Model { get; init; } = string.Empty;
+    public int MaxTokens { get; init; }
+    public bool DisableThinking { get; init; }
+    public int? ServerContextSize { get; init; }
     public string SourceFile { get; init; } = string.Empty;
     public string SourceSha256 { get; init; } = string.Empty;
     public string ExpectedSourceSha256 { get; init; } = string.Empty;
@@ -247,9 +259,10 @@ public sealed class BenchmarkOptions
     public string? OutputDirectory { get; init; }
     public double Temperature { get; init; } = 0.0;
     public double TopP { get; init; } = 1.0;
-    public int MaxTokens { get; init; } = 8192;
+    public int MaxTokens { get; init; } = -1;
     public int Seed { get; init; } = 12345;
     public TimeSpan Timeout { get; init; } = TimeSpan.FromMinutes(20);
     public bool AllowHashMismatch { get; init; }
     public bool SkipResponseFormat { get; init; }
+    public bool DisableThinking { get; init; }
 }
