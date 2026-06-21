@@ -36,6 +36,10 @@ public sealed class ArchiveRecord
     [JsonPropertyName("quantWasDetected")]
     public bool QuantWasDetected { get; set; }
 
+    /// <summary>
+    /// Derived from <see cref="ModelFamily"/> + <see cref="Quant"/>. On load this is
+    /// recomputed, so manual JSON edits only need to change modelFamily/quant.
+    /// </summary>
     [JsonPropertyName("groupKey")]
     public string GroupKey { get; set; } = string.Empty;
 

@@ -39,6 +39,36 @@ internal static partial class TestRunner
         Assert(overridden.GroupKey.Contains("Q5_K_M", StringComparison.Ordinal), "group key should reflect the override");
     }
 
+    private static void ArchiveManualQuantEditRebuildsGroupKey()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "supercalc-archive-edit-test-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var store = new ArchiveStore(tempRoot);
+            var path = store.Save(FakeResult("local-server-alias", 42, 4, 0, 1, 0));
+            var json = File.ReadAllText(path);
+            Assert(json.Contains("\"quant\": \"unknown-quant\"", StringComparison.Ordinal), "fixture should start as unknown quant");
+            Assert(json.Contains("\"groupKey\": \"local-server-alias__unknown-quant\"", StringComparison.Ordinal), "fixture should start with stale unknown group key");
+
+            // Simulate a user fixing only the visible quant field in the archived scorecard.
+            // They should not also need to update groupKey or move the JSON to another folder.
+            json = json.Replace("\"quant\": \"unknown-quant\"", "\"quant\": \"Q5_K_M\"", StringComparison.Ordinal);
+            File.WriteAllText(path, json);
+
+            var record = store.LoadAll().Single();
+            Assert(record.Quant == "Q5_K_M", $"manual quant should load, got {record.Quant}");
+            Assert(record.GroupKey == "local-server-alias__Q5_K_M", $"group key should be rebuilt, got {record.GroupKey}");
+
+            var group = store.LoadGroups().Single();
+            Assert(group.Quant == "Q5_K_M", $"comparison group should use manual quant, got {group.Quant}");
+            Assert(group.GroupKey == "local-server-alias__Q5_K_M", $"comparison group key should use manual quant, got {group.GroupKey}");
+        }
+        finally
+        {
+            TryDeleteDirectory(tempRoot);
+        }
+    }
+
     private static void ArchiveRoundTripsAndGroups()
     {
         var tempRoot = Path.Combine(Path.GetTempPath(), "supercalc-archive-test-" + Guid.NewGuid().ToString("N"));

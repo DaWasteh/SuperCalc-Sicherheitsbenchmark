@@ -192,12 +192,7 @@ public sealed class ArchiveStore
                 return null;
             }
 
-            // Fill in derived fields for older records that may predate them.
-            if (string.IsNullOrWhiteSpace(record.GroupKey))
-            {
-                record.GroupKey = ModelIdentity.GroupKey(record.ModelFamily, record.Quant);
-            }
-
+            NormalizeLoadedRecord(record);
             return record;
         }
         catch (JsonException)
@@ -208,6 +203,25 @@ public sealed class ArchiveStore
         {
             return null;
         }
+    }
+
+    private static void NormalizeLoadedRecord(ArchiveRecord record)
+    {
+        // Treat modelFamily + quant as the manually editable source of truth. groupKey is
+        // only a derived/cache field written for readability, so a user can correct just
+        // "quant" in an archived scorecard without also moving folders or editing groupKey.
+        var identity = ModelIdentity.Parse(record.RawModelId);
+
+        record.BenchmarkId = string.IsNullOrWhiteSpace(record.BenchmarkId)
+            ? "unknown-benchmark"
+            : record.BenchmarkId.Trim();
+        record.ModelFamily = string.IsNullOrWhiteSpace(record.ModelFamily)
+            ? identity.Family
+            : record.ModelFamily.Trim();
+        record.Quant = string.IsNullOrWhiteSpace(record.Quant)
+            ? identity.Quant
+            : record.Quant.Trim();
+        record.GroupKey = ModelIdentity.GroupKey(record.ModelFamily, record.Quant);
     }
 
     private static string EnsureUniquePath(string path)

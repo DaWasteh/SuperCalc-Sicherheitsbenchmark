@@ -204,11 +204,11 @@
                             <ComboBoxItem Content="Bester Run" />
                         </ComboBox>
                         <Button x:Name="OpenComparisonButton" Content="Diagramme öffnen (HTML)" Margin="16,4,4,4" Click="OpenComparisonButton_Click" IsEnabled="False" ToolTip="Erzeugt Säulen- und Netzdiagramm als HTML und öffnet es im Browser." />
-                        <Button x:Name="OpenArchiveFolderButton" Content="Archiv-Ordner" Click="OpenArchiveFolderButton_Click" />
+                        <Button x:Name="OpenArchiveFolderButton" Content="Archiv bearbeiten" Click="OpenArchiveFolderButton_Click" ToolTip="Öffnet die Scorecard-JSONs. modelFamily/quant können manuell korrigiert werden; danach Archiv neu laden." />
                     </WrapPanel>
 
                     <TextBlock Grid.Row="1" x:Name="ComparisonStatusTextBlock" Margin="4,0,4,8" Foreground="DimGray" TextWrapping="Wrap"
-                               Text="Archivierte Runs werden je Modell + Quant gruppiert. Nach dem ersten Benchmark hier auf 'Archiv neu laden' klicken." />
+                               Text="Archivierte Runs werden je Modell + Quant gruppiert. Scorecard-JSONs können im Archiv-Ordner manuell korrigiert werden (modelFamily/quant); danach 'Archiv neu laden' klicken." />
 
                     <DataGrid Grid.Row="2" x:Name="ComparisonGrid">
                         <DataGrid.Columns>

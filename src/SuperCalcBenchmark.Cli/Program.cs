@@ -160,6 +160,13 @@ internal static class Program
             Console.WriteLine($"    runs={group.RunCount}  best={group.BestScorePercent:0.##}  avg={group.AverageScorePercent:0.##}");
         }
 
+        if (groups.Any(g => string.Equals(g.Quant, ModelIdentity.UnknownQuant, StringComparison.OrdinalIgnoreCase)))
+        {
+            Console.WriteLine();
+            Console.WriteLine("Hinweis: unknown-quant kann in den archive/*.json Scorecards manuell korrigiert werden.");
+            Console.WriteLine("         modelFamily/quant bearbeiten, speichern, dann archive-list/compare bzw. Archiv neu laden.");
+        }
+
         return 0;
     }
 
