@@ -432,6 +432,9 @@ public partial class MainWindow : Window
     private string ArchiveRoot => Path.Combine(_repositoryRoot, ArchiveStore.DefaultArchiveFolderName);
 
     private IReadOnlyList<ArchiveGroup> _comparisonGroups = [];
+    private string? _editingComparisonGroupKey;
+    private string? _editingComparisonOriginalModelFamily;
+    private string? _editingComparisonOriginalQuant;
 
     private void RefreshComparisonButton_Click(object sender, RoutedEventArgs e)
         => RefreshComparison(preserveSelection: true);
@@ -447,6 +450,119 @@ public partial class MainWindow : Window
         }
 
         RebuildComparisonGrid();
+    }
+
+    private void ComparisonGrid_BeginningEdit(object sender, DataGridBeginningEditEventArgs e)
+    {
+        if (e.Row.Item is not ComparisonGridRow row || !IsEditableComparisonColumn(e.Column))
+        {
+            e.Cancel = true;
+            return;
+        }
+
+        _editingComparisonGroupKey = row.GroupKey;
+        _editingComparisonOriginalModelFamily = row.ModelFamily;
+        _editingComparisonOriginalQuant = row.Quant;
+    }
+
+    private void ComparisonGrid_CellEditEnding(object sender, DataGridCellEditEndingEventArgs e)
+    {
+        if (e.EditAction != DataGridEditAction.Commit
+            || e.Row.Item is not ComparisonGridRow row
+            || _editingComparisonGroupKey is null
+            || _editingComparisonOriginalModelFamily is null
+            || _editingComparisonOriginalQuant is null)
+        {
+            ClearComparisonEditState();
+            return;
+        }
+
+        var property = e.Column.SortMemberPath;
+        if (e.EditingElement is TextBox textBox)
+        {
+            if (string.Equals(property, nameof(ComparisonGridRow.ModelFamily), StringComparison.Ordinal))
+            {
+                row.ModelFamily = textBox.Text;
+            }
+            else if (string.Equals(property, nameof(ComparisonGridRow.Quant), StringComparison.Ordinal))
+            {
+                row.Quant = textBox.Text;
+            }
+        }
+
+        var originalGroupKey = _editingComparisonGroupKey;
+        var originalModelFamily = _editingComparisonOriginalModelFamily;
+        var originalQuant = _editingComparisonOriginalQuant;
+        ClearComparisonEditState();
+
+        Dispatcher.BeginInvoke(new Action(() => CommitComparisonIdentityEdit(
+            row,
+            originalGroupKey,
+            originalModelFamily,
+            originalQuant)));
+    }
+
+    private static bool IsEditableComparisonColumn(DataGridColumn column)
+        => string.Equals(column.SortMemberPath, nameof(ComparisonGridRow.ModelFamily), StringComparison.Ordinal)
+           || string.Equals(column.SortMemberPath, nameof(ComparisonGridRow.Quant), StringComparison.Ordinal);
+
+    private void CommitComparisonIdentityEdit(
+        ComparisonGridRow row,
+        string originalGroupKey,
+        string originalModelFamily,
+        string originalQuant)
+    {
+        var newModelFamily = (row.ModelFamily ?? string.Empty).Trim();
+        var newQuant = (row.Quant ?? string.Empty).Trim();
+
+        if (string.IsNullOrWhiteSpace(newModelFamily) || string.IsNullOrWhiteSpace(newQuant))
+        {
+            MessageBox.Show(this,
+                "Modell und Quant dürfen nicht leer sein.",
+                "Archiv-Bearbeitung",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+            RefreshComparison(preserveSelection: true);
+            return;
+        }
+
+        if (string.Equals(newModelFamily, originalModelFamily, StringComparison.Ordinal)
+            && string.Equals(newQuant, originalQuant, StringComparison.Ordinal))
+        {
+            RefreshComparison(preserveSelection: true);
+            return;
+        }
+
+        try
+        {
+            var group = _comparisonGroups.FirstOrDefault(g =>
+                string.Equals(g.GroupKey, originalGroupKey, StringComparison.OrdinalIgnoreCase));
+            if (group is null)
+            {
+                throw new InvalidOperationException("Die Vergleichsgruppe wurde nicht mehr im Archiv gefunden. Bitte Archiv neu laden.");
+            }
+
+            var updatedPaths = new ArchiveStore(ArchiveRoot).UpdateIdentity(group.Records, newModelFamily, newQuant);
+            AppendLog($"Archiv bearbeitet: {originalModelFamily} · {originalQuant} → {newModelFamily} · {newQuant} ({updatedPaths.Count} Scorecard(s)).");
+            RefreshComparison(preserveSelection: true);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this,
+                "Archiv-Scorecard konnte nicht aktualisiert werden:\n\n" + ex.Message,
+                "Archiv-Bearbeitung fehlgeschlagen",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+            AppendLog("FEHLER beim Bearbeiten des Archivs: " + ex.Message);
+            RefreshComparison(preserveSelection: true);
+        }
+    }
+
+    private void ClearComparisonEditState()
+    {
+        _editingComparisonGroupKey = null;
+        _editingComparisonOriginalModelFamily = null;
+        _editingComparisonOriginalQuant = null;
     }
 
     private void RefreshComparison(bool preserveSelection)
@@ -481,7 +597,7 @@ public partial class MainWindow : Window
     private void RebuildComparisonGrid()
     {
         var report = BuildCurrentComparison();
-        ComparisonGrid.ItemsSource = report.Series;
+        ComparisonGrid.ItemsSource = report.Series.Select(ComparisonGridRow.FromSeries).ToList();
         OpenComparisonButton.IsEnabled = !report.IsEmpty;
 
         if (report.IsEmpty)
@@ -495,7 +611,7 @@ public partial class MainWindow : Window
         var aggregate = SelectedAggregate == ComparisonAggregate.Best ? "Bester Run" : "Durchschnitt";
         ComparisonStatusTextBlock.Text =
             $"{report.Series.Count} Modell/Quant-Gruppe(n), {report.VulnerabilityAxis.Count} Schwachstellen · Wertung: {aggregate}. " +
-            "Für Säulen- und Netzdiagramm auf 'Diagramme öffnen (HTML)' klicken.";
+            "Modell/Quant per Doppelklick direkt bearbeiten; Diagramme über 'Diagramme öffnen (HTML)'.";
     }
 
     private ComparisonReport BuildCurrentComparison()
@@ -542,6 +658,38 @@ public partial class MainWindow : Window
     {
         Directory.CreateDirectory(ArchiveRoot);
         OpenPath(ArchiveRoot);
+    }
+
+    private sealed class ComparisonGridRow
+    {
+        public string GroupKey { get; init; } = string.Empty;
+        public string ModelFamily { get; set; } = string.Empty;
+        public string Quant { get; set; } = string.Empty;
+        public int RunCount { get; init; }
+        public double ScorePercent { get; init; }
+        public double Precision { get; init; }
+        public double Recall { get; init; }
+        public double F1 { get; init; }
+        public int FullTruePositives { get; init; }
+        public int PartialTruePositives { get; init; }
+        public int FalsePositives { get; init; }
+        public int Missed { get; init; }
+
+        public static ComparisonGridRow FromSeries(ComparisonSeries series) => new()
+        {
+            GroupKey = series.GroupKey,
+            ModelFamily = series.ModelFamily,
+            Quant = series.Quant,
+            RunCount = series.RunCount,
+            ScorePercent = series.ScorePercent,
+            Precision = series.Precision,
+            Recall = series.Recall,
+            F1 = series.F1,
+            FullTruePositives = series.FullTruePositives,
+            PartialTruePositives = series.PartialTruePositives,
+            FalsePositives = series.FalsePositives,
+            Missed = series.Missed
+        };
     }
 
     private void ResetResultUi()

@@ -39,6 +39,32 @@ internal static partial class TestRunner
         Assert(overridden.GroupKey.Contains("Q5_K_M", StringComparison.Ordinal), "group key should reflect the override");
     }
 
+    private static void ArchiveStoreUpdatesEditableIdentityFields()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "supercalc-archive-update-test-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var store = new ArchiveStore(tempRoot);
+            var originalPath = store.Save(FakeResult("local-server-alias", 42, 4, 0, 1, 0));
+            var group = store.LoadGroups().Single();
+
+            var updatedPaths = store.UpdateIdentity(group.Records, "qwen3-coder-30b", "Q4_K_M");
+            Assert(updatedPaths.Count == 1, $"expected one updated scorecard, got {updatedPaths.Count}");
+            Assert(!File.Exists(originalPath), "scorecard should be moved out of the stale unknown-quant folder");
+            Assert(File.Exists(updatedPaths[0]), "updated scorecard should exist at the new group path");
+            Assert(updatedPaths[0].Contains("qwen3-coder-30b__Q4_K_M", StringComparison.Ordinal), "updated path should contain the new group key");
+
+            var updatedGroup = store.LoadGroups().Single();
+            Assert(updatedGroup.ModelFamily == "qwen3-coder-30b", $"model family should update, got {updatedGroup.ModelFamily}");
+            Assert(updatedGroup.Quant == "Q4_K_M", $"quant should update, got {updatedGroup.Quant}");
+            Assert(updatedGroup.GroupKey == "qwen3-coder-30b__Q4_K_M", $"group key should update, got {updatedGroup.GroupKey}");
+        }
+        finally
+        {
+            TryDeleteDirectory(tempRoot);
+        }
+    }
+
     private static void ArchiveManualQuantEditRebuildsGroupKey()
     {
         var tempRoot = Path.Combine(Path.GetTempPath(), "supercalc-archive-edit-test-" + Guid.NewGuid().ToString("N"));

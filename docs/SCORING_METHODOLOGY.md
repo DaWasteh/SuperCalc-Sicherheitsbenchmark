@@ -95,7 +95,7 @@ Run 2 is not allowed to use hidden ground truth; it only receives the code and t
 
 ## Archived scorecards & cross-run comparison
 
-Each completed run is archived as a compact scorecard (`archive/<benchmark>/<family>__<quant>/<timestamp>.json`) so multiple models — and multiple quantizations of the same model — can be compared later without re-running them. The archive groups runs by **model family + quant**, both parsed from the llama.cpp model id / GGUF name (overridable via `--quant` or the GUI **Quant** field). If a model alias hides this information, the archived JSON scorecard may also be edited manually: change `modelFamily` and/or `quant`; `groupKey` and the physical folder name are derived again when the archive is loaded.
+Each completed run is archived as a compact scorecard (`archive/<benchmark>/<family>__<quant>/<timestamp>.json`) so multiple models — and multiple quantizations of the same model — can be compared later without re-running them. The archive groups runs by **model family + quant**, both parsed from the llama.cpp model id / GGUF name (overridable via `--quant` or the GUI **Quant** field). If a model alias hides this information, only the identity fields are editable after the fact: double-click **Modell** or **Quant** in the GUI comparison grid, or change `modelFamily`/`quant` in the JSON scorecard manually; `groupKey` and the physical folder name are derived again when the archive is loaded.
 
 For comparison, the **primary run** of each scorecard is used: Run 2 (self-validation) when present, otherwise Run 1. This matches the headline score a single benchmark reports.
 

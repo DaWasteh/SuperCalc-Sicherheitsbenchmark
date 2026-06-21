@@ -67,6 +67,13 @@ public sealed class ArchiveRecord
     [JsonPropertyName("runDirectory")]
     public string RunDirectory { get; set; } = string.Empty;
 
+    /// <summary>
+    /// Physical JSON path this record was loaded from. Not serialized; used by the app/CLI
+    /// to persist manual identity edits back to the scorecard.
+    /// </summary>
+    [JsonIgnore]
+    public string ArchivePath { get; set; } = string.Empty;
+
     /// <summary>Per-run scorecards. Index 0 is Run 1, index 1 (if present) is Run 2.</summary>
     [JsonPropertyName("runs")]
     public List<ArchiveRunScore> Runs { get; set; } = [];

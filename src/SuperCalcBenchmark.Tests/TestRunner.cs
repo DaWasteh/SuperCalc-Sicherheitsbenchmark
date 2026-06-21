@@ -29,6 +29,7 @@ internal static partial class TestRunner
         Run("prompts do not contain hidden answer files", PromptsDoNotLeakHiddenGroundTruth);
         Run("model identity detects quant and family", ModelIdentityDetectsQuantAndFamily);
         Run("model identity honors manual quant override", ModelIdentityHonorsQuantOverride);
+        Run("archive store updates editable identity fields", ArchiveStoreUpdatesEditableIdentityFields);
         Run("archive manual quant edit rebuilds group key", ArchiveManualQuantEditRebuildsGroupKey);
         Run("archive round-trips and groups by model and quant", ArchiveRoundTripsAndGroups);
         Run("comparison aggregates and filters by family", ComparisonAggregatesAndFiltersByFamily);

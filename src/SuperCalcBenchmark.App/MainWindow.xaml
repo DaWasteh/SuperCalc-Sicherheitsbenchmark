@@ -210,19 +210,24 @@
                     <TextBlock Grid.Row="1" x:Name="ComparisonStatusTextBlock" Margin="4,0,4,8" Foreground="DimGray" TextWrapping="Wrap"
                                Text="Archivierte Runs werden je Modell + Quant gruppiert. Scorecard-JSONs können im Archiv-Ordner manuell korrigiert werden (modelFamily/quant); danach 'Archiv neu laden' klicken." />
 
-                    <DataGrid Grid.Row="2" x:Name="ComparisonGrid">
+                    <DataGrid Grid.Row="2" x:Name="ComparisonGrid"
+                              AutoGenerateColumns="False"
+                              CanUserAddRows="False"
+                              CanUserDeleteRows="False"
+                              BeginningEdit="ComparisonGrid_BeginningEdit"
+                              CellEditEnding="ComparisonGrid_CellEditEnding">
                         <DataGrid.Columns>
-                            <DataGridTextColumn Header="Modell" Binding="{Binding ModelFamily}" Width="*" />
-                            <DataGridTextColumn Header="Quant" Binding="{Binding Quant}" Width="120" />
-                            <DataGridTextColumn Header="Runs" Binding="{Binding RunCount}" Width="60" />
-                            <DataGridTextColumn Header="Score" Binding="{Binding ScorePercent, StringFormat=0.##}" Width="80" />
-                            <DataGridTextColumn Header="Precision" Binding="{Binding Precision, StringFormat=P1}" Width="90" />
-                            <DataGridTextColumn Header="Recall" Binding="{Binding Recall, StringFormat=P1}" Width="90" />
-                            <DataGridTextColumn Header="F1" Binding="{Binding F1, StringFormat=P1}" Width="80" />
-                            <DataGridTextColumn Header="Full TP" Binding="{Binding FullTruePositives}" Width="70" />
-                            <DataGridTextColumn Header="Partial" Binding="{Binding PartialTruePositives}" Width="70" />
-                            <DataGridTextColumn Header="FP" Binding="{Binding FalsePositives}" Width="60" />
-                            <DataGridTextColumn Header="Missed" Binding="{Binding Missed}" Width="70" />
+                            <DataGridTextColumn Header="Modell" Binding="{Binding ModelFamily, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" SortMemberPath="ModelFamily" Width="*" />
+                            <DataGridTextColumn Header="Quant" Binding="{Binding Quant, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" SortMemberPath="Quant" Width="120" />
+                            <DataGridTextColumn Header="Runs" Binding="{Binding RunCount}" IsReadOnly="True" Width="60" />
+                            <DataGridTextColumn Header="Score" Binding="{Binding ScorePercent, StringFormat=0.##}" IsReadOnly="True" Width="80" />
+                            <DataGridTextColumn Header="Precision" Binding="{Binding Precision, StringFormat=P1}" IsReadOnly="True" Width="90" />
+                            <DataGridTextColumn Header="Recall" Binding="{Binding Recall, StringFormat=P1}" IsReadOnly="True" Width="90" />
+                            <DataGridTextColumn Header="F1" Binding="{Binding F1, StringFormat=P1}" IsReadOnly="True" Width="80" />
+                            <DataGridTextColumn Header="Full TP" Binding="{Binding FullTruePositives}" IsReadOnly="True" Width="70" />
+                            <DataGridTextColumn Header="Partial" Binding="{Binding PartialTruePositives}" IsReadOnly="True" Width="70" />
+                            <DataGridTextColumn Header="FP" Binding="{Binding FalsePositives}" IsReadOnly="True" Width="60" />
+                            <DataGridTextColumn Header="Missed" Binding="{Binding Missed}" IsReadOnly="True" Width="70" />
                         </DataGrid.Columns>
                     </DataGrid>
                 </Grid>

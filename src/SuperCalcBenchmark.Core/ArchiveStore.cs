@@ -181,6 +181,69 @@ public sealed class ArchiveStore
             .ToList();
     }
 
+    /// <summary>
+    /// Updates only the manually editable archive identity fields for already-loaded records
+    /// and writes the scorecards back to disk. Files are moved into the matching
+    /// archive/&lt;benchmark&gt;/&lt;family&gt;__&lt;quant&gt;/ folder when the group changes.
+    /// </summary>
+    public IReadOnlyList<string> UpdateIdentity(IEnumerable<ArchiveRecord> records, string modelFamily, string quant)
+    {
+        ArgumentNullException.ThrowIfNull(records);
+
+        var normalizedFamily = (modelFamily ?? string.Empty).Trim();
+        var normalizedQuant = (quant ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(normalizedFamily))
+        {
+            throw new ArgumentException("Model family must not be empty.", nameof(modelFamily));
+        }
+
+        if (string.IsNullOrWhiteSpace(normalizedQuant))
+        {
+            throw new ArgumentException("Quant must not be empty.", nameof(quant));
+        }
+
+        var updatedPaths = new List<string>();
+        foreach (var record in records)
+        {
+            if (string.IsNullOrWhiteSpace(record.ArchivePath))
+            {
+                throw new InvalidOperationException("Archive record has no source path and cannot be updated in place.");
+            }
+
+            var oldPath = Path.GetFullPath(record.ArchivePath);
+            if (!File.Exists(oldPath))
+            {
+                throw new FileNotFoundException("Archive record JSON was not found.", oldPath);
+            }
+
+            record.ModelFamily = normalizedFamily;
+            record.Quant = normalizedQuant;
+            record.QuantWasDetected = false;
+            record.GroupKey = ModelIdentity.GroupKey(record.ModelFamily, record.Quant);
+
+            var targetDirectory = Path.Combine(_archiveRoot, TextUtil.SafeFileNamePart(record.BenchmarkId), record.GroupKey);
+            Directory.CreateDirectory(targetDirectory);
+
+            var newPath = Path.Combine(targetDirectory, Path.GetFileName(oldPath));
+            if (!string.Equals(oldPath, newPath, StringComparison.OrdinalIgnoreCase) && File.Exists(newPath))
+            {
+                newPath = EnsureUniquePath(newPath);
+            }
+
+            File.WriteAllText(newPath, JsonSerializer.Serialize(record, WriteOptions), Encoding.UTF8);
+            if (!string.Equals(oldPath, newPath, StringComparison.OrdinalIgnoreCase))
+            {
+                File.Delete(oldPath);
+                TryDeleteEmptyDirectory(Path.GetDirectoryName(oldPath));
+            }
+
+            record.ArchivePath = newPath;
+            updatedPaths.Add(newPath);
+        }
+
+        return updatedPaths;
+    }
+
     private static ArchiveRecord? TryLoad(string path)
     {
         try
@@ -193,6 +256,7 @@ public sealed class ArchiveStore
             }
 
             NormalizeLoadedRecord(record);
+            record.ArchivePath = Path.GetFullPath(path);
             return record;
         }
         catch (JsonException)
@@ -222,6 +286,23 @@ public sealed class ArchiveStore
             ? identity.Quant
             : record.Quant.Trim();
         record.GroupKey = ModelIdentity.GroupKey(record.ModelFamily, record.Quant);
+    }
+
+    private static void TryDeleteEmptyDirectory(string? directory)
+    {
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(directory)
+                && Directory.Exists(directory)
+                && !Directory.EnumerateFileSystemEntries(directory).Any())
+            {
+                Directory.Delete(directory);
+            }
+        }
+        catch
+        {
+            // Best-effort cleanup only; stale empty folders must never break an edit.
+        }
     }
 
     private static string EnsureUniquePath(string path)
