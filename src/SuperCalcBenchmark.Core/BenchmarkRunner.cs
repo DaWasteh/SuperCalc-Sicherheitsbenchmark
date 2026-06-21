@@ -138,6 +138,7 @@ public sealed class BenchmarkRunner
 
         progress?.Invoke("Writing run artifacts and report...");
         _reportWriter.Write(result);
+        TryArchive(result, options, progress);
         progress?.Invoke($"Done. Report: {Path.Combine(result.OutputDirectory, "report.md")}");
         return result;
     }
@@ -186,6 +187,7 @@ public sealed class BenchmarkRunner
         };
 
         _reportWriter.Write(result);
+        TryArchive(result, options, progress: null);
         return result;
 
         static BenchmarkOptions WithModelFallback(BenchmarkOptions original, string fallbackModel)
@@ -200,13 +202,38 @@ public sealed class BenchmarkRunner
                 SelfValidatePromptPath = original.SelfValidatePromptPath,
                 SchemaPath = original.SchemaPath,
                 OutputDirectory = original.OutputDirectory,
+                Temperature = original.Temperature,
+                TopP = original.TopP,
                 MaxTokens = original.MaxTokens,
                 Seed = original.Seed,
                 Timeout = original.Timeout,
                 AllowHashMismatch = original.AllowHashMismatch,
                 SkipResponseFormat = original.SkipResponseFormat,
-                DisableThinking = original.DisableThinking
+                DisableThinking = original.DisableThinking,
+                ArchiveDirectory = original.ArchiveDirectory,
+                QuantOverride = original.QuantOverride
             };
+        }
+    }
+
+    private static void TryArchive(BenchmarkRunResult result, BenchmarkOptions options, Action<string>? progress)
+    {
+        if (string.IsNullOrWhiteSpace(options.ArchiveDirectory))
+        {
+            return;
+        }
+
+        try
+        {
+            var store = new ArchiveStore(options.ArchiveDirectory);
+            result.ArchivedRecordPath = store.Save(result, options.QuantOverride);
+            progress?.Invoke($"Archived scorecard: {result.ArchivedRecordPath}");
+        }
+        catch (Exception ex)
+        {
+            // Archiving is a convenience layer; never fail a completed benchmark because the
+            // archive write hit a permissions or path issue.
+            progress?.Invoke($"Warning: could not archive run ({ex.Message}).");
         }
     }
 

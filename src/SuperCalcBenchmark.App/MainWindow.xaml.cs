@@ -33,6 +33,7 @@ public partial class MainWindow : Window
         ShowRawOutputPlaceholder(Run1RawPanel, "Noch kein Run-1-Output. Nach dem Benchmark siehst du hier Prompt, Thinking, Output und Raw API Response.");
         ShowRawOutputPlaceholder(Run2RawPanel, "Noch kein Run-2-Output. Nach dem Benchmark siehst du hier Prompt, Thinking, Output und Raw API Response.");
         AppendLog("Bereit. Wenn du ein neues Modell in llama-server geladen hast: Refresh Models klicken, Modell wählen, Benchmark starten.");
+        RefreshComparison(preserveSelection: false);
     }
 
     private async void RefreshModelsButton_Click(object sender, RoutedEventArgs e)
@@ -248,11 +249,15 @@ public partial class MainWindow : Window
             SelfValidatePromptPath = Path.Combine(_repositoryRoot, "benchmarks", "supercalc-v3", "prompts", "self_validate_v1.md"),
             SchemaPath = Path.Combine(_repositoryRoot, "benchmarks", "supercalc-v3", "schemas", "llm_findings.schema.json"),
             OutputDirectory = outputDirectory,
+            Temperature = 0.0,
+            TopP = 1.0,
             MaxTokens = maxTokens,
             Seed = seed,
             Timeout = TimeSpan.FromSeconds(timeoutSeconds),
             SkipResponseFormat = SkipResponseFormatCheckBox.IsChecked == true,
-            DisableThinking = DisableThinkingCheckBox.IsChecked == true
+            DisableThinking = DisableThinkingCheckBox.IsChecked == true,
+            ArchiveDirectory = Path.Combine(_repositoryRoot, ArchiveStore.DefaultArchiveFolderName),
+            QuantOverride = string.IsNullOrWhiteSpace(QuantTextBox.Text) ? null : QuantTextBox.Text.Trim()
         };
     }
 
@@ -414,6 +419,119 @@ public partial class MainWindow : Window
         OutputPathTextBlock.Text = result.OutputDirectory;
         OpenReportButton.IsEnabled = File.Exists(Path.Combine(result.OutputDirectory, "report.md"));
         OpenFolderButton.IsEnabled = Directory.Exists(result.OutputDirectory);
+
+        // A new run just landed in the archive → refresh the comparison tab so it shows up
+        // without the user having to click "Archiv neu laden".
+        RefreshComparison(preserveSelection: true);
+    }
+
+    // ---- Comparison tab ------------------------------------------------------
+
+    private const string AllFamiliesLabel = "Alle Modelle";
+
+    private string ArchiveRoot => Path.Combine(_repositoryRoot, ArchiveStore.DefaultArchiveFolderName);
+
+    private IReadOnlyList<ArchiveGroup> _comparisonGroups = [];
+
+    private void RefreshComparisonButton_Click(object sender, RoutedEventArgs e)
+        => RefreshComparison(preserveSelection: true);
+
+    private void ComparisonFilter_Changed(object sender, SelectionChangedEventArgs e)
+        => RebuildComparisonGrid();
+
+    private void RefreshComparison(bool preserveSelection)
+    {
+        try
+        {
+            var store = new ArchiveStore(ArchiveRoot);
+            _comparisonGroups = store.LoadGroups();
+
+            var previous = preserveSelection ? (FamilyFilterComboBox.SelectedItem as string) : null;
+
+            var families = new List<string> { AllFamiliesLabel };
+            families.AddRange(_comparisonGroups
+                .Select(g => g.ModelFamily)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(f => f, StringComparer.OrdinalIgnoreCase));
+
+            FamilyFilterComboBox.ItemsSource = families;
+            FamilyFilterComboBox.SelectedItem = previous is not null && families.Contains(previous)
+                ? previous
+                : AllFamiliesLabel;
+
+            RebuildComparisonGrid();
+        }
+        catch (Exception ex)
+        {
+            ComparisonStatusTextBlock.Text = "Archiv konnte nicht geladen werden: " + ex.Message;
+            AppendLog("FEHLER beim Laden des Archivs: " + ex.Message);
+        }
+    }
+
+    private void RebuildComparisonGrid()
+    {
+        var report = BuildCurrentComparison();
+        ComparisonGrid.ItemsSource = report.Series;
+        OpenComparisonButton.IsEnabled = !report.IsEmpty;
+
+        if (report.IsEmpty)
+        {
+            ComparisonStatusTextBlock.Text = _comparisonGroups.Count == 0
+                ? "Noch keine archivierten Runs. Starte einen Benchmark — danach erscheinen die Ergebnisse hier."
+                : "Für die gewählte Modellfamilie gibt es keine Runs.";
+            return;
+        }
+
+        var aggregate = SelectedAggregate == ComparisonAggregate.Best ? "Bester Run" : "Durchschnitt";
+        ComparisonStatusTextBlock.Text =
+            $"{report.Series.Count} Modell/Quant-Gruppe(n), {report.VulnerabilityAxis.Count} Schwachstellen · Wertung: {aggregate}. " +
+            "Für Säulen- und Netzdiagramm auf 'Diagramme öffnen (HTML)' klicken.";
+    }
+
+    private ComparisonReport BuildCurrentComparison()
+    {
+        var benchmarkId = _comparisonGroups
+            .SelectMany(g => g.Records)
+            .Select(r => r.BenchmarkId)
+            .FirstOrDefault() ?? "supercalc";
+
+        var family = FamilyFilterComboBox.SelectedItem as string;
+        var familyFilter = string.Equals(family, AllFamiliesLabel, StringComparison.Ordinal) ? null : family;
+
+        return ComparisonReport.Build(_comparisonGroups, benchmarkId, SelectedAggregate, familyFilter);
+    }
+
+    private ComparisonAggregate SelectedAggregate =>
+        (AggregateComboBox.SelectedItem as ComboBoxItem)?.Content as string == "Bester Run"
+            ? ComparisonAggregate.Best
+            : ComparisonAggregate.Average;
+
+    private void OpenComparisonButton_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var report = BuildCurrentComparison();
+            if (report.IsEmpty)
+            {
+                return;
+            }
+
+            var outputDir = Path.Combine(ArchiveRoot, "_reports");
+            var htmlPath = new ComparisonHtmlWriter().Write(report, outputDir);
+            AppendLog("Vergleichs-HTML erzeugt: " + htmlPath);
+            OpenPath(htmlPath);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, "Vergleich konnte nicht erzeugt werden:\n\n" + ex.Message,
+                "Fehler", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private void OpenArchiveFolderButton_Click(object sender, RoutedEventArgs e)
+    {
+        Directory.CreateDirectory(ArchiveRoot);
+        OpenPath(ArchiveRoot);
     }
 
     private void ResetResultUi()

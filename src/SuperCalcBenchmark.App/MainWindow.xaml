@@ -54,6 +54,8 @@
                         <TextBox x:Name="SeedTextBox" Text="12345" Width="90" />
                         <CheckBox x:Name="SkipResponseFormatCheckBox" Content="response_format überspringen" IsChecked="True" VerticalAlignment="Center" Margin="16,4,4,4" ToolTip="Kompatibler mit llama-web-ui; JSON wird weiterhin per Parser extrahiert." />
                         <CheckBox x:Name="DisableThinkingCheckBox" Content="Thinking deaktivieren (Debug)" IsChecked="False" VerticalAlignment="Center" Margin="16,4,4,4" />
+                        <TextBlock Text="Quant (optional)" VerticalAlignment="Center" Margin="16,4,4,4" />
+                        <TextBox x:Name="QuantTextBox" Width="110" ToolTip="Nur nötig, wenn die Modell-ID den Quant nicht enthält, z.B. Q4_K_M. Wird sonst automatisch erkannt." />
                         <Button x:Name="PreviewPromptButton" Content="Prompt anzeigen" Margin="16,4,4,4" Click="PreviewPromptButton_Click" ToolTip="Zeigt den generierten Prompt und die erste Request-JSON, ohne den Server aufzurufen." />
                         <TextBlock Text="Output-Ordner optional" VerticalAlignment="Center" Margin="16,4,4,4" />
                         <TextBox x:Name="OutputDirectoryTextBox" Width="320" ToolTip="Leer lassen für %LOCALAPPDATA%\SuperCalcBenchmark\Runs" />
@@ -181,6 +183,48 @@
                             <StackPanel x:Name="Run2RawPanel" Margin="8" />
                         </ScrollViewer>
                     </GroupBox>
+                </Grid>
+            </TabItem>
+
+            <TabItem Header="Vergleich">
+                <Grid Margin="10">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+
+                    <WrapPanel Grid.Row="0" Margin="0,0,0,8">
+                        <Button x:Name="RefreshComparisonButton" Content="Archiv neu laden" Click="RefreshComparisonButton_Click" />
+                        <TextBlock Text="Modellfamilie" VerticalAlignment="Center" Margin="16,4,4,4" />
+                        <ComboBox x:Name="FamilyFilterComboBox" Width="240" SelectionChanged="ComparisonFilter_Changed" ToolTip="Alle Modelle oder nur die Quants einer Familie vergleichen." />
+                        <TextBlock Text="Wertung" VerticalAlignment="Center" Margin="16,4,4,4" />
+                        <ComboBox x:Name="AggregateComboBox" Width="140" SelectionChanged="ComparisonFilter_Changed">
+                            <ComboBoxItem Content="Durchschnitt" IsSelected="True" />
+                            <ComboBoxItem Content="Bester Run" />
+                        </ComboBox>
+                        <Button x:Name="OpenComparisonButton" Content="Diagramme öffnen (HTML)" Margin="16,4,4,4" Click="OpenComparisonButton_Click" IsEnabled="False" ToolTip="Erzeugt Säulen- und Netzdiagramm als HTML und öffnet es im Browser." />
+                        <Button x:Name="OpenArchiveFolderButton" Content="Archiv-Ordner" Click="OpenArchiveFolderButton_Click" />
+                    </WrapPanel>
+
+                    <TextBlock Grid.Row="1" x:Name="ComparisonStatusTextBlock" Margin="4,0,4,8" Foreground="DimGray" TextWrapping="Wrap"
+                               Text="Archivierte Runs werden je Modell + Quant gruppiert. Nach dem ersten Benchmark hier auf 'Archiv neu laden' klicken." />
+
+                    <DataGrid Grid.Row="2" x:Name="ComparisonGrid">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Modell" Binding="{Binding ModelFamily}" Width="*" />
+                            <DataGridTextColumn Header="Quant" Binding="{Binding Quant}" Width="120" />
+                            <DataGridTextColumn Header="Runs" Binding="{Binding RunCount}" Width="60" />
+                            <DataGridTextColumn Header="Score" Binding="{Binding ScorePercent, StringFormat=0.##}" Width="80" />
+                            <DataGridTextColumn Header="Precision" Binding="{Binding Precision, StringFormat=P1}" Width="90" />
+                            <DataGridTextColumn Header="Recall" Binding="{Binding Recall, StringFormat=P1}" Width="90" />
+                            <DataGridTextColumn Header="F1" Binding="{Binding F1, StringFormat=P1}" Width="80" />
+                            <DataGridTextColumn Header="Full TP" Binding="{Binding FullTruePositives}" Width="70" />
+                            <DataGridTextColumn Header="Partial" Binding="{Binding PartialTruePositives}" Width="70" />
+                            <DataGridTextColumn Header="FP" Binding="{Binding FalsePositives}" Width="60" />
+                            <DataGridTextColumn Header="Missed" Binding="{Binding Missed}" Width="70" />
+                        </DataGrid.Columns>
+                    </DataGrid>
                 </Grid>
             </TabItem>
         </TabControl>

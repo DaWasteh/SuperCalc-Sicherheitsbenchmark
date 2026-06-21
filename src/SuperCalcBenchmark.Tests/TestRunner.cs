@@ -5,7 +5,7 @@ using SuperCalcBenchmark.Core;
 
 namespace SuperCalcBenchmark.Tests;
 
-internal static class TestRunner
+internal static partial class TestRunner
 {
     private static int _failures;
 
@@ -27,6 +27,11 @@ internal static class TestRunner
         Run("perfect synthetic fixture scores 100", PerfectSyntheticFixtureScoresHigh);
         Run("duplicate finding is penalized", DuplicateFindingIsPenalized);
         Run("prompts do not contain hidden answer files", PromptsDoNotLeakHiddenGroundTruth);
+        Run("model identity detects quant and family", ModelIdentityDetectsQuantAndFamily);
+        Run("model identity honors manual quant override", ModelIdentityHonorsQuantOverride);
+        Run("archive round-trips and groups by model and quant", ArchiveRoundTripsAndGroups);
+        Run("comparison aggregates and filters by family", ComparisonAggregatesAndFiltersByFamily);
+        Run("comparison html embeds parseable payload", ComparisonHtmlEmbedsParseablePayload);
 
         if (_failures == 0)
         {

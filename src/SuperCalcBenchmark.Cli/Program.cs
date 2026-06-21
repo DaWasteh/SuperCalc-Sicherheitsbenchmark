@@ -31,6 +31,8 @@ internal static class Program
                 "validate" => Validate(parsed),
                 "score-fixture" or "fixture" => ScoreFixture(parsed),
                 "run" or "benchmark" => await RunBenchmarkAsync(parsed),
+                "archive-list" or "archive" => ArchiveList(parsed),
+                "compare" => Compare(parsed),
                 "help" => PrintUsageAndReturn(),
                 _ => UnknownCommand(command)
             };
@@ -128,6 +130,76 @@ internal static class Program
         }
 
         Console.WriteLine($"Report: {Path.Combine(result.OutputDirectory, "report.md")}");
+        if (!string.IsNullOrWhiteSpace(result.ArchivedRecordPath))
+        {
+            Console.WriteLine($"Archived: {result.ArchivedRecordPath}");
+        }
+
+        return 0;
+    }
+
+    private static int ArchiveList(ParsedArgs args)
+    {
+        var archiveDir = Path.GetFullPath(args.Get("--archive", ArchiveStore.DefaultArchiveFolderName));
+        var benchmark = args.GetNullable("--benchmark");
+        var store = new ArchiveStore(archiveDir);
+        var groups = store.LoadGroups(benchmark);
+
+        Console.WriteLine($"Archive: {archiveDir}");
+        if (groups.Count == 0)
+        {
+            Console.WriteLine("No archived runs found. Run a benchmark first (archiving is on by default).");
+            return 0;
+        }
+
+        Console.WriteLine($"{groups.Count} model/quant group(s):");
+        Console.WriteLine();
+        foreach (var group in groups)
+        {
+            Console.WriteLine($"  {group.ModelFamily} · {group.Quant}");
+            Console.WriteLine($"    runs={group.RunCount}  best={group.BestScorePercent:0.##}  avg={group.AverageScorePercent:0.##}");
+        }
+
+        return 0;
+    }
+
+    private static int Compare(ParsedArgs args)
+    {
+        var archiveDir = Path.GetFullPath(args.Get("--archive", ArchiveStore.DefaultArchiveFolderName));
+        var benchmark = args.GetNullable("--benchmark");
+        var family = args.GetNullable("--family");
+        var aggregate = string.Equals(args.Get("--aggregate", "average"), "best", StringComparison.OrdinalIgnoreCase)
+            ? ComparisonAggregate.Best
+            : ComparisonAggregate.Average;
+
+        var store = new ArchiveStore(archiveDir);
+        var groups = store.LoadGroups(benchmark);
+        if (groups.Count == 0)
+        {
+            Console.WriteLine($"No archived runs found in {archiveDir}.");
+            return 0;
+        }
+
+        var report = ComparisonReport.Build(groups, benchmark ?? groups[0].Records[0].BenchmarkId, aggregate, family);
+        if (report.IsEmpty)
+        {
+            Console.WriteLine(family is null
+                ? "Nothing to compare."
+                : $"No archived runs for model family '{family}'. Use archive-list to see available families.");
+            return 0;
+        }
+
+        var outputDir = args.GetNullable("--out") ?? Path.Combine(archiveDir, "_reports");
+        var htmlPath = new ComparisonHtmlWriter().Write(report, Path.GetFullPath(outputDir));
+
+        Console.WriteLine($"Comparison ({aggregate}, {report.Series.Count} series, {report.VulnerabilityAxis.Count} vulns):");
+        foreach (var series in report.Series)
+        {
+            Console.WriteLine($"  {series.ScorePercent,6:0.##}  {series.Label}  (runs={series.RunCount})");
+        }
+
+        Console.WriteLine();
+        Console.WriteLine($"HTML report: {htmlPath}");
         return 0;
     }
 
@@ -154,8 +226,25 @@ internal static class Program
             Timeout = TimeSpan.FromSeconds(args.GetInt("--timeout-seconds", 1200)),
             AllowHashMismatch = args.Has("--allow-hash-mismatch"),
             SkipResponseFormat = args.Has("--skip-response-format"),
-            DisableThinking = args.Has("--disable-thinking")
+            DisableThinking = args.Has("--disable-thinking"),
+            ArchiveDirectory = ResolveArchiveDirectory(args),
+            QuantOverride = args.GetNullable("--quant")
         };
+    }
+
+    // Archiving is on by default (folder: ./archive) so every run becomes comparable.
+    // --no-archive disables it; --archive <dir> picks a custom location.
+    private static string? ResolveArchiveDirectory(ParsedArgs args)
+    {
+        if (args.Has("--no-archive"))
+        {
+            return null;
+        }
+
+        var explicitPath = args.GetNullable("--archive");
+        return Path.GetFullPath(string.IsNullOrWhiteSpace(explicitPath)
+            ? ArchiveStore.DefaultArchiveFolderName
+            : explicitPath);
     }
 
     private static void PrintScore(ScoringResult score)
@@ -185,11 +274,17 @@ internal static class Program
         Console.WriteLine("  validate         Validate ground_truth.json against enhanced_calc.cpp");
         Console.WriteLine("  run              Execute Run 1 + Run 2 against llama-server and score offline");
         Console.WriteLine("  score-fixture    Score a saved model response without contacting llama-server");
+        Console.WriteLine("  archive-list     List archived runs grouped by model family + quant");
+        Console.WriteLine("  compare          Build an HTML comparison (bar + radar) from archived runs");
         Console.WriteLine();
         Console.WriteLine("Examples:");
         Console.WriteLine("  dotnet run --project src/SuperCalcBenchmark.Cli -- models --server http://127.0.0.1:1234");
         Console.WriteLine("  dotnet run --project src/SuperCalcBenchmark.Cli -- validate");
         Console.WriteLine("  dotnet run --project src/SuperCalcBenchmark.Cli -- run --model MODEL_ID");
+        Console.WriteLine("  dotnet run --project src/SuperCalcBenchmark.Cli -- run --model gpt --quant Q5_K_M   # manual quant");
+        Console.WriteLine("  dotnet run --project src/SuperCalcBenchmark.Cli -- archive-list");
+        Console.WriteLine("  dotnet run --project src/SuperCalcBenchmark.Cli -- compare                          # all models");
+        Console.WriteLine("  dotnet run --project src/SuperCalcBenchmark.Cli -- compare --family qwen3-coder-30b # quants of one model");
         Console.WriteLine("  dotnet run --project src/SuperCalcBenchmark.Cli -- score-fixture --response tools/response-fixtures/perfect.json --out results/perfect");
         Console.WriteLine();
         Console.WriteLine("Common options:");
@@ -206,6 +301,14 @@ internal static class Program
         Console.WriteLine("  --skip-response-format     Do not send llama.cpp response_format");
         Console.WriteLine("  --disable-thinking         Send chat_template_kwargs.enable_thinking=false for Qwen/debug runs");
         Console.WriteLine("  --allow-hash-mismatch      Development escape hatch; do not use for official scoring");
+        Console.WriteLine();
+        Console.WriteLine("Archive / comparison options:");
+        Console.WriteLine("  --archive <dir>            Archive folder. Default: ./archive");
+        Console.WriteLine("  --no-archive               Do not archive this run");
+        Console.WriteLine("  --quant <label>            Manual quant label when the model id has none (e.g. Q4_K_M)");
+        Console.WriteLine("  --benchmark <id>           Restrict archive-list/compare to one benchmark id");
+        Console.WriteLine("  --family <name>            compare: only quants of this model family");
+        Console.WriteLine("  --aggregate <average|best> compare: headline score per group. Default: average");
     }
 
     private sealed class ParsedArgs

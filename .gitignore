@@ -12,6 +12,11 @@ results/
 artifacts/
 *.trx
 
+# Generated comparison reports (regenerated on demand from the archive records).
+# The archive/<benchmark>/<family>__<quant>/*.json scorecards themselves ARE committed
+# so run history stays in the repo and can be compared on any clone.
+archive/_reports/
+
 # OS/editor noise
 .DS_Store
 Thumbs.db

@@ -220,6 +220,39 @@ dotnet run --project src/SuperCalcBenchmark.Cli -- score-fixture `
   --out results/perfect
 ```
 
+### Run Archive & Model Comparison
+
+Every completed run (GUI and CLI) is now also archived as a compact scorecard under `archive/` in the repository, grouped by **model family and quantization**:
+
+```
+archive/
+  supercalc-v3/
+    qwen3-coder-30b-a3b-instruct__Q4_K_M/
+      20260621-143012_qwen3-coder-30b-a3b-instruct.json
+    qwen3-coder-30b-a3b-instruct__IQ3_XXS/
+      20260621-150188_qwen3-coder-30b-a3b-instruct.json
+```
+
+The model family and quant are parsed automatically from the llama.cpp model id / GGUF name (`Q4_K_M`, `IQ3_XXS`, `Q8_0`, `F16`, …). When your server reports an alias that does not encode the quant, set it explicitly — **Quant (optional)** in the GUI options, or `--quant Q4_K_M` on the CLI. Because every quant of the same model shares a family, you can line up, for example, all `qwen3-coder-30b` quants against each other. The JSON scorecards are committed to the repo so run history travels with any clone; only the generated reports under `archive/_reports/` are git-ignored. Archiving is on by default and writes to `./archive`; pass `--no-archive` (or `--archive <dir>`) to change that.
+
+The **Vergleich** tab in the GUI shows one row per model + quant with score, precision, recall, F1, and TP/FP/Missed counts. Pick a single model family to compare only its quants, switch between **Durchschnitt** (mean across all runs in a group) and **Bester Run**, and click **Diagramme öffnen (HTML)** for a graphical view:
+
+- a **bar chart** of total score per model + quant, and
+- a **radar / net chart** of per-vulnerability credit (1.0 full, 0.5 partial, 0.0 missed) on a shared vulnerability axis,
+
+plus a sortable summary table. The same report is available from the CLI and is written as a self-contained `comparison.html` (Chart.js from CDN) alongside a `comparison.csv` for spreadsheets:
+
+```powershell
+# List everything in the archive, grouped by model + quant
+dotnet run --project src/SuperCalcBenchmark.Cli -- archive-list
+
+# Compare all models (averaged), HTML + CSV into archive/_reports/
+dotnet run --project src/SuperCalcBenchmark.Cli -- compare
+
+# Compare only the quants of one model, using each group's best run
+dotnet run --project src/SuperCalcBenchmark.Cli -- compare --family qwen3-coder-30b-a3b-instruct --aggregate best
+```
+
 ### Traceable Scoring Framework
 
 Detailed scoring is defined in [`docs/SCORING_METHODOLOGY.md`](docs/SCORING_METHODOLOGY.md). Summary:
@@ -255,15 +288,17 @@ supercalc-security-benchmark/
 ├── build_and_test.sh              # Automated compilation & sanitizer validation
 ├── global.json                    # Pins local .NET SDK selection to .NET 10
 ├── SuperCalcBenchmark.slnx        # .NET 10 solution
+├── archive/                       # Per-run scorecards grouped by model family + quant (run history)
+│   └── <benchmark>/<family>__<quant>/*.json
 ├── benchmarks/
 │   └── supercalc-v3/
 │       ├── ground_truth.json      # Machine-readable hidden scoring key; never prompt the LLM with this
 │       ├── prompts/               # Run-1 and Run-2 prompt templates
 │       └── schemas/               # LLM response JSON schema
 ├── src/
-│   ├── SuperCalcBenchmark.Core/   # LLM client, parser, matcher, scorer, report writer
+│   ├── SuperCalcBenchmark.Core/   # LLM client, parser, matcher, scorer, report writer, run archive + comparison
 │   ├── SuperCalcBenchmark.App/    # Windows-native WPF GUI: refresh model, start benchmark, view scores
-│   ├── SuperCalcBenchmark.Cli/    # CLI harness for models/validate/run/fixture scoring
+│   ├── SuperCalcBenchmark.Cli/    # CLI harness: models/validate/run/fixture, archive-list, compare
 │   └── SuperCalcBenchmark.Tests/  # Dependency-free smoke/unit tests
 ├── tools/
 │   └── response-fixtures/         # Deterministic scorer fixtures
@@ -324,6 +359,7 @@ This project is distributed under the [MIT License](LICENSE).
 
 | Version | Date       | Highlights                                                                                       |
 | :-----: | :--------: | ------------------------------------------------------------------------------------------------ |
+|  v3.1  | 2026-06-21 | Run archive per model + quant; multi-run comparison with bar (total score) and radar (per-vulnerability) charts, HTML/CSV export, CLI archive-list/compare |
 |  v3.0   | 2025-05-01 | Expanded to 20 vulnerabilities; added concurrency & memory-pool flaws; formalized scoring matrix |
 |  v2.0   | 2025-03-15 | Community-driven additions (#10–#15); refined severity classification                            |
 |  v1.0   | 2025-01-15 | Initial release with 9 foundational vulnerabilities                                              |

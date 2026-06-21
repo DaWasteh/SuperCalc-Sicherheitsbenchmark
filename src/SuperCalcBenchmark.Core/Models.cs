@@ -286,6 +286,9 @@ public sealed class BenchmarkRunResult
     public BenchmarkRunArtifacts? Run2 { get; set; }
     public RunComparison? Comparison { get; set; }
     public string OutputDirectory { get; set; } = string.Empty;
+
+    /// <summary>Path of the archive scorecard written for this run, if archiving was enabled.</summary>
+    public string? ArchivedRecordPath { get; set; }
 }
 
 public sealed class BenchmarkOptions
@@ -298,10 +301,24 @@ public sealed class BenchmarkOptions
     public string SelfValidatePromptPath { get; init; } = Path.Combine("benchmarks", "supercalc-v3", "prompts", "self_validate_v1.md");
     public string SchemaPath { get; init; } = Path.Combine("benchmarks", "supercalc-v3", "schemas", "llm_findings.schema.json");
     public string? OutputDirectory { get; init; }
+    public double Temperature { get; init; } = 0.0;
+    public double TopP { get; init; } = 1.0;
     public int MaxTokens { get; init; } = -1;
     public int Seed { get; init; } = 12345;
     public TimeSpan Timeout { get; init; } = TimeSpan.FromMinutes(20);
     public bool AllowHashMismatch { get; init; }
     public bool SkipResponseFormat { get; init; }
     public bool DisableThinking { get; init; }
+
+    /// <summary>
+    /// When set, each completed run is archived as a compact scorecard under this folder
+    /// (grouped by model family + quant) for later comparison. Null disables archiving.
+    /// </summary>
+    public string? ArchiveDirectory { get; init; }
+
+    /// <summary>
+    /// Optional manual quant label (e.g. "Q4_K_M") used when the model id does not encode the
+    /// quantization. Ignored when the quant can be detected from the model id.
+    /// </summary>
+    public string? QuantOverride { get; init; }
 }
