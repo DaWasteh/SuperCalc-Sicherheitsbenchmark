@@ -149,8 +149,6 @@ internal static class Program
             SelfValidatePromptPath = args.Get("--self-prompt", Path.Combine("benchmarks", "supercalc-v3", "prompts", "self_validate_v1.md")),
             SchemaPath = args.Get("--schema", Path.Combine("benchmarks", "supercalc-v3", "schemas", "llm_findings.schema.json")),
             OutputDirectory = args.GetNullable("--out"),
-            Temperature = args.GetDouble("--temperature", 0.0),
-            TopP = args.GetDouble("--top-p", 1.0),
             MaxTokens = args.GetInt("--max-tokens", -1),
             Seed = args.GetInt("--seed", 12345),
             Timeout = TimeSpan.FromSeconds(args.GetInt("--timeout-seconds", 1200)),

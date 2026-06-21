@@ -248,8 +248,6 @@ public partial class MainWindow : Window
             SelfValidatePromptPath = Path.Combine(_repositoryRoot, "benchmarks", "supercalc-v3", "prompts", "self_validate_v1.md"),
             SchemaPath = Path.Combine(_repositoryRoot, "benchmarks", "supercalc-v3", "schemas", "llm_findings.schema.json"),
             OutputDirectory = outputDirectory,
-            Temperature = 0.0,
-            TopP = 1.0,
             MaxTokens = maxTokens,
             Seed = seed,
             Timeout = TimeSpan.FromSeconds(timeoutSeconds),

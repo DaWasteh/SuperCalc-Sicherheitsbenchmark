@@ -246,12 +246,21 @@ public sealed class LlamaCppClient : IDisposable
             new { role = "user", content = userPrompt }
         };
 
+        // Intentionally do NOT send sampler settings (temperature, top_p, top_k,
+        // min_p, repeat_penalty, ...). Those are configured per model on the
+        // llama-server side (via the autotuner). Sending them here would override
+        // the server defaults for every request - e.g. forcing temperature=0
+        // collapses any model to greedy decoding and produces endless repetition
+        // loops. The benchmark only asks the question and evaluates the answer;
+        // it must not change how a model is tuned.
+        //
+        // seed is kept on purpose: it is a run-level reproducibility control
+        // (exposed in the UI), not a per-model tuning parameter, and it does not
+        // cause loops.
         var request = new Dictionary<string, object?>(StringComparer.Ordinal)
         {
             ["model"] = model,
             ["messages"] = messages,
-            ["temperature"] = options.Temperature,
-            ["top_p"] = options.TopP,
             ["seed"] = options.Seed
         };
 

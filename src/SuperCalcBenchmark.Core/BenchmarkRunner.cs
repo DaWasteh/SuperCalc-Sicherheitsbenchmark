@@ -200,8 +200,6 @@ public sealed class BenchmarkRunner
                 SelfValidatePromptPath = original.SelfValidatePromptPath,
                 SchemaPath = original.SchemaPath,
                 OutputDirectory = original.OutputDirectory,
-                Temperature = original.Temperature,
-                TopP = original.TopP,
                 MaxTokens = original.MaxTokens,
                 Seed = original.Seed,
                 Timeout = original.Timeout,

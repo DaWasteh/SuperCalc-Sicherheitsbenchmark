@@ -298,8 +298,6 @@ public sealed class BenchmarkOptions
     public string SelfValidatePromptPath { get; init; } = Path.Combine("benchmarks", "supercalc-v3", "prompts", "self_validate_v1.md");
     public string SchemaPath { get; init; } = Path.Combine("benchmarks", "supercalc-v3", "schemas", "llm_findings.schema.json");
     public string? OutputDirectory { get; init; }
-    public double Temperature { get; init; } = 0.0;
-    public double TopP { get; init; } = 1.0;
     public int MaxTokens { get; init; } = -1;
     public int Seed { get; init; } = 12345;
     public TimeSpan Timeout { get; init; } = TimeSpan.FromMinutes(20);

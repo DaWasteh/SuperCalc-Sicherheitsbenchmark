@@ -5,7 +5,7 @@ using SuperCalcBenchmark.Core;
 
 namespace SuperCalcBenchmark.Tests;
 
-internal static class Program
+internal static class TestRunner
 {
     private static int _failures;
 
