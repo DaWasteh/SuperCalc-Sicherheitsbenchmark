@@ -173,7 +173,7 @@ internal static class Program
             "system",
             "user",
             new BenchmarkOptions { Model = "Qwen3.5-4B", MaxTokens = 16 },
-            CancellationToken.None).GetAwaiter().GetResult();
+            cancellationToken: CancellationToken.None).GetAwaiter().GetResult();
 
         Assert(!handler.RequestBody.Contains("\"chat_template_kwargs\"", StringComparison.Ordinal), "request should leave thinking enabled by default");
         Assert(!result.UsedThinkingControl, "result should record no thinking-control usage by default");
@@ -191,7 +191,7 @@ internal static class Program
             "system",
             "user",
             new BenchmarkOptions { Model = "Qwen3.5-4B", MaxTokens = 16, DisableThinking = true },
-            CancellationToken.None).GetAwaiter().GetResult();
+            cancellationToken: CancellationToken.None).GetAwaiter().GetResult();
 
         Assert(handler.RequestBody.Contains("\"chat_template_kwargs\"", StringComparison.Ordinal), "request should include chat_template_kwargs when disable-thinking is requested");
         Assert(handler.RequestBody.Contains("\"enable_thinking\": false", StringComparison.Ordinal), "request should disable Qwen thinking when requested");
