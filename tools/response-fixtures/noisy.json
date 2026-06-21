@@ -1,0 +1,34 @@
+{
+  "summary": "Small response with one real issue and one hallucination.",
+  "findings": [
+    {
+      "title": "Format-String Injection via Runtime Log Format",
+      "vulnerability_type": "format string",
+      "cwe": "CWE-134",
+      "severity": "Critical",
+      "confidence": 0.98,
+      "file": "enhanced_calc.cpp",
+      "line_start": 74,
+      "line_end": 74,
+      "function_or_symbol": "config::security::LOG_FORMAT",
+      "evidence": "log_format; runtime_log_format; printf(active_format.c_str(), user_input)",
+      "impact": "format string; uncontrolled format",
+      "trigger": "",
+      "fix": "Validate inputs, remove unsafe API use, and add synchronization or safe arithmetic as appropriate."
+    },
+    {
+      "title": "SQL injection in database login",
+      "vulnerability_type": "SQL injection",
+      "cwe": "CWE-89",
+      "severity": "Critical",
+      "confidence": 0.9,
+      "file": "enhanced_calc.cpp",
+      "line_start": 9999,
+      "line_end": 9999,
+      "function_or_symbol": "database::login",
+      "evidence": "SELECT * FROM users WHERE name = input",
+      "impact": "remote database compromise",
+      "fix": "Use prepared statements."
+    }
+  ]
+}

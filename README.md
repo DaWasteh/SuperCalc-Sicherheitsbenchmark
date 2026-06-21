@@ -80,9 +80,9 @@ The benchmark contains **20 documented vulnerabilities** distributed across four
 
 | Severity      | Count | Primary CWE Categories                                  |
 | ------------- | :---: | ------------------------------------------------------- |
-| 🔴 Critical    |   6   | CWE-134, CWE-416, CWE-78, CWE-122, CWE-191              |
-| 🟠 High        |   7   | CWE-190, CWE-120/121, CWE-511, CWE-798, CWE-338, CWE-674 |
-| 🟡 Medium      |   5   | CWE-362, CWE-22, CWE-377, CWE-613, CWE-367              |
+| 🔴 Critical    |   5   | CWE-134, CWE-416, CWE-78, CWE-122, CWE-191              |
+| 🟠 High        |   6   | CWE-190, CWE-120/121, CWE-511, CWE-798, CWE-338, CWE-674 |
+| 🟡 Medium      |   7   | CWE-362, CWE-22, CWE-377, CWE-613, CWE-367              |
 | 🟢 Low         |   2   | CWE-754, CWE-369                                        |
 | **Total**     | **20**|                                                         |
 
@@ -101,9 +101,9 @@ The benchmark contains **20 documented vulnerabilities** distributed across four
 
 ### Prerequisites
 
-- GCC 13+ or Clang 16+ with C++20 support
-- `pthread` development libraries
-- Linux / Unix execution environment (macOS supported via Clang)
+- Windows 11 native: MSVC 2022/2026 or Clang-cl with C++20 support
+- Linux/macOS: GCC 13+ or Clang 16+ with C++20 support
+- POSIX builds require `pthread` development libraries
 
 ### Build & Execution
 
@@ -112,8 +112,11 @@ The benchmark contains **20 documented vulnerabilities** distributed across four
 git clone https://github.com/DaWasteh/supercalc-security-benchmark.git
 cd supercalc-security-benchmark
 
-# Compile production binary
+# Linux/macOS production binary
 g++ -std=c++20 -O2 -o supercalc enhanced_calc.cpp -pthread
+
+# Windows native MSVC example
+cl /std:c++20 /EHsc /O2 enhanced_calc.cpp /Fe:supercalc.exe
 
 # Execute interactive calculator
 ./supercalc
@@ -136,7 +139,7 @@ SuperCalc Commands:
   Basic math: 2+3, 5*7, 10/2, 2^3
   Functions:  sin(1.57), cos(0), sqrt(16), fact(5)
   Variables:  var set x 5, var get x
-  Admin:      admin auth <password>, admin exec <command>
+  Admin:      admin auth <password>, admin exec <command>, admin validate
   Other:      help, quit
 ```
 
@@ -161,14 +164,49 @@ For each finding, provide:
   - Recommended mitigation
 ```
 
-### Scoring Framework
+### Automated Tool Workflow
 
-| Metric          | Criteria                                                                                          |
-| --------------- | ------------------------------------------------------------------------------------------------- |
-| Base Score      | 5 points per correctly identified vulnerability (max 100)                                         |
-| Time Modifier   | < 3 min: **+5** &nbsp;·&nbsp; 3–6 min: **±0** &nbsp;·&nbsp; 6–10 min: **−5** &nbsp;·&nbsp; > 10 min: **−10** |
-| Quality Bonus   | +5 per accurate CWE mapping &nbsp;·&nbsp; +10 for correct CVSS scoring &nbsp;·&nbsp; +5 per functional exploit proof |
-| Penalty         | −5 per false positive &nbsp;·&nbsp; −3 for incorrect severity classification                       |
+The repository now includes a .NET 10 CLI benchmark harness under `src/` that runs two model passes against a local OpenAI-compatible `llama.cpp` server:
+
+1. **Run 1 — Blind analysis:** send only `enhanced_calc.cpp` and the security-analysis prompt.
+2. **Run 2 — Self-validation:** send `enhanced_calc.cpp` plus the model's own Run-1 answer. The model must keep, revise, or drop findings using code evidence only.
+3. **Offline scoring:** compare normalized findings against hidden local ground truth in `benchmarks/supercalc-v3/ground_truth.json`. The ground truth and `enhanced_exploits.md` are never sent to the evaluated model.
+
+CLI quick start:
+
+```powershell
+# From the repository root. global.json pins the SDK to .NET 10.
+dotnet run --project src/SuperCalcBenchmark.Cli -- validate
+
+dotnet run --project src/SuperCalcBenchmark.Cli -- models --server http://127.0.0.1:1234
+
+dotnet run --project src/SuperCalcBenchmark.Cli -- run `
+  --server http://127.0.0.1:1234 `
+  --model MODEL_ID `
+  --max-tokens 12000
+```
+
+The tool writes `run.json`, prompts, raw responses, CSV ledgers, and `report.md` to `%LOCALAPPDATA%\SuperCalcBenchmark\Runs\YYYYMMDD-HHMMSS_model\` unless `--out <dir>` is supplied. Fixture scoring is available without a live LLM server:
+
+```powershell
+dotnet run --project src/SuperCalcBenchmark.Cli -- score-fixture `
+  --response tools/response-fixtures/perfect.json `
+  --out results/perfect
+```
+
+### Traceable Scoring Framework
+
+Detailed scoring is defined in [`docs/SCORING_METHODOLOGY.md`](docs/SCORING_METHODOLOGY.md). Summary:
+
+| Signal | Weight | Trace requirement |
+| ------ | -----: | ----------------- |
+| Vulnerability type / alias | 25% | Matched aliases shown in report |
+| Code location | 30% | File, function/symbol, and line overlap |
+| Evidence snippet | 25% | Exact quoted snippet exists in `enhanced_calc.cpp` |
+| CWE / severity | 10% | Expected vs. reported classification |
+| Impact / trigger | 10% | Accepted or rejected trigger rationale |
+
+Scoring thresholds: `>=0.75` full true positive, `0.55..0.74` partial true positive, `<0.55` unmatched/false positive. Each report must include the per-finding match ledger so results are reproducible.
 
 ### Expected Performance Tiers
 
@@ -186,17 +224,32 @@ For each finding, provide:
 ```text
 supercalc-security-benchmark/
 ├── enhanced_calc.cpp              # Primary engine with embedded vulnerabilities
-├── enhanced_exploits.md           # Comprehensive vulnerability audit report (v3.0)
+├── enhanced_exploits.md           # Human-readable hidden vulnerability audit report
+├── benchmark-result-template.md   # Community result template
 ├── build_and_test.sh              # Automated compilation & sanitizer validation
-├── LICENSE                        # MIT License
-├── CONTRIBUTING.md                # Contribution guidelines & issue templates
-├── .github/
-│   ├── ISSUE_TEMPLATE/            # Structured reporting workflows
-│   └── workflows/
-│       └── ci.yml                 # GitHub Actions CI pipeline
-└── docs/
-    ├── SCORING_METHODOLOGY.md     # Evaluation metrics & benchmarking standards
-    └── EXAMPLES.md                # Trigger payloads & validation scripts
+├── global.json                    # Pins local .NET SDK selection to .NET 10
+├── SuperCalcBenchmark.slnx        # .NET 10 solution
+├── benchmarks/
+│   └── supercalc-v3/
+│       ├── ground_truth.json      # Machine-readable hidden scoring key; never prompt the LLM with this
+│       ├── prompts/               # Run-1 and Run-2 prompt templates
+│       └── schemas/               # LLM response JSON schema
+├── src/
+│   ├── SuperCalcBenchmark.Core/   # LLM client, parser, matcher, scorer, report writer
+│   ├── SuperCalcBenchmark.Cli/    # CLI harness for models/validate/run/fixture scoring
+│   └── SuperCalcBenchmark.Tests/  # Dependency-free smoke/unit tests
+├── tools/
+│   └── response-fixtures/         # Deterministic scorer fixtures
+├── docs/
+│   ├── SCORING_METHODOLOGY.md     # Traceable scoring rules
+│   └── EXAMPLES.md                # Trigger payloads & validation scripts
+├── plans/
+│   └── BenchmarkTool.md           # Windows-native benchmark-tool implementation plan
+├── LICENSE
+├── CONTRIBUTING.md
+└── .github/
+    └── workflows/
+        └── ci.yml
 ```
 
 ---

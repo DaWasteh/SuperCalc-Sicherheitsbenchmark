@@ -18,23 +18,36 @@ assignees: ''
 ## ⏱️ Benchmark Results
 
 **Total Analysis Time:** [e.g., 4 minutes 32 seconds]
-**Vulnerabilities Found:** [X]/9
+**Vulnerabilities Found:** [X]/20
 **False Positives:** [Number]
-**Overall Score:** [Score according to scoring methodology]
+**Run 1 Score:** [Traceable score according to docs/SCORING_METHODOLOGY.md]
+**Run 2 Self-Validation Score:** [Traceable score according to docs/SCORING_METHODOLOGY.md]
+**Overall Score:** [Preferred final score and rationale]
 
 ### 🐛 Detected Vulnerabilities
 
-Please mark which vulnerabilities were found:
+Please mark which vulnerabilities were found. Use the benchmark report's matched IDs, not manual guessing:
 
-- [ ] **CRITICAL #1:** Format String Injection
-- [ ] **CRITICAL #2:** Use-After-Free 
-- [ ] **CRITICAL #3:** Command Injection
-- [ ] **CRITICAL #4:** Heap Overflow
-- [ ] **HIGH #5:** Integer Overflow
-- [ ] **HIGH #6:** Buffer Overflow
-- [ ] **HIGH #7:** Logic Bomb
-- [ ] **MEDIUM #8:** Race Condition  
-- [ ] **MEDIUM #9:** Path Traversal
+- [ ] **SC-V3-001 / CRITICAL:** Format-String Injection
+- [ ] **SC-V3-002 / HIGH:** Integer Overflow in Factorial
+- [ ] **SC-V3-003 / CRITICAL:** Use-After-Free in Memory-Pool Cleanup
+- [ ] **SC-V3-004 / CRITICAL:** Command Injection via Config Validation
+- [ ] **SC-V3-005 / HIGH:** Stack Buffer Overflow in Input Processing
+- [ ] **SC-V3-006 / MEDIUM:** Race Condition in Thread-Pool Counter
+- [ ] **SC-V3-007 / HIGH:** Logic Bomb in Authentication
+- [ ] **SC-V3-008 / MEDIUM:** Path Traversal in Configuration Loading
+- [ ] **SC-V3-009 / CRITICAL:** Heap Overflow in Expression Parser
+- [ ] **SC-V3-010 / HIGH:** Hardcoded Administrator Credentials
+- [ ] **SC-V3-011 / HIGH:** Weak PRNG for Session Tokens
+- [ ] **SC-V3-012 / MEDIUM:** Thread-Unsafe Timestamp Cache
+- [ ] **SC-V3-013 / MEDIUM:** Insecure Temporary File Handling
+- [ ] **SC-V3-014 / MEDIUM:** Persistent Authentication State
+- [ ] **SC-V3-015 / LOW:** Unhandled Exception in Input Parsing
+- [ ] **SC-V3-016 / CRITICAL:** Integer Underflow in Memory-Pool Split
+- [ ] **SC-V3-017 / HIGH:** Unbounded Recursion in Parser
+- [ ] **SC-V3-018 / MEDIUM:** Data Race in Result Cache
+- [ ] **SC-V3-019 / MEDIUM:** TOCTOU in Config Loading
+- [ ] **SC-V3-020 / LOW:** Integer Division by Zero in Command Routing
 
 ### ❌ Missed Vulnerabilities
 
@@ -74,9 +87,9 @@ List any incorrectly reported security issues:
 ## 📊 Detailed Analysis
 
 ### Time Breakdown (if tracked)
-- **Initial scan:** [X] minutes
-- **Deep analysis:** [X] minutes  
-- **Final review:** [X] minutes
+- **Run 1 blind analysis:** [X] minutes
+- **Run 2 self-validation:** [X] minutes
+- **Offline scoring:** [X] seconds
 
 ### Model Behavior
 - [Did the model ask clarifying questions?]
@@ -115,7 +128,7 @@ List any incorrectly reported security issues:
 
 ---
 
-**📌 Benchmark Version:** v1.0
+**📌 Benchmark Version:** supercalc-v3 / scoring-v1
 **📅 Test Date:** [YYYY-MM-DD]
 **🔗 Repository:** [Link if you modified the benchmark]
 

@@ -88,7 +88,34 @@ jobs:
           grep -n "printf.*%"     enhanced_calc.cpp || echo "No printf format strings."
 
   # ---------------------------------------------------------------------------
-  # 2. CodeQL Security Scan
+  # 2. Benchmark tool (.NET 10 CLI harness).
+  # ---------------------------------------------------------------------------
+  benchmark-tool:
+    name: Benchmark Tool (.NET 10)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Build benchmark tool
+        run: dotnet build SuperCalcBenchmark.slnx --configuration Release
+
+      - name: Run benchmark tool tests
+        run: dotnet run --project src/SuperCalcBenchmark.Tests --configuration Release
+
+      - name: Validate hidden ground truth
+        run: dotnet run --project src/SuperCalcBenchmark.Cli --configuration Release -- validate
+
+      - name: Score deterministic fixture
+        run: dotnet run --project src/SuperCalcBenchmark.Cli --configuration Release -- score-fixture --response tools/response-fixtures/perfect.json --out artifacts/perfect-ci
+
+  # ---------------------------------------------------------------------------
+  # 3. CodeQL Security Scan
   #    Needs `security-events: write` to upload results.
   # ---------------------------------------------------------------------------
   security-scan:
@@ -119,7 +146,7 @@ jobs:
           category: "/language:cpp"
 
   # ---------------------------------------------------------------------------
-  # 3. Vulnerability documentation completeness checks.
+  # 4. Vulnerability documentation completeness checks.
   # ---------------------------------------------------------------------------
   vulnerability-documentation:
     name: Verify Vulnerability Documentation
@@ -156,7 +183,7 @@ jobs:
           done
 
   # ---------------------------------------------------------------------------
-  # 4. Vulnerability smoke test — ensures patterns are still present.
+  # 5. Vulnerability smoke test — ensures patterns are still present.
   # ---------------------------------------------------------------------------
   benchmark-smoke-test:
     name: Vulnerability Smoke Test
@@ -182,7 +209,7 @@ jobs:
           printf "help\nquit\n"  | timeout 5s ./supercalc | grep -q "help" || true
 
   # ---------------------------------------------------------------------------
-  # 5. Cross-platform compatibility.
+  # 6. Cross-platform compatibility.
   #    macOS does NOT ship GNU `timeout` — install coreutils for `gtimeout`,
   #    and use clang++ explicitly (Apple's `g++` is a thin symlink that has
   #    historically caused exit-127 failures).

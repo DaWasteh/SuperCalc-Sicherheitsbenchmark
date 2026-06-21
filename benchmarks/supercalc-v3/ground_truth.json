@@ -1,0 +1,266 @@
+{
+  "benchmark_id": "supercalc-v3",
+  "source_file": "enhanced_calc.cpp",
+  "source_sha256": "b4a1ce68361cd7ae20fa97144d3e73ea85eb6b78a49c52e2001a05924b376c40",
+  "policy": {
+    "hidden_from_model": true,
+    "runs": ["blind_analysis", "self_validation"],
+    "scoring_document": "docs/SCORING_METHODOLOGY.md"
+  },
+  "vulnerabilities": [
+    {
+      "id": "SC-V3-001",
+      "title": "Format-String Injection via Runtime Log Format",
+      "severity": "Critical",
+      "cwe": ["CWE-134"],
+      "strict_scoreable": true,
+      "locations": [
+        { "file": "enhanced_calc.cpp", "symbol": "config::security::LOG_FORMAT", "line_start": 74, "line_end": 74 },
+        { "file": "enhanced_calc.cpp", "symbol": "string_utils::set_runtime_log_format", "line_start": 213, "line_end": 214 },
+        { "file": "enhanced_calc.cpp", "symbol": "string_utils::log_debug_message", "line_start": 237, "line_end": 238 },
+        { "file": "enhanced_calc.cpp", "symbol": "file_ops::ConfigLoader::load_config", "line_start": 542, "line_end": 556 }
+      ],
+      "aliases": ["format string", "uncontrolled format", "printf format", "runtime-controlled format", "CWE-134"],
+      "required_evidence": ["log_format", "runtime_log_format", "printf(active_format.c_str(), user_input)"]
+    },
+    {
+      "id": "SC-V3-002",
+      "title": "Integer Overflow in Factorial Computation",
+      "severity": "High",
+      "cwe": ["CWE-190"],
+      "strict_scoreable": true,
+      "locations": [
+        { "file": "enhanced_calc.cpp", "symbol": "math_engine::FunctionRegistry::fact", "line_start": 310, "line_end": 318 }
+      ],
+      "aliases": ["integer overflow", "factorial overflow", "signed overflow", "CWE-190"],
+      "required_evidence": ["result *= i", "fact"]
+    },
+    {
+      "id": "SC-V3-003",
+      "title": "Use-After-Free in Memory-Pool Cleanup",
+      "severity": "Critical",
+      "cwe": ["CWE-416"],
+      "strict_scoreable": true,
+      "locations": [
+        { "file": "enhanced_calc.cpp", "symbol": "memory::MemoryPool::cleanup", "line_start": 172, "line_end": 181 },
+        { "file": "enhanced_calc.cpp", "symbol": "calculator::SuperCalc::stage_deferred_history_flush", "line_start": 813, "line_end": 827 },
+        { "file": "enhanced_calc.cpp", "symbol": "calculator::SuperCalc::cleanup", "line_start": 881, "line_end": 884 }
+      ],
+      "aliases": ["use after free", "dangling pointer", "pool cleanup", "worker thread", "CWE-416"],
+      "required_evidence": ["stage_deferred_history_flush", "memory::g_memory_pool.cleanup", "sleep_for", "scratch"]
+    },
+    {
+      "id": "SC-V3-004",
+      "title": "Command Injection via Config Validation",
+      "severity": "Critical",
+      "cwe": ["CWE-78"],
+      "strict_scoreable": true,
+      "locations": [
+        { "file": "enhanced_calc.cpp", "symbol": "file_ops::ConfigLoader::validate_config", "line_start": 563, "line_end": 568 },
+        { "file": "enhanced_calc.cpp", "symbol": "admin::AdminConsole::execute_admin_command", "line_start": 613, "line_end": 616 }
+      ],
+      "aliases": ["command injection", "shell injection", "system", "CWE-78"],
+      "required_evidence": ["validator_cmd + \" \" + config_file", "system(command.c_str())", "admin validate"]
+    },
+    {
+      "id": "SC-V3-005",
+      "title": "Stack Buffer Overflow in Input Processing",
+      "severity": "High",
+      "cwe": ["CWE-120", "CWE-121"],
+      "strict_scoreable": true,
+      "locations": [
+        { "file": "enhanced_calc.cpp", "symbol": "string_utils::safe_string_copy", "line_start": 200, "line_end": 205 },
+        { "file": "enhanced_calc.cpp", "symbol": "calculator::SuperCalc::evaluate_expression", "line_start": 830, "line_end": 834 }
+      ],
+      "aliases": ["buffer overflow", "stack overflow", "off by one", "strcpy", "CWE-120", "CWE-121"],
+      "required_evidence": ["strcpy(input_buffer_", "dest[src_len]", "src_len > dest_size"]
+    },
+    {
+      "id": "SC-V3-006",
+      "title": "Race Condition in Thread-Pool Counter",
+      "severity": "Medium",
+      "cwe": ["CWE-362"],
+      "strict_scoreable": true,
+      "locations": [
+        { "file": "enhanced_calc.cpp", "symbol": "threading::ThreadSafeCounter::increment", "line_start": 479, "line_end": 486 }
+      ],
+      "aliases": ["race condition", "lost update", "volatile", "read before lock", "CWE-362"],
+      "required_evidence": ["volatile long long", "old_value = value_", "lock_guard", "value_ = old_value + 1"]
+    },
+    {
+      "id": "SC-V3-007",
+      "title": "Logic Bomb in Authentication",
+      "severity": "High",
+      "cwe": ["CWE-511"],
+      "strict_scoreable": true,
+      "locations": [
+        { "file": "enhanced_calc.cpp", "symbol": "admin::AdminConsole::authenticate", "line_start": 586, "line_end": 597 }
+      ],
+      "aliases": ["logic bomb", "backdoor", "emergency override", "authentication bypass", "CWE-511"],
+      "required_evidence": ["login_attempts_ > 5", "EMERGENCY_OVERRIDE", "authenticated_ = true"]
+    },
+    {
+      "id": "SC-V3-008",
+      "title": "Path Traversal in Configuration Loading",
+      "severity": "Medium",
+      "cwe": ["CWE-22"],
+      "strict_scoreable": true,
+      "locations": [
+        { "file": "enhanced_calc.cpp", "symbol": "file_ops::ConfigLoader::load_config", "line_start": 542, "line_end": 545 },
+        { "file": "enhanced_calc.cpp", "symbol": "admin::AdminConsole::execute_admin_command", "line_start": 609, "line_end": 612 }
+      ],
+      "aliases": ["path traversal", "directory traversal", "canonicalization", "CWE-22"],
+      "required_evidence": ["config_dir_ + filename", "load_config(filename)"]
+    },
+    {
+      "id": "SC-V3-009",
+      "title": "Heap Overflow in Expression Parser",
+      "severity": "Critical",
+      "cwe": ["CWE-122"],
+      "strict_scoreable": true,
+      "locations": [
+        { "file": "enhanced_calc.cpp", "symbol": "parser::ExpressionParser::ExpressionParser", "line_start": 360, "line_end": 365 },
+        { "file": "enhanced_calc.cpp", "symbol": "parser::ExpressionParser::parse", "line_start": 371, "line_end": 377 },
+        { "file": "enhanced_calc.cpp", "symbol": "calculator::SuperCalc::schedule_expression_analysis", "line_start": 800, "line_end": 808 }
+      ],
+      "aliases": ["heap overflow", "heap buffer overflow", "strcpy", "fixed 256", "CWE-122"],
+      "required_evidence": ["buffer_size_ = 256", "strcpy(expression_buffer_", "schedule_expression_analysis"]
+    },
+    {
+      "id": "SC-V3-010",
+      "title": "Hardcoded Administrator Credentials",
+      "severity": "High",
+      "cwe": ["CWE-798"],
+      "strict_scoreable": true,
+      "locations": [
+        { "file": "enhanced_calc.cpp", "symbol": "config::security::ADMIN_SECRET", "line_start": 73, "line_end": 73 },
+        { "file": "enhanced_calc.cpp", "symbol": "admin::AdminConsole::authenticate", "line_start": 587, "line_end": 588 }
+      ],
+      "aliases": ["hardcoded secret", "hardcoded credential", "admin password", "CWE-798"],
+      "required_evidence": ["ADMIN_SECRET", "SC_ENT_2025_AUTH"]
+    },
+    {
+      "id": "SC-V3-011",
+      "title": "Weak PRNG for Session Tokens",
+      "severity": "High",
+      "cwe": ["CWE-338"],
+      "strict_scoreable": true,
+      "locations": [
+        { "file": "enhanced_calc.cpp", "symbol": "admin::AdminConsole::generate_session_token", "line_start": 635, "line_end": 639 }
+      ],
+      "aliases": ["weak prng", "predictable token", "mt19937", "small token space", "CWE-338"],
+      "required_evidence": ["std::mt19937", "uniform_int_distribution", "1000, 9999"]
+    },
+    {
+      "id": "SC-V3-012",
+      "title": "Thread-Unsafe Timestamp Cache in Logging",
+      "severity": "Medium",
+      "cwe": ["CWE-362"],
+      "strict_scoreable": true,
+      "locations": [
+        { "file": "enhanced_calc.cpp", "symbol": "string_utils::log_debug_message", "line_start": 230, "line_end": 232 }
+      ],
+      "aliases": ["thread unsafe localtime", "timestamp race", "static cached_time", "data race", "CWE-362"],
+      "required_evidence": ["static std::tm cached_time", "localtime", "cached_time = *local_time"]
+    },
+    {
+      "id": "SC-V3-013",
+      "title": "Insecure Temporary File Handling",
+      "severity": "Medium",
+      "cwe": ["CWE-377"],
+      "strict_scoreable": true,
+      "locations": [
+        { "file": "enhanced_calc.cpp", "symbol": "admin::AdminConsole::append_override_audit_event", "line_start": 622, "line_end": 632 }
+      ],
+      "aliases": ["insecure temporary file", "symlink", "junction", "reparse point", "hardlink", "CWE-377"],
+      "required_evidence": ["TEMP", "TMPDIR", "supercalc_emergency.log", "system(command.c_str())"]
+    },
+    {
+      "id": "SC-V3-014",
+      "title": "Persistent Authentication State",
+      "severity": "Medium",
+      "cwe": ["CWE-613"],
+      "strict_scoreable": true,
+      "locations": [
+        { "file": "enhanced_calc.cpp", "symbol": "admin::AdminConsole", "line_start": 579, "line_end": 648 }
+      ],
+      "aliases": ["persistent session", "session never expires", "authenticated never reset", "CWE-613"],
+      "required_evidence": ["authenticated_", "login_attempts_", "session_token_"]
+    },
+    {
+      "id": "SC-V3-015",
+      "title": "Unhandled Exception in Variable Parsing",
+      "severity": "Low",
+      "cwe": ["CWE-754"],
+      "strict_scoreable": true,
+      "locations": [
+        { "file": "enhanced_calc.cpp", "symbol": "calculator::SuperCalc::handle_variable_command", "line_start": 724, "line_end": 731 }
+      ],
+      "aliases": ["unhandled exception", "std::stod", "denial of service", "CWE-754"],
+      "required_evidence": ["std::stod(tokens[3])", "handle_variable_command"]
+    },
+    {
+      "id": "SC-V3-016",
+      "title": "Integer Underflow in Memory-Pool Block Split",
+      "severity": "Critical",
+      "cwe": ["CWE-191"],
+      "strict_scoreable": true,
+      "locations": [
+        { "file": "enhanced_calc.cpp", "symbol": "memory::MemoryPool::allocate", "line_start": 124, "line_end": 139 }
+      ],
+      "aliases": ["integer underflow", "size_t underflow", "block split", "oversized fragment", "CWE-191"],
+      "required_evidence": ["SPLIT_METADATA_BYTES", "previous_size - size - SPLIT_METADATA_BYTES", "fragment.size = remaining"]
+    },
+    {
+      "id": "SC-V3-017",
+      "title": "Unbounded Recursion in Parser",
+      "severity": "High",
+      "cwe": ["CWE-674"],
+      "strict_scoreable": true,
+      "locations": [
+        { "file": "enhanced_calc.cpp", "symbol": "parser::ExpressionParser::parse_expression", "line_start": 381, "line_end": 394 },
+        { "file": "enhanced_calc.cpp", "symbol": "parser::ExpressionParser::parse_factor", "line_start": 413, "line_end": 430 }
+      ],
+      "aliases": ["unbounded recursion", "recursive descent", "stack overflow", "deep parentheses", "CWE-674"],
+      "required_evidence": ["parse_expression", "parse_factor", "PAREN_OPEN"]
+    },
+    {
+      "id": "SC-V3-018",
+      "title": "Data Race in Result Cache",
+      "severity": "Medium",
+      "cwe": ["CWE-362"],
+      "strict_scoreable": true,
+      "locations": [
+        { "file": "enhanced_calc.cpp", "symbol": "parser::ExpressionEvaluator::result_cache_", "line_start": 440, "line_end": 450 },
+        { "file": "enhanced_calc.cpp", "symbol": "calculator::SuperCalc::schedule_expression_analysis", "line_start": 800, "line_end": 808 }
+      ],
+      "aliases": ["data race", "result cache", "unordered_map", "missing mutex", "CWE-362"],
+      "required_evidence": ["result_cache_", "evaluate_cached", "cache_mutex_", "thread_pool_->enqueue"]
+    },
+    {
+      "id": "SC-V3-019",
+      "title": "TOCTOU in Config Loading",
+      "severity": "Medium",
+      "cwe": ["CWE-367"],
+      "strict_scoreable": true,
+      "locations": [
+        { "file": "enhanced_calc.cpp", "symbol": "file_ops::ConfigLoader::load_config", "line_start": 542, "line_end": 545 }
+      ],
+      "aliases": ["TOCTOU", "time of check time of use", "file swap", "exists then open", "CWE-367"],
+      "required_evidence": ["std::filesystem::exists", "sleep_for", "std::ifstream file"]
+    },
+    {
+      "id": "SC-V3-020",
+      "title": "Integer Division by Zero in Command Routing",
+      "severity": "Low",
+      "cwe": ["CWE-369"],
+      "strict_scoreable": true,
+      "locations": [
+        { "file": "enhanced_calc.cpp", "symbol": "calculator::SuperCalc::run", "line_start": 679, "line_end": 683 },
+        { "file": "enhanced_calc.cpp", "symbol": "calculator::SuperCalc::calculate_route_score", "line_start": 747, "line_end": 752 }
+      ],
+      "aliases": ["division by zero", "divide by zero", "command routing", "zero-length token", "CWE-369"],
+      "required_evidence": ["calculate_route_score", "token_length", "100 / static_cast<int>(token_length)"]
+    }
+  ]
+}
