@@ -437,7 +437,17 @@ public partial class MainWindow : Window
         => RefreshComparison(preserveSelection: true);
 
     private void ComparisonFilter_Changed(object sender, SelectionChangedEventArgs e)
-        => RebuildComparisonGrid();
+    {
+        // ComboBoxItem IsSelected in XAML can fire SelectionChanged while InitializeComponent()
+        // is still constructing the Vergleich tab. At that point controls declared later in
+        // the XAML (for example ComparisonGrid) are not assigned yet.
+        if (ComparisonGrid is null || OpenComparisonButton is null || ComparisonStatusTextBlock is null)
+        {
+            return;
+        }
+
+        RebuildComparisonGrid();
+    }
 
     private void RefreshComparison(bool preserveSelection)
     {
