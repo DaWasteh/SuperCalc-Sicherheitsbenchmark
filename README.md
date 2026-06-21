@@ -172,6 +172,25 @@ The repository now includes a .NET 10 CLI benchmark harness under `src/` that ru
 2. **Run 2 — Self-validation:** send `enhanced_calc.cpp` plus the model's own Run-1 answer. The model must keep, revise, or drop findings using code evidence only.
 3. **Offline scoring:** compare normalized findings against hidden local ground truth in `benchmarks/supercalc-v3/ground_truth.json`. The ground truth and `enhanced_exploits.md` are never sent to the evaluated model.
 
+GUI quick start:
+
+```powershell
+# From the repository root. global.json pins the SDK to .NET 10.
+dotnet run --project src/SuperCalcBenchmark.App
+
+# Or build and launch the generated executable:
+dotnet build SuperCalcBenchmark.slnx --configuration Release
+.\src\SuperCalcBenchmark.App\bin\Release\net10.0-windows\SuperCalcBenchmark.App.exe
+```
+
+In the app:
+
+1. Start or reload `llama-server` on `http://127.0.0.1:1234`.
+2. Click **Refresh Models**.
+3. Select the loaded model.
+4. Click **Benchmark starten**.
+5. Read Run-1/Run-2 scores, TP/FP/FN matrix, raw outputs, and open the generated report.
+
 CLI quick start:
 
 ```powershell
@@ -236,6 +255,7 @@ supercalc-security-benchmark/
 │       └── schemas/               # LLM response JSON schema
 ├── src/
 │   ├── SuperCalcBenchmark.Core/   # LLM client, parser, matcher, scorer, report writer
+│   ├── SuperCalcBenchmark.App/    # Windows-native WPF GUI: refresh model, start benchmark, view scores
 │   ├── SuperCalcBenchmark.Cli/    # CLI harness for models/validate/run/fixture scoring
 │   └── SuperCalcBenchmark.Tests/  # Dependency-free smoke/unit tests
 ├── tools/

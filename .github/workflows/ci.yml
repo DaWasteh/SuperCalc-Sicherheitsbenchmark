@@ -88,10 +88,10 @@ jobs:
           grep -n "printf.*%"     enhanced_calc.cpp || echo "No printf format strings."
 
   # ---------------------------------------------------------------------------
-  # 2. Benchmark tool (.NET 10 CLI harness).
+  # 2. Benchmark tool (.NET 10 GUI + CLI harness).
   # ---------------------------------------------------------------------------
   benchmark-tool:
-    name: Benchmark Tool (.NET 10)
+    name: Benchmark Tool (.NET 10 GUI + CLI)
     runs-on: windows-latest
     steps:
       - name: Checkout repository
