@@ -4,6 +4,7 @@ using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
+using System.Windows.Input;
 using System.Windows.Media;
 using SuperCalcBenchmark.Core;
 
@@ -452,11 +453,17 @@ public partial class MainWindow : Window
         RebuildComparisonGrid();
     }
 
-    private void ComparisonGrid_BeginningEdit(object sender, DataGridBeginningEditEventArgs e)
+    private void ComparisonEditableTextBox_GotKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
     {
-        if (e.Row.Item is not ComparisonGridRow row || !IsEditableComparisonColumn(e.Column))
+        if (sender is not TextBox { DataContext: ComparisonGridRow row })
         {
-            e.Cancel = true;
+            return;
+        }
+
+        ComparisonGrid.SelectedItem = row;
+
+        if (_editingComparisonGroupKey is not null)
+        {
             return;
         }
 
@@ -465,46 +472,76 @@ public partial class MainWindow : Window
         _editingComparisonOriginalQuant = row.Quant;
     }
 
-    private void ComparisonGrid_CellEditEnding(object sender, DataGridCellEditEndingEventArgs e)
+    private void ComparisonEditableTextBox_PreviewMouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
-        if (e.EditAction != DataGridEditAction.Commit
-            || e.Row.Item is not ComparisonGridRow row
+        if (sender is not TextBox textBox)
+        {
+            return;
+        }
+
+        e.Handled = true;
+        textBox.Focus();
+        textBox.SelectAll();
+    }
+
+    private void ComparisonEditableTextBox_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (sender is not TextBox textBox)
+        {
+            return;
+        }
+
+        if (e.Key == Key.Enter)
+        {
+            textBox.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
+            ComparisonGrid.Focus();
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Escape)
+        {
+            CancelComparisonTextBoxEdit(textBox);
+            e.Handled = true;
+        }
+    }
+
+    private void ComparisonEditableTextBox_LostKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        if (sender is not TextBox { DataContext: ComparisonGridRow row } textBox
             || _editingComparisonGroupKey is null
             || _editingComparisonOriginalModelFamily is null
             || _editingComparisonOriginalQuant is null)
         {
-            ClearComparisonEditState();
             return;
         }
 
-        var property = e.Column.SortMemberPath;
-        if (e.EditingElement is TextBox textBox)
-        {
-            if (string.Equals(property, nameof(ComparisonGridRow.ModelFamily), StringComparison.Ordinal))
-            {
-                row.ModelFamily = textBox.Text;
-            }
-            else if (string.Equals(property, nameof(ComparisonGridRow.Quant), StringComparison.Ordinal))
-            {
-                row.Quant = textBox.Text;
-            }
-        }
+        textBox.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
 
         var originalGroupKey = _editingComparisonGroupKey;
         var originalModelFamily = _editingComparisonOriginalModelFamily;
         var originalQuant = _editingComparisonOriginalQuant;
         ClearComparisonEditState();
 
-        Dispatcher.BeginInvoke(new Action(() => CommitComparisonIdentityEdit(
-            row,
-            originalGroupKey,
-            originalModelFamily,
-            originalQuant)));
+        CommitComparisonIdentityEdit(row, originalGroupKey, originalModelFamily, originalQuant);
     }
 
-    private static bool IsEditableComparisonColumn(DataGridColumn column)
-        => string.Equals(column.SortMemberPath, nameof(ComparisonGridRow.ModelFamily), StringComparison.Ordinal)
-           || string.Equals(column.SortMemberPath, nameof(ComparisonGridRow.Quant), StringComparison.Ordinal);
+    private void CancelComparisonTextBoxEdit(TextBox textBox)
+    {
+        if (textBox.DataContext is ComparisonGridRow row
+            && _editingComparisonOriginalModelFamily is not null
+            && _editingComparisonOriginalQuant is not null)
+        {
+            row.ModelFamily = _editingComparisonOriginalModelFamily;
+            row.Quant = _editingComparisonOriginalQuant;
+
+            var property = textBox.GetBindingExpression(TextBox.TextProperty)?.ParentBinding.Path.Path;
+            textBox.Text = string.Equals(property, nameof(ComparisonGridRow.Quant), StringComparison.Ordinal)
+                ? _editingComparisonOriginalQuant
+                : _editingComparisonOriginalModelFamily;
+        }
+
+        ClearComparisonEditState();
+        ComparisonGrid.Focus();
+    }
 
     private void CommitComparisonIdentityEdit(
         ComparisonGridRow row,

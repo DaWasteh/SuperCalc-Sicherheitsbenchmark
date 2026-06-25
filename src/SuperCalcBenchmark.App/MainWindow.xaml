@@ -213,12 +213,38 @@
                     <DataGrid Grid.Row="2" x:Name="ComparisonGrid"
                               AutoGenerateColumns="False"
                               CanUserAddRows="False"
-                              CanUserDeleteRows="False"
-                              BeginningEdit="ComparisonGrid_BeginningEdit"
-                              CellEditEnding="ComparisonGrid_CellEditEnding">
+                              CanUserDeleteRows="False">
                         <DataGrid.Columns>
-                            <DataGridTextColumn Header="Modell" Binding="{Binding ModelFamily, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" SortMemberPath="ModelFamily" Width="*" />
-                            <DataGridTextColumn Header="Quant" Binding="{Binding Quant, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" SortMemberPath="Quant" Width="120" />
+                            <DataGridTemplateColumn Header="Modell" SortMemberPath="ModelFamily" Width="*">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <TextBox Text="{Binding ModelFamily, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
+                                                 BorderThickness="0"
+                                                 Background="Transparent"
+                                                 Padding="2"
+                                                 ToolTip="Modell per Doppelklick bearbeiten; Enter speichert, Esc verwirft."
+                                                 GotKeyboardFocus="ComparisonEditableTextBox_GotKeyboardFocus"
+                                                 LostKeyboardFocus="ComparisonEditableTextBox_LostKeyboardFocus"
+                                                 PreviewMouseDoubleClick="ComparisonEditableTextBox_PreviewMouseDoubleClick"
+                                                 KeyDown="ComparisonEditableTextBox_KeyDown" />
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+                            <DataGridTemplateColumn Header="Quant" SortMemberPath="Quant" Width="120">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <TextBox Text="{Binding Quant, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
+                                                 BorderThickness="0"
+                                                 Background="Transparent"
+                                                 Padding="2"
+                                                 ToolTip="Quant per Doppelklick bearbeiten; Enter speichert, Esc verwirft."
+                                                 GotKeyboardFocus="ComparisonEditableTextBox_GotKeyboardFocus"
+                                                 LostKeyboardFocus="ComparisonEditableTextBox_LostKeyboardFocus"
+                                                 PreviewMouseDoubleClick="ComparisonEditableTextBox_PreviewMouseDoubleClick"
+                                                 KeyDown="ComparisonEditableTextBox_KeyDown" />
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
                             <DataGridTextColumn Header="Runs" Binding="{Binding RunCount}" IsReadOnly="True" Width="60" />
                             <DataGridTextColumn Header="Score" Binding="{Binding ScorePercent, StringFormat=0.##}" IsReadOnly="True" Width="80" />
                             <DataGridTextColumn Header="Precision" Binding="{Binding Precision, StringFormat=P1}" IsReadOnly="True" Width="90" />
