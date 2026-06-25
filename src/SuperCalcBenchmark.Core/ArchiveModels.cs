@@ -164,12 +164,48 @@ public sealed class ArchiveGroup
         .OrderByDescending(r => r.CompletedAt)
         .FirstOrDefault();
 
-    /// <summary>Mean primary-run score across every archived run in this group.</summary>
-    public double AverageScorePercent => Records.Count == 0
-        ? 0
-        : Records.Select(r => r.PrimaryRun?.ScorePercent ?? 0).Average();
+    public IReadOnlyList<double> PrimaryScores => Records
+        .Select(r => r.PrimaryRun?.ScorePercent ?? 0)
+        .ToList();
 
-    public double BestScorePercent => Records.Count == 0
-        ? 0
-        : Records.Select(r => r.PrimaryRun?.ScorePercent ?? 0).Max();
+    /// <summary>Mean primary-run score across every archived run in this group.</summary>
+    public double AverageScorePercent => PrimaryScores.Count == 0 ? 0 : PrimaryScores.Average();
+
+    /// <summary>Median primary-run score across every archived run in this group.</summary>
+    public double MedianScorePercent => Median(PrimaryScores);
+
+    public double BestScorePercent => PrimaryScores.Count == 0 ? 0 : PrimaryScores.Max();
+
+    public double MinScorePercent => PrimaryScores.Count == 0 ? 0 : PrimaryScores.Min();
+
+    public double MaxScorePercent => PrimaryScores.Count == 0 ? 0 : PrimaryScores.Max();
+
+    /// <summary>Sample standard deviation of primary-run scores. Zero when fewer than two runs exist.</summary>
+    public double ScoreStdDev => StandardDeviation(PrimaryScores);
+
+    private static double Median(IReadOnlyList<double> values)
+    {
+        if (values.Count == 0)
+        {
+            return 0;
+        }
+
+        var sorted = values.OrderBy(v => v).ToList();
+        var middle = sorted.Count / 2;
+        return sorted.Count % 2 == 1
+            ? sorted[middle]
+            : (sorted[middle - 1] + sorted[middle]) / 2.0;
+    }
+
+    private static double StandardDeviation(IReadOnlyList<double> values)
+    {
+        if (values.Count < 2)
+        {
+            return 0;
+        }
+
+        var mean = values.Average();
+        var variance = values.Sum(v => Math.Pow(v - mean, 2)) / (values.Count - 1);
+        return Math.Sqrt(variance);
+    }
 }

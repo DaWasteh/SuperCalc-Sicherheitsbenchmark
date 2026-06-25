@@ -18,9 +18,9 @@ public sealed class ComparisonReport
     public bool IsEmpty => Series.Count == 0;
 
     /// <summary>
-    /// Builds a comparison. When <paramref name="aggregate"/> is Average, each model+quant
-    /// contributes one series averaged over its runs; when Best, the highest-scoring run is used.
-    /// Pass <paramref name="familyFilter"/> to compare only quants of a single model family.
+    /// Builds a comparison. Average and Median aggregate all primary runs in a model+quant
+    /// group; Best uses the single highest-scoring primary run. Pass <paramref name="familyFilter"/>
+    /// to compare only quants of a single model family.
     /// </summary>
     public static ComparisonReport Build(
         IReadOnlyList<ArchiveGroup> groups,
@@ -43,15 +43,28 @@ public sealed class ComparisonReport
         var series = new List<ComparisonSeries>();
         foreach (var group in selected)
         {
-            var record = SelectRecord(group, aggregate);
-            var primary = record?.PrimaryRun;
-            if (record is null || primary is null)
+            var runs = group.Records
+                .Select(r => r.PrimaryRun)
+                .Where(r => r is not null)
+                .Cast<ArchiveRunScore>()
+                .ToList();
+
+            if (runs.Count == 0)
             {
                 continue;
             }
 
+            var bestRun = runs.OrderByDescending(r => r.ScorePercent).First();
+            var scoreValues = runs.Select(r => r.ScorePercent).ToList();
+            var score = aggregate switch
+            {
+                ComparisonAggregate.Best => bestRun.ScorePercent,
+                ComparisonAggregate.Median => Median(scoreValues),
+                _ => scoreValues.Average()
+            };
+
             var perVuln = axis
-                .Select(id => primary.VulnerabilityCredit.TryGetValue(id, out var credit) ? credit : 0.0)
+                .Select(id => AggregateCredit(runs, id, aggregate, bestRun))
                 .ToList();
 
             series.Add(new ComparisonSeries
@@ -60,16 +73,21 @@ public sealed class ComparisonReport
                 ModelFamily = group.ModelFamily,
                 Quant = group.Quant,
                 Label = $"{group.ModelFamily} · {group.Quant}",
-                RunCount = group.RunCount,
+                RunCount = runs.Count,
                 Aggregate = aggregate,
-                ScorePercent = aggregate == ComparisonAggregate.Best ? group.BestScorePercent : group.AverageScorePercent,
-                Precision = primary.Precision,
-                Recall = primary.Recall,
-                F1 = primary.F1,
-                FullTruePositives = primary.FullTruePositives,
-                PartialTruePositives = primary.PartialTruePositives,
-                FalsePositives = primary.FalsePositives,
-                Missed = primary.Missed,
+                ScorePercent = score,
+                ScoreMean = scoreValues.Average(),
+                ScoreMedian = Median(scoreValues),
+                ScoreStdDev = StandardDeviation(scoreValues),
+                ScoreMin = scoreValues.Min(),
+                ScoreMax = scoreValues.Max(),
+                Precision = AggregateMetric(runs, r => r.Precision, aggregate, bestRun),
+                Recall = AggregateMetric(runs, r => r.Recall, aggregate, bestRun),
+                F1 = AggregateMetric(runs, r => r.F1, aggregate, bestRun),
+                FullTruePositives = RoundToInt(AggregateMetric(runs, r => r.FullTruePositives, aggregate, bestRun)),
+                PartialTruePositives = RoundToInt(AggregateMetric(runs, r => r.PartialTruePositives, aggregate, bestRun)),
+                FalsePositives = RoundToInt(AggregateMetric(runs, r => r.FalsePositives, aggregate, bestRun)),
+                Missed = RoundToInt(AggregateMetric(runs, r => r.Missed, aggregate, bestRun)),
                 PerVulnerabilityCredit = perVuln
             });
         }
@@ -85,19 +103,65 @@ public sealed class ComparisonReport
         };
     }
 
-    private static ArchiveRecord? SelectRecord(ArchiveGroup group, ComparisonAggregate aggregate)
+    private static double AggregateCredit(
+        IReadOnlyList<ArchiveRunScore> runs,
+        string vulnerabilityId,
+        ComparisonAggregate aggregate,
+        ArchiveRunScore bestRun)
     {
-        if (group.Records.Count == 0)
+        if (aggregate == ComparisonAggregate.Best)
         {
-            return null;
+            return bestRun.VulnerabilityCredit.TryGetValue(vulnerabilityId, out var bestCredit) ? bestCredit : 0.0;
         }
 
-        // For Best we want the actual run that scored highest (so its per-vuln polygon matches
-        // the headline number). For Average we surface the latest run as the representative
-        // polygon while the headline number is the group mean.
-        return aggregate == ComparisonAggregate.Best
-            ? group.Records.OrderByDescending(r => r.PrimaryRun?.ScorePercent ?? 0).First()
-            : group.Latest;
+        var values = runs
+            .Select(r => r.VulnerabilityCredit.TryGetValue(vulnerabilityId, out var credit) ? credit : 0.0)
+            .ToList();
+
+        return aggregate == ComparisonAggregate.Median ? Median(values) : values.Average();
+    }
+
+    private static double AggregateMetric(
+        IReadOnlyList<ArchiveRunScore> runs,
+        Func<ArchiveRunScore, double> selector,
+        ComparisonAggregate aggregate,
+        ArchiveRunScore bestRun)
+    {
+        if (aggregate == ComparisonAggregate.Best)
+        {
+            return selector(bestRun);
+        }
+
+        var values = runs.Select(selector).ToList();
+        return aggregate == ComparisonAggregate.Median ? Median(values) : values.Average();
+    }
+
+    private static int RoundToInt(double value) => (int)Math.Round(value, MidpointRounding.AwayFromZero);
+
+    private static double Median(IReadOnlyList<double> values)
+    {
+        if (values.Count == 0)
+        {
+            return 0;
+        }
+
+        var sorted = values.OrderBy(v => v).ToList();
+        var middle = sorted.Count / 2;
+        return sorted.Count % 2 == 1
+            ? sorted[middle]
+            : (sorted[middle - 1] + sorted[middle]) / 2.0;
+    }
+
+    private static double StandardDeviation(IReadOnlyList<double> values)
+    {
+        if (values.Count < 2)
+        {
+            return 0;
+        }
+
+        var mean = values.Average();
+        var variance = values.Sum(v => Math.Pow(v - mean, 2)) / (values.Count - 1);
+        return Math.Sqrt(variance);
     }
 }
 
@@ -105,6 +169,9 @@ public enum ComparisonAggregate
 {
     /// <summary>Headline number is the mean primary-run score over all runs in the group.</summary>
     Average,
+
+    /// <summary>Headline number is the median primary-run score over all runs in the group.</summary>
+    Median,
 
     /// <summary>Headline number is the single best primary-run score in the group.</summary>
     Best
@@ -118,7 +185,17 @@ public sealed class ComparisonSeries
     public string Label { get; init; } = string.Empty;
     public int RunCount { get; init; }
     public ComparisonAggregate Aggregate { get; init; }
+
+    /// <summary>The selected headline value (mean, median, or best, depending on <see cref="Aggregate"/>).</summary>
     public double ScorePercent { get; init; }
+
+    /// <summary>Score distribution across all primary runs in this model+quant group.</summary>
+    public double ScoreMean { get; init; }
+    public double ScoreMedian { get; init; }
+    public double ScoreStdDev { get; init; }
+    public double ScoreMin { get; init; }
+    public double ScoreMax { get; init; }
+
     public double Precision { get; init; }
     public double Recall { get; init; }
     public double F1 { get; init; }

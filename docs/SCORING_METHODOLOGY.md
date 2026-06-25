@@ -101,7 +101,7 @@ For comparison, the **primary run** of each scorecard is used: Run 2 (self-valid
 
 The comparison view derives two series from the archived scorecards:
 
-- **Total score (bar chart):** the primary run's `ScorePercent`. When several runs of the same model + quant exist, the group is summarized as either the **mean** (`average`) or the single **best** primary-run score.
-- **Per-vulnerability credit (radar / net chart):** for each ground-truth vulnerability, `1.0` if fully detected, `0.5` if partially detected, `0.0` if missed. All series share one vulnerability axis (the union of ids seen across the compared runs), so a model's strengths and blind spots are visible at a glance.
+- **Total score (bar chart):** the primary run's `ScorePercent`. When several runs of the same model + quant exist, the group can be summarized as the **mean** (`average`), the **median** (`median`), or the single **best** primary-run score. The HTML bar chart also exposes the run distribution (`mean`, `median`, sample standard deviation, min, max) and draws min–max uncertainty bars for groups with more than one run.
+- **Per-vulnerability credit (radar / net chart):** for each ground-truth vulnerability, `1.0` if fully detected, `0.5` if partially detected, `0.0` if missed. All series share one vulnerability axis (the union of ids seen across the compared runs). With `average` and `median`, the per-vulnerability credits are aggregated across all runs in the group; with `best`, the best run's exact per-vulnerability vector is used.
 
 These are read-only views over the existing scoring output; they do not change how any individual run is scored. Generated `comparison.html`/`comparison.csv` reports live under `archive/_reports/` and are regenerated on demand, so they are not committed; the underlying scorecards are.

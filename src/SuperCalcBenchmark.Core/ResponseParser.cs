@@ -137,70 +137,28 @@ public sealed partial class ResponseParser
             });
 
             var root = document.RootElement;
-            JsonElement findingsElement;
-
-            if (root.ValueKind == JsonValueKind.Array)
-            {
-                findingsElement = root;
-            }
-            else if (root.ValueKind == JsonValueKind.Object && TryGetProperty(root, "findings", out var foundFindings))
-            {
-                findingsElement = foundFindings;
-            }
-            else if (root.ValueKind == JsonValueKind.Object && TryGetProperty(root, "vulnerabilities", out var vulnerabilities))
-            {
-                findingsElement = vulnerabilities;
-                warning = "Parsed 'vulnerabilities' array as findings.";
-            }
-            else
+            if (LooksLikeSchemaEcho(root))
             {
                 return false;
             }
 
-            if (findingsElement.ValueKind != JsonValueKind.Array)
+            var warnings = new List<string>();
+            if (TryGetFindingsElement(root, out var findingsElement, warnings))
             {
-                return false;
+                ParseFindingsElement(findingsElement, findings, warnings);
+                warning = FormatWarnings(warnings);
+                return true;
             }
 
-            foreach (var item in findingsElement.EnumerateArray())
+            if (root.ValueKind == JsonValueKind.Object && LooksLikeFindingObject(root))
             {
-                if (item.ValueKind != JsonValueKind.Object)
-                {
-                    continue;
-                }
-
-                var finding = new LlmFinding
-                {
-                    Title = ReadString(item, "title", "name", "finding") ?? string.Empty,
-                    VulnerabilityType = ReadString(item, "vulnerability_type", "type", "category", "vulnerabilityType") ?? string.Empty,
-                    Cwe = ReadCwe(item),
-                    Severity = NormalizeSeverity(ReadString(item, "severity", "risk") ?? "Unknown"),
-                    Confidence = ReadDouble(item, 0.75, "confidence", "probability"),
-                    File = ReadString(item, "file", "filename", "source_file") ?? string.Empty,
-                    LineStart = ReadInt(item, 0, "line_start", "lineStart", "start_line", "line", "line_number"),
-                    LineEnd = ReadInt(item, 0, "line_end", "lineEnd", "end_line"),
-                    FunctionOrSymbol = ReadString(item, "function_or_symbol", "function", "symbol", "location") ?? string.Empty,
-                    Evidence = ReadString(item, "evidence", "code", "snippet", "quote") ?? string.Empty,
-                    Impact = ReadString(item, "impact", "consequence") ?? string.Empty,
-                    Trigger = ReadString(item, "trigger", "exploit", "attack") ?? string.Empty,
-                    Fix = ReadString(item, "fix", "recommendation", "mitigation") ?? string.Empty,
-                    RawText = item.GetRawText()
-                };
-
-                if (finding.LineEnd == 0)
-                {
-                    finding.LineEnd = finding.LineStart;
-                }
-
-                if (string.IsNullOrWhiteSpace(finding.VulnerabilityType))
-                {
-                    finding.VulnerabilityType = finding.Title;
-                }
-
-                findings.Add(finding);
+                findings.Add(ReadFinding(root));
+                warnings.Add("Parsed a single finding object without a top-level findings array.");
+                warning = FormatWarnings(warnings);
+                return true;
             }
 
-            return true;
+            return false;
         }
         catch (JsonException)
         {
@@ -208,12 +166,233 @@ public sealed partial class ResponseParser
         }
     }
 
+    private static bool TryGetFindingsElement(JsonElement root, out JsonElement findingsElement, List<string> warnings)
+    {
+        findingsElement = default;
+
+        if (root.ValueKind == JsonValueKind.Array)
+        {
+            findingsElement = root;
+            warnings.Add("Parsed a top-level JSON array as findings.");
+            return true;
+        }
+
+        if (root.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        foreach (var name in new[] { "findings", "vulnerabilities", "issues", "security_findings", "securityFindings", "results" })
+        {
+            if (!TryGetProperty(root, name, out var candidate))
+            {
+                continue;
+            }
+
+            findingsElement = candidate;
+            if (!string.Equals(name, "findings", StringComparison.Ordinal))
+            {
+                warnings.Add($"Parsed '{name}' as findings.");
+            }
+
+            return true;
+        }
+
+        // Some models wrap the actual answer in one extra object, e.g. {"result":{"findings":[...]}}.
+        // Do not search arbitrary descendants; that would turn JSON schemas (properties.findings)
+        // into fake findings. Only unwrap common response containers.
+        foreach (var wrapper in new[] { "response", "result", "analysis", "answer", "output", "data" })
+        {
+            if (!TryGetProperty(root, wrapper, out var wrapped))
+            {
+                continue;
+            }
+
+            if (wrapped.ValueKind == JsonValueKind.Array)
+            {
+                findingsElement = wrapped;
+                warnings.Add($"Unwrapped '{wrapper}' array before parsing findings.");
+                return true;
+            }
+
+            if (wrapped.ValueKind == JsonValueKind.Object
+                && !LooksLikeSchemaEcho(wrapped)
+                && TryGetFindingsElement(wrapped, out findingsElement, warnings))
+            {
+                warnings.Add($"Unwrapped '{wrapper}' object before parsing findings.");
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static void ParseFindingsElement(JsonElement findingsElement, List<LlmFinding> findings, List<string> warnings)
+    {
+        switch (findingsElement.ValueKind)
+        {
+            case JsonValueKind.Array:
+                foreach (var item in findingsElement.EnumerateArray())
+                {
+                    if (item.ValueKind == JsonValueKind.Object && LooksLikeFindingObject(item))
+                    {
+                        findings.Add(ReadFinding(item));
+                    }
+                }
+
+                break;
+
+            case JsonValueKind.Object when LooksLikeFindingObject(findingsElement):
+                findings.Add(ReadFinding(findingsElement));
+                warnings.Add("Parsed object-valued 'findings' as a single finding.");
+                break;
+
+            case JsonValueKind.Object:
+                var before = findings.Count;
+                foreach (var property in findingsElement.EnumerateObject())
+                {
+                    if (property.Value.ValueKind == JsonValueKind.Object && LooksLikeFindingObject(property.Value))
+                    {
+                        findings.Add(ReadFinding(property.Value));
+                    }
+                    else if (property.Value.ValueKind == JsonValueKind.Array)
+                    {
+                        ParseFindingsElement(property.Value, findings, warnings);
+                    }
+                }
+
+                if (findings.Count > before)
+                {
+                    warnings.Add("Parsed object-valued 'findings' map as multiple findings.");
+                }
+
+                break;
+        }
+    }
+
+    private static LlmFinding ReadFinding(JsonElement item)
+    {
+        var (lineStart, lineEnd) = ReadLineRange(item);
+        var finding = new LlmFinding
+        {
+            Title = ReadString(item, "title", "name", "finding", "issue", "description") ?? string.Empty,
+            VulnerabilityType = ReadString(item, "vulnerability_type", "type", "category", "vulnerabilityType", "vulnerability", "weakness") ?? string.Empty,
+            Cwe = ReadCwe(item),
+            Severity = NormalizeSeverity(ReadString(item, "severity", "risk", "risk_rating", "riskRating") ?? "Unknown"),
+            Confidence = ReadDouble(item, 0.75, "confidence", "probability", "likelihood"),
+            File = ReadString(item, "file", "filename", "source_file", "sourceFile", "path") ?? string.Empty,
+            LineStart = lineStart,
+            LineEnd = lineEnd,
+            FunctionOrSymbol = ReadString(item, "function_or_symbol", "functionOrSymbol", "function", "function_name", "functionName", "method", "symbol", "symbol_name", "location") ?? string.Empty,
+            Evidence = ReadString(item, "evidence", "code", "snippet", "code_snippet", "codeSnippet", "quote", "proof", "details") ?? string.Empty,
+            Impact = ReadString(item, "impact", "consequence", "consequences") ?? string.Empty,
+            Trigger = ReadString(item, "trigger", "exploit", "attack", "attack_vector", "attackVector", "scenario") ?? string.Empty,
+            Fix = ReadString(item, "fix", "recommendation", "mitigation", "remediation", "solution") ?? string.Empty,
+            RawText = item.GetRawText()
+        };
+
+        if (finding.LineEnd == 0)
+        {
+            finding.LineEnd = finding.LineStart;
+        }
+
+        if (string.IsNullOrWhiteSpace(finding.VulnerabilityType))
+        {
+            finding.VulnerabilityType = finding.Title;
+        }
+
+        if (string.IsNullOrWhiteSpace(finding.Title))
+        {
+            finding.Title = finding.VulnerabilityType;
+        }
+
+        return finding;
+    }
+
+    private static bool LooksLikeFindingObject(JsonElement item)
+    {
+        if (item.ValueKind != JsonValueKind.Object || TryGetProperty(item, "properties", out _))
+        {
+            return false;
+        }
+
+        var hasIdentity = HasAnyProperty(item, "title", "name", "finding", "issue", "description", "vulnerability_type", "type", "category", "vulnerabilityType", "vulnerability", "weakness");
+        var hasDetails = HasAnyProperty(item, "evidence", "code", "snippet", "quote", "file", "filename", "path", "line_start", "lineStart", "line", "lines", "location", "severity", "risk", "cwe");
+        return hasIdentity && hasDetails;
+    }
+
+    private static bool HasAnyProperty(JsonElement item, params string[] names)
+    {
+        return names.Any(name => TryGetProperty(item, name, out _));
+    }
+
+    private static (int Start, int End) ReadLineRange(JsonElement item)
+    {
+        var start = ReadInt(item, 0, "line_start", "lineStart", "start_line", "startLine", "start_line_number", "startLineNumber", "line", "line_number", "lineNumber", "lineno");
+        var end = ReadInt(item, 0, "line_end", "lineEnd", "end_line", "endLine", "end_line_number", "endLineNumber");
+
+        foreach (var name in new[] { "line_range", "lineRange", "lines", "line", "line_number", "lineNumber", "location", "loc" })
+        {
+            var value = ReadString(item, name);
+            if (TryParseLineRange(value, out var rangeStart, out var rangeEnd))
+            {
+                if (start == 0)
+                {
+                    start = rangeStart;
+                }
+
+                if (end == 0)
+                {
+                    end = rangeEnd;
+                }
+
+                break;
+            }
+        }
+
+        return (start, end);
+    }
+
+    private static bool TryParseLineRange(string? value, out int start, out int end)
+    {
+        start = 0;
+        end = 0;
+
+        var match = LineRangeValueRegex().Match(value ?? string.Empty);
+        if (!match.Success || !int.TryParse(match.Groups[1].Value, out start))
+        {
+            return false;
+        }
+
+        if (!int.TryParse(match.Groups[2].Success ? match.Groups[2].Value : match.Groups[1].Value, out end))
+        {
+            end = start;
+        }
+
+        return true;
+    }
+
+    private static string? FormatWarnings(List<string> warnings)
+    {
+        var distinct = warnings.Where(w => !string.IsNullOrWhiteSpace(w)).Distinct(StringComparer.Ordinal).ToList();
+        return distinct.Count == 0 ? null : string.Join(" ", distinct);
+    }
+
     private static bool TryParsePartialFindingsArray(string text, out List<LlmFinding> findings, out string warning)
     {
         findings = [];
         warning = string.Empty;
 
-        var findingsProperty = text.IndexOf("\"findings\"", StringComparison.OrdinalIgnoreCase);
+        var findingsProperty = -1;
+        foreach (var name in new[] { "findings", "vulnerabilities", "issues", "security_findings", "securityFindings", "results" })
+        {
+            findingsProperty = text.IndexOf($"\"{name}\"", StringComparison.OrdinalIgnoreCase);
+            if (findingsProperty >= 0)
+            {
+                break;
+            }
+        }
+
         if (findingsProperty < 0)
         {
             return false;
@@ -387,7 +566,18 @@ public sealed partial class ResponseParser
 
     private static string ReadCwe(JsonElement item)
     {
-        if (!TryGetProperty(item, "cwe", out var cwe))
+        JsonElement cwe = default;
+        var found = false;
+        foreach (var name in new[] { "cwe", "cwe_id", "cweId", "cwes" })
+        {
+            if (TryGetProperty(item, name, out cwe))
+            {
+                found = true;
+                break;
+            }
+        }
+
+        if (!found)
         {
             return string.Empty;
         }
@@ -400,6 +590,11 @@ public sealed partial class ResponseParser
         if (cwe.ValueKind == JsonValueKind.Array)
         {
             return string.Join(", ", cwe.EnumerateArray().Select(element => element.ValueKind == JsonValueKind.String ? element.GetString() : element.GetRawText()));
+        }
+
+        if (cwe.ValueKind == JsonValueKind.Object)
+        {
+            return ReadString(cwe, "id", "cwe", "name") ?? cwe.GetRawText();
         }
 
         return cwe.GetRawText();
@@ -452,9 +647,24 @@ public sealed partial class ResponseParser
                 return TextUtil.Clamp01(number);
             }
 
-            if (property.ValueKind == JsonValueKind.String && double.TryParse(property.GetString(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out number))
+            if (property.ValueKind == JsonValueKind.String)
             {
-                return TextUtil.Clamp01(number);
+                var text = (property.GetString() ?? string.Empty).Trim();
+                var isPercent = text.EndsWith('%');
+                if (isPercent)
+                {
+                    text = text.TrimEnd('%').Trim();
+                }
+
+                if (!text.Contains('.') && text.Count(c => c == ',') == 1)
+                {
+                    text = text.Replace(',', '.');
+                }
+
+                if (double.TryParse(text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out number))
+                {
+                    return TextUtil.Clamp01(isPercent ? number / 100.0 : number);
+                }
             }
         }
 
@@ -709,6 +919,9 @@ public sealed partial class ResponseParser
 
     [GeneratedRegex("(?i)(?:line|lines|linenumber|line_start|at)\\D+(\\d+)(?:\\D+(\\d+))?")]
     private static partial Regex LineRangeRegex();
+
+    [GeneratedRegex(@"(?<!\d)(\d+)(?:\s*(?:-|–|—|to|through|bis|\.\.)\s*(\d+))?")]
+    private static partial Regex LineRangeValueRegex();
 
     [GeneratedRegex("(?m)^(?:\\s{0,3}#{1,4}\\s+|\\s*\\d+[.)]\\s+|\\s*[-*]\\s+(?:Finding|Vulnerability)\\b)")]
     private static partial Regex SectionStartRegex();

@@ -157,7 +157,7 @@ internal static class Program
         foreach (var group in groups)
         {
             Console.WriteLine($"  {group.ModelFamily} · {group.Quant}");
-            Console.WriteLine($"    runs={group.RunCount}  best={group.BestScorePercent:0.##}  avg={group.AverageScorePercent:0.##}");
+            Console.WriteLine($"    runs={group.RunCount}  best={group.BestScorePercent:0.##}  median={group.MedianScorePercent:0.##}  avg={group.AverageScorePercent:0.##}  σ={group.ScoreStdDev:0.##}  range={group.MinScorePercent:0.##}-{group.MaxScorePercent:0.##}");
         }
 
         if (groups.Any(g => string.Equals(g.Quant, ModelIdentity.UnknownQuant, StringComparison.OrdinalIgnoreCase)))
@@ -175,9 +175,7 @@ internal static class Program
         var archiveDir = Path.GetFullPath(args.Get("--archive", ArchiveStore.DefaultArchiveFolderName));
         var benchmark = args.GetNullable("--benchmark");
         var family = args.GetNullable("--family");
-        var aggregate = string.Equals(args.Get("--aggregate", "average"), "best", StringComparison.OrdinalIgnoreCase)
-            ? ComparisonAggregate.Best
-            : ComparisonAggregate.Average;
+        var aggregate = ParseAggregate(args.Get("--aggregate", "average"));
 
         var store = new ArchiveStore(archiveDir);
         var groups = store.LoadGroups(benchmark);
@@ -202,7 +200,7 @@ internal static class Program
         Console.WriteLine($"Comparison ({aggregate}, {report.Series.Count} series, {report.VulnerabilityAxis.Count} vulns):");
         foreach (var series in report.Series)
         {
-            Console.WriteLine($"  {series.ScorePercent,6:0.##}  {series.Label}  (runs={series.RunCount})");
+            Console.WriteLine($"  {series.ScorePercent,6:0.##}  {series.Label}  (runs={series.RunCount}, median={series.ScoreMedian:0.##}, avg={series.ScoreMean:0.##}, σ={series.ScoreStdDev:0.##}, range={series.ScoreMin:0.##}-{series.ScoreMax:0.##})");
         }
 
         Console.WriteLine();
@@ -252,6 +250,17 @@ internal static class Program
         return Path.GetFullPath(string.IsNullOrWhiteSpace(explicitPath)
             ? ArchiveStore.DefaultArchiveFolderName
             : explicitPath);
+    }
+
+    private static ComparisonAggregate ParseAggregate(string value)
+    {
+        return value.Trim().ToLowerInvariant() switch
+        {
+            "best" or "bester" => ComparisonAggregate.Best,
+            "median" => ComparisonAggregate.Median,
+            "average" or "avg" or "mean" or "durchschnitt" => ComparisonAggregate.Average,
+            _ => throw new ArgumentException("--aggregate must be one of: average, median, best.")
+        };
     }
 
     private static void PrintScore(ScoringResult score)
@@ -315,7 +324,7 @@ internal static class Program
         Console.WriteLine("  --quant <label>            Manual quant label when the model id has none (e.g. Q4_K_M)");
         Console.WriteLine("  --benchmark <id>           Restrict archive-list/compare to one benchmark id");
         Console.WriteLine("  --family <name>            compare: only quants of this model family");
-        Console.WriteLine("  --aggregate <average|best> compare: headline score per group. Default: average");
+        Console.WriteLine("  --aggregate <average|median|best> compare: headline score per group. Default: average");
     }
 
     private sealed class ParsedArgs

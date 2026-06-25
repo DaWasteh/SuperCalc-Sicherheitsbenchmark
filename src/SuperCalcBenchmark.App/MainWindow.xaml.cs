@@ -645,10 +645,15 @@ public partial class MainWindow : Window
             return;
         }
 
-        var aggregate = SelectedAggregate == ComparisonAggregate.Best ? "Bester Run" : "Durchschnitt";
+        var aggregate = SelectedAggregate switch
+        {
+            ComparisonAggregate.Best => "Bester Run",
+            ComparisonAggregate.Median => "Median",
+            _ => "Durchschnitt"
+        };
         ComparisonStatusTextBlock.Text =
             $"{report.Series.Count} Modell/Quant-Gruppe(n), {report.VulnerabilityAxis.Count} Schwachstellen · Wertung: {aggregate}. " +
-            "Modell/Quant per Doppelklick direkt bearbeiten; Diagramme über 'Diagramme öffnen (HTML)'.";
+            "Median/σ/Min/Max werden aus allen Runs der Gruppe berechnet; Diagramm-Fehlerbalken zeigen die Spanne. Modell/Quant per Doppelklick direkt bearbeiten.";
     }
 
     private ComparisonReport BuildCurrentComparison()
@@ -665,9 +670,12 @@ public partial class MainWindow : Window
     }
 
     private ComparisonAggregate SelectedAggregate =>
-        (AggregateComboBox.SelectedItem as ComboBoxItem)?.Content as string == "Bester Run"
-            ? ComparisonAggregate.Best
-            : ComparisonAggregate.Average;
+        ((AggregateComboBox.SelectedItem as ComboBoxItem)?.Content as string) switch
+        {
+            "Bester Run" => ComparisonAggregate.Best,
+            "Median" => ComparisonAggregate.Median,
+            _ => ComparisonAggregate.Average
+        };
 
     private void OpenComparisonButton_Click(object sender, RoutedEventArgs e)
     {
@@ -704,6 +712,10 @@ public partial class MainWindow : Window
         public string Quant { get; set; } = string.Empty;
         public int RunCount { get; init; }
         public double ScorePercent { get; init; }
+        public double ScoreMedian { get; init; }
+        public double ScoreStdDev { get; init; }
+        public double ScoreMin { get; init; }
+        public double ScoreMax { get; init; }
         public double Precision { get; init; }
         public double Recall { get; init; }
         public double F1 { get; init; }
@@ -719,6 +731,10 @@ public partial class MainWindow : Window
             Quant = series.Quant,
             RunCount = series.RunCount,
             ScorePercent = series.ScorePercent,
+            ScoreMedian = series.ScoreMedian,
+            ScoreStdDev = series.ScoreStdDev,
+            ScoreMin = series.ScoreMin,
+            ScoreMax = series.ScoreMax,
             Precision = series.Precision,
             Recall = series.Recall,
             F1 = series.F1,

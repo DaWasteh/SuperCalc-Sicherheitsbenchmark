@@ -95,6 +95,56 @@ internal static partial class TestRunner
         }
     }
 
+    private static void ArchiveDuplicateRunNamesDoNotClobber()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "supercalc-archive-duplicate-test-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var store = new ArchiveStore(tempRoot);
+            var result = FakeResult("Qwen3-Coder-30B-Q4_K_M.gguf", 70, 7, 0, 0, 3);
+
+            var firstPath = store.Save(result);
+            var secondPath = store.Save(result);
+
+            Assert(!string.Equals(firstPath, secondPath, StringComparison.OrdinalIgnoreCase), "same-timestamp scorecards must get unique paths");
+            Assert(File.Exists(firstPath), "first scorecard should still exist");
+            Assert(File.Exists(secondPath), "second scorecard should exist");
+
+            var group = store.LoadGroups().Single();
+            Assert(group.RunCount == 2, $"duplicate-name runs should stack in one group, got {group.RunCount}");
+        }
+        finally
+        {
+            TryDeleteDirectory(tempRoot);
+        }
+    }
+
+    private static void ArchiveManualModelRenameMergesGroups()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "supercalc-archive-rename-test-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var store = new ArchiveStore(tempRoot);
+            var aliasPath = store.Save(FakeResult("local-qwen-alias", 66, 6, 0, 1, 4));
+            store.Save(FakeResult("Qwen3-Coder-30B-Q4_K_M.gguf", 78, 8, 0, 0, 2));
+
+            var json = File.ReadAllText(aliasPath);
+            json = json.Replace("\"modelFamily\": \"local-qwen-alias\"", "\"modelFamily\": \"qwen3-coder-30b\"", StringComparison.Ordinal);
+            json = json.Replace("\"quant\": \"unknown-quant\"", "\"quant\": \"Q4_K_M\"", StringComparison.Ordinal);
+            File.WriteAllText(aliasPath, json);
+
+            var groups = store.LoadGroups();
+            var merged = groups.SingleOrDefault(g => g.ModelFamily == "qwen3-coder-30b" && g.Quant == "Q4_K_M");
+            Assert(merged is not null, "manual model/quant rename should create the qwen Q4 group");
+            Assert(merged!.RunCount == 2, $"renamed alias should merge with existing qwen Q4 runs, got {merged.RunCount}");
+            Assert(merged.GroupKey == "qwen3-coder-30b__Q4_K_M", $"group key should be rebuilt from edited metadata, got {merged.GroupKey}");
+        }
+        finally
+        {
+            TryDeleteDirectory(tempRoot);
+        }
+    }
+
     private static void ArchiveRoundTripsAndGroups()
     {
         var tempRoot = Path.Combine(Path.GetTempPath(), "supercalc-archive-test-" + Guid.NewGuid().ToString("N"));
@@ -116,7 +166,11 @@ internal static partial class TestRunner
             var q4 = groups.Single(g => g.Quant == "Q4_K_M" && g.ModelFamily.Contains("qwen3-coder-30b"));
             Assert(q4.RunCount == 2, $"Q4_K_M group should hold 2 runs, got {q4.RunCount}");
             Assert(Math.Abs(q4.AverageScorePercent - 72.0) < 0.001, $"avg should be 72, got {q4.AverageScorePercent}");
+            Assert(Math.Abs(q4.MedianScorePercent - 72.0) < 0.001, $"median should be 72, got {q4.MedianScorePercent}");
             Assert(Math.Abs(q4.BestScorePercent - 74.0) < 0.001, $"best should be 74, got {q4.BestScorePercent}");
+            Assert(Math.Abs(q4.MinScorePercent - 70.0) < 0.001, $"min should be 70, got {q4.MinScorePercent}");
+            Assert(Math.Abs(q4.MaxScorePercent - 74.0) < 0.001, $"max should be 74, got {q4.MaxScorePercent}");
+            Assert(q4.ScoreStdDev > 0, "stddev should be positive for two different runs");
 
             var families = store.LoadFamilies();
             Assert(families.Count == 2, $"expected 2 distinct families, got {families.Count}");
@@ -144,7 +198,15 @@ internal static partial class TestRunner
             Assert(avg.Series.Count == 3, $"expected 3 series, got {avg.Series.Count}");
             var q4avg = avg.Series.Single(s => s.Quant == "Q4_K_M");
             Assert(Math.Abs(q4avg.ScorePercent - 75.0) < 0.001, $"Q4 average should be 75, got {q4avg.ScorePercent}");
+            Assert(Math.Abs(q4avg.ScoreMedian - 75.0) < 0.001, $"Q4 median distribution should be 75, got {q4avg.ScoreMedian}");
+            Assert(Math.Abs(q4avg.ScoreMin - 70.0) < 0.001, $"Q4 min should be 70, got {q4avg.ScoreMin}");
+            Assert(Math.Abs(q4avg.ScoreMax - 80.0) < 0.001, $"Q4 max should be 80, got {q4avg.ScoreMax}");
+            Assert(q4avg.ScoreStdDev > 0, "Q4 stddev should be positive");
             Assert(avg.Series[0].ScorePercent >= avg.Series[^1].ScorePercent, "series should be sorted by score desc");
+
+            var median = ComparisonReport.Build(groups, "supercalc-v3", ComparisonAggregate.Median);
+            var q4median = median.Series.Single(s => s.Quant == "Q4_K_M");
+            Assert(Math.Abs(q4median.ScorePercent - 75.0) < 0.001, $"Q4 median should be 75, got {q4median.ScorePercent}");
 
             var best = ComparisonReport.Build(groups, "supercalc-v3", ComparisonAggregate.Best);
             var q4best = best.Series.Single(s => s.Quant == "Q4_K_M");
@@ -186,6 +248,10 @@ internal static partial class TestRunner
             var json = html[start..end].Trim();
             using var doc = JsonDocument.Parse(json);
             Assert(doc.RootElement.GetProperty("series").GetArrayLength() == 1, "payload should contain one series");
+            var series = doc.RootElement.GetProperty("series")[0];
+            Assert(series.TryGetProperty("scoreMedian", out _), "payload should expose scoreMedian for uncertainty tables");
+            Assert(series.TryGetProperty("scoreMin", out _), "payload should expose scoreMin for uncertainty bars");
+            Assert(series.TryGetProperty("scoreMax", out _), "payload should expose scoreMax for uncertainty bars");
 
             var csv = writer.BuildCsv(report);
             Assert(csv.Contains("model_family", StringComparison.Ordinal), "csv should have a header row");

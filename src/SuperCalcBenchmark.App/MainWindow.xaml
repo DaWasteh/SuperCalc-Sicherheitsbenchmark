@@ -199,8 +199,9 @@
                         <TextBlock Text="Modellfamilie" VerticalAlignment="Center" Margin="16,4,4,4" />
                         <ComboBox x:Name="FamilyFilterComboBox" Width="240" SelectionChanged="ComparisonFilter_Changed" ToolTip="Alle Modelle oder nur die Quants einer Familie vergleichen." />
                         <TextBlock Text="Wertung" VerticalAlignment="Center" Margin="16,4,4,4" />
-                        <ComboBox x:Name="AggregateComboBox" Width="140" SelectionChanged="ComparisonFilter_Changed">
+                        <ComboBox x:Name="AggregateComboBox" Width="150" SelectionChanged="ComparisonFilter_Changed">
                             <ComboBoxItem Content="Durchschnitt" IsSelected="True" />
+                            <ComboBoxItem Content="Median" />
                             <ComboBoxItem Content="Bester Run" />
                         </ComboBox>
                         <Button x:Name="OpenComparisonButton" Content="Diagramme öffnen (HTML)" Margin="16,4,4,4" Click="OpenComparisonButton_Click" IsEnabled="False" ToolTip="Erzeugt Säulen- und Netzdiagramm als HTML und öffnet es im Browser." />
@@ -247,6 +248,10 @@
                             </DataGridTemplateColumn>
                             <DataGridTextColumn Header="Runs" Binding="{Binding RunCount}" IsReadOnly="True" Width="60" />
                             <DataGridTextColumn Header="Score" Binding="{Binding ScorePercent, StringFormat=0.##}" IsReadOnly="True" Width="80" />
+                            <DataGridTextColumn Header="Median" Binding="{Binding ScoreMedian, StringFormat=0.##}" IsReadOnly="True" Width="80" />
+                            <DataGridTextColumn Header="σ" Binding="{Binding ScoreStdDev, StringFormat=0.##}" IsReadOnly="True" Width="60" />
+                            <DataGridTextColumn Header="Min" Binding="{Binding ScoreMin, StringFormat=0.##}" IsReadOnly="True" Width="60" />
+                            <DataGridTextColumn Header="Max" Binding="{Binding ScoreMax, StringFormat=0.##}" IsReadOnly="True" Width="60" />
                             <DataGridTextColumn Header="Precision" Binding="{Binding Precision, StringFormat=P1}" IsReadOnly="True" Width="90" />
                             <DataGridTextColumn Header="Recall" Binding="{Binding Recall, StringFormat=P1}" IsReadOnly="True" Width="90" />
                             <DataGridTextColumn Header="F1" Binding="{Binding F1, StringFormat=P1}" IsReadOnly="True" Width="80" />

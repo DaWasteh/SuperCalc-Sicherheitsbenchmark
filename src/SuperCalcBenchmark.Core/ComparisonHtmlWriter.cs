@@ -56,6 +56,11 @@ public sealed class ComparisonHtmlWriter
                 runCount = s.RunCount,
                 aggregate = s.Aggregate.ToString(),
                 score = Math.Round(s.ScorePercent, 2),
+                scoreMean = Math.Round(s.ScoreMean, 2),
+                scoreMedian = Math.Round(s.ScoreMedian, 2),
+                scoreStdDev = Math.Round(s.ScoreStdDev, 2),
+                scoreMin = Math.Round(s.ScoreMin, 2),
+                scoreMax = Math.Round(s.ScoreMax, 2),
                 precision = Math.Round(s.Precision * 100, 1),
                 recall = Math.Round(s.Recall * 100, 1),
                 f1 = Math.Round(s.F1 * 100, 1),
@@ -131,17 +136,47 @@ public sealed class ComparisonHtmlWriter
   const hasChart = typeof Chart !== "undefined";
   const charts = hasChart
     ? '<div class="grid">'
-      + '<div class="card"><h2>Gesamtpunkte je Modell + Quant</h2><div class="chart-box"><canvas id="barChart"></canvas></div></div>'
+      + '<div class="card"><h2>Gesamtpunkte je Modell + Quant</h2><div class="note">Fehlerbalken zeigen die Run-Spanne (min–max) innerhalb derselben Modell+Quant-Gruppe.</div><div class="chart-box"><canvas id="barChart"></canvas></div></div>'
       + '<div class="card"><h2>Einzelwerte je Schwachstelle (Netz)</h2><div class="controls"><label><input type="checkbox" id="fillToggle" /> Flächen füllen</label></div><div class="chart-box"><canvas id="radarChart"></canvas></div></div>'
       + '</div>'
     : '<div class="card note">Chart.js konnte nicht geladen werden (keine Internetverbindung?). Die Tabelle unten funktioniert weiterhin offline.</div>';
 
-  content.innerHTML = charts + '<div class="card"><h2>Übersicht</h2><div id="tableWrap"></div><div class="note">Werte je Schwachstelle: 1.0 = voll erkannt, 0.5 = teilweise, 0.0 = verpasst. Spaltenkopf klicken zum Sortieren.</div></div>';
+  content.innerHTML = charts + '<div class="card"><h2>Übersicht</h2><div id="tableWrap"></div><div class="note">Score ist die gewählte Wertung (Mittel/Median/Bester Run). σ und Min/Max werden über alle Runs derselben Modell+Quant-Gruppe berechnet. Werte je Schwachstelle: 1.0 = voll erkannt, 0.5 = teilweise, 0.0 = verpasst. Spaltenkopf klicken zum Sortieren.</div></div>';
 
   if (hasChart) {
+    const uncertaintyPlugin = {
+      id: "uncertaintyBars",
+      afterDatasetsDraw(chart) {
+        const meta = chart.getDatasetMeta(0);
+        const x = chart.scales.x;
+        const ctx = chart.ctx;
+        ctx.save();
+        ctx.strokeStyle = "#111827";
+        ctx.lineWidth = 1.5;
+        data.series.forEach((s, i) => {
+          if (s.runCount < 2) return;
+          const bar = meta.data[i];
+          if (!bar) return;
+          const y = bar.y;
+          const lo = x.getPixelForValue(s.scoreMin);
+          const hi = x.getPixelForValue(s.scoreMax);
+          ctx.beginPath();
+          ctx.moveTo(lo, y);
+          ctx.lineTo(hi, y);
+          ctx.moveTo(lo, y - 6);
+          ctx.lineTo(lo, y + 6);
+          ctx.moveTo(hi, y - 6);
+          ctx.lineTo(hi, y + 6);
+          ctx.stroke();
+        });
+        ctx.restore();
+      }
+    };
+
     const barCtx = document.getElementById("barChart");
     new Chart(barCtx, {
       type: "bar",
+      plugins: [uncertaintyPlugin],
       data: {
         labels: data.series.map(s => s.label),
         datasets: [{
@@ -157,7 +192,21 @@ public sealed class ComparisonHtmlWriter
         responsive: true,
         maintainAspectRatio: false,
         scales: { x: { beginAtZero: true, max: 100, title: { display: true, text: "Score" } } },
-        plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => " " + c.parsed.x.toFixed(1) + " / 100" } } }
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: c => {
+                const s = data.series[c.dataIndex];
+                return [
+                  " Score: " + c.parsed.x.toFixed(1) + " / 100 (" + s.aggregate + ")",
+                  " Median: " + s.scoreMedian.toFixed(1) + " · Mittel: " + s.scoreMean.toFixed(1) + " · σ: " + s.scoreStdDev.toFixed(1),
+                  " Spanne: " + s.scoreMin.toFixed(1) + "–" + s.scoreMax.toFixed(1)
+                ];
+              }
+            }
+          }
+        }
       }
     });
 
@@ -196,6 +245,11 @@ public sealed class ComparisonHtmlWriter
     { key: "label", title: "Modell · Quant", kind: "text" },
     { key: "runCount", title: "Runs", kind: "num" },
     { key: "score", title: "Score", kind: "num" },
+    { key: "scoreMedian", title: "Median", kind: "num" },
+    { key: "scoreMean", title: "Mittel", kind: "num" },
+    { key: "scoreStdDev", title: "±σ", kind: "num" },
+    { key: "scoreMin", title: "Min", kind: "num" },
+    { key: "scoreMax", title: "Max", kind: "num" },
     { key: "precision", title: "Precision %", kind: "num" },
     { key: "recall", title: "Recall %", kind: "num" },
     { key: "f1", title: "F1 %", kind: "num" },
@@ -253,6 +307,7 @@ public sealed class ComparisonHtmlWriter
         var header = new List<string>
         {
             "model_family", "quant", "run_count", "aggregate", "score_percent",
+            "score_mean", "score_median", "score_stddev", "score_min", "score_max",
             "precision_percent", "recall_percent", "f1_percent",
             "full_tp", "partial_tp", "false_positives", "missed"
         };
@@ -268,6 +323,11 @@ public sealed class ComparisonHtmlWriter
                 s.RunCount.ToString(CultureInfo.InvariantCulture),
                 Csv(s.Aggregate.ToString()),
                 s.ScorePercent.ToString("0.##", CultureInfo.InvariantCulture),
+                s.ScoreMean.ToString("0.##", CultureInfo.InvariantCulture),
+                s.ScoreMedian.ToString("0.##", CultureInfo.InvariantCulture),
+                s.ScoreStdDev.ToString("0.##", CultureInfo.InvariantCulture),
+                s.ScoreMin.ToString("0.##", CultureInfo.InvariantCulture),
+                s.ScoreMax.ToString("0.##", CultureInfo.InvariantCulture),
                 (s.Precision * 100).ToString("0.#", CultureInfo.InvariantCulture),
                 (s.Recall * 100).ToString("0.#", CultureInfo.InvariantCulture),
                 (s.F1 * 100).ToString("0.#", CultureInfo.InvariantCulture),

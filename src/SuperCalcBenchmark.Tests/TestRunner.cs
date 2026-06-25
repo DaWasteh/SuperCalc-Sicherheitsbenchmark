@@ -20,6 +20,7 @@ internal static partial class TestRunner
         Run("parser handles markdown JSON fence", ParserHandlesMarkdownJsonFence);
         Run("parser treats schema echo as no findings", ParserTreatsSchemaEchoAsNoFindings);
         Run("parser salvages truncated findings JSON", ParserSalvagesTruncatedFindingsJson);
+        Run("parser handles lenient finding shapes", ParserHandlesLenientFindingShapes);
         Run("llama client leaves thinking enabled by default", LlamaClientLeavesThinkingEnabledByDefault);
         Run("llama client disables Qwen thinking when requested", LlamaClientDisablesQwenThinkingWhenRequested);
         Run("loop detector flags repeated reasoning", LoopDetectorFlagsRepeatedReasoning);
@@ -31,6 +32,8 @@ internal static partial class TestRunner
         Run("model identity honors manual quant override", ModelIdentityHonorsQuantOverride);
         Run("archive store updates editable identity fields", ArchiveStoreUpdatesEditableIdentityFields);
         Run("archive manual quant edit rebuilds group key", ArchiveManualQuantEditRebuildsGroupKey);
+        Run("archive duplicate run names do not clobber", ArchiveDuplicateRunNamesDoNotClobber);
+        Run("archive manual model rename merges groups", ArchiveManualModelRenameMergesGroups);
         Run("archive round-trips and groups by model and quant", ArchiveRoundTripsAndGroups);
         Run("comparison aggregates and filters by family", ComparisonAggregatesAndFiltersByFamily);
         Run("comparison html embeds parseable payload", ComparisonHtmlEmbedsParseablePayload);
@@ -168,6 +171,55 @@ internal static partial class TestRunner
         Assert(result.Findings.Count == 1, $"expected one salvaged complete finding, got {result.Findings.Count}");
         Assert(result.Findings[0].Title == "Format string", "complete finding title should parse");
         Assert(result.Warning?.Contains("salvaged", StringComparison.OrdinalIgnoreCase) == true, "salvage warning should be present");
+    }
+
+    private static void ParserHandlesLenientFindingShapes()
+    {
+        var parser = new ResponseParser();
+
+        var singleton = parser.Parse("""
+        {
+          "findings": {
+            "title": "Format string",
+            "type": "format string",
+            "cwe_id": "CWE-134",
+            "risk_rating": "Critical",
+            "confidence": "92%",
+            "path": "enhanced_calc.cpp",
+            "lines": "237-238",
+            "functionName": "string_utils::log_debug_message",
+            "codeSnippet": "printf(active_format.c_str(), user_input)"
+          }
+        }
+        """);
+
+        Assert(singleton.ParsedJson, "object-valued findings should parse as JSON");
+        Assert(singleton.Findings.Count == 1, $"expected one singleton finding, got {singleton.Findings.Count}");
+        Assert(singleton.Findings[0].LineStart == 237, $"range start should parse, got {singleton.Findings[0].LineStart}");
+        Assert(singleton.Findings[0].LineEnd == 238, $"range end should parse, got {singleton.Findings[0].LineEnd}");
+        Assert(Math.Abs(singleton.Findings[0].Confidence - 0.92) < 0.001, $"percent confidence should parse, got {singleton.Findings[0].Confidence}");
+        Assert(singleton.Warning?.Contains("single", StringComparison.OrdinalIgnoreCase) == true, "singleton parsing should carry a warning");
+
+        var mapped = parser.Parse("""
+        {
+          "issues": {
+            "one": {
+              "name": "Command injection",
+              "vulnerability": "command injection",
+              "cwe": { "id": "CWE-78" },
+              "severity": "High",
+              "file": "enhanced_calc.cpp",
+              "line": "line 563",
+              "evidence": "system(command.c_str())"
+            }
+          }
+        }
+        """);
+
+        Assert(mapped.ParsedJson, "issues map should parse as JSON");
+        Assert(mapped.Findings.Count == 1, $"expected one mapped finding, got {mapped.Findings.Count}");
+        Assert(mapped.Findings[0].Cwe == "CWE-78", $"CWE object id should parse, got {mapped.Findings[0].Cwe}");
+        Assert(mapped.Findings[0].LineStart == 563, $"line text should parse, got {mapped.Findings[0].LineStart}");
     }
 
     private static void LlamaClientLeavesThinkingEnabledByDefault()
