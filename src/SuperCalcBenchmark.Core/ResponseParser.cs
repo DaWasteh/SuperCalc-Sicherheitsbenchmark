@@ -143,6 +143,11 @@ public sealed partial class ResponseParser
             }
 
             var warnings = new List<string>();
+            if (HasSchemaMetadata(root))
+            {
+                warnings.Add("Response included JSON schema metadata alongside findings.");
+            }
+
             if (TryGetFindingsElement(root, out var findingsElement, warnings))
             {
                 ParseFindingsElement(findingsElement, findings, warnings);
@@ -533,11 +538,45 @@ public sealed partial class ResponseParser
 
     private static bool LooksLikeSchemaEcho(JsonElement root)
     {
+        return HasSchemaMetadata(root) && !HasTopLevelFindingsPayload(root);
+    }
+
+    private static bool HasSchemaMetadata(JsonElement root)
+    {
         return root.ValueKind == JsonValueKind.Object &&
                (TryGetProperty(root, "$schema", out _) || TryGetProperty(root, "properties", out _)) &&
                TryGetProperty(root, "title", out var title) &&
                title.ValueKind == JsonValueKind.String &&
                title.GetString()?.Contains("Findings Response", StringComparison.OrdinalIgnoreCase) == true;
+    }
+
+    private static bool HasTopLevelFindingsPayload(JsonElement root)
+    {
+        if (root.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        foreach (var name in new[] { "findings", "vulnerabilities", "issues", "security_findings", "securityFindings", "results" })
+        {
+            if (TryGetProperty(root, name, out var candidate))
+            {
+                return candidate.ValueKind == JsonValueKind.Array || ContainsFindingObject(candidate);
+            }
+        }
+
+        return false;
+    }
+
+    private static bool ContainsFindingObject(JsonElement element)
+    {
+        return element.ValueKind switch
+        {
+            JsonValueKind.Object when LooksLikeFindingObject(element) => true,
+            JsonValueKind.Object => element.EnumerateObject().Any(property => ContainsFindingObject(property.Value)),
+            JsonValueKind.Array => element.EnumerateArray().Any(ContainsFindingObject),
+            _ => false
+        };
     }
 
     private static string? ReadString(JsonElement item, params string[] names)

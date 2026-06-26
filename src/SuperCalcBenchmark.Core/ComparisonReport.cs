@@ -66,6 +66,7 @@ public sealed class ComparisonReport
             var perVuln = axis
                 .Select(id => AggregateCredit(runs, id, aggregate, bestRun))
                 .ToList();
+            var visibleReasoningRunCount = runs.Count(r => r.ReasoningDisclosure?.HasVisibleReasoning == true);
 
             series.Add(new ComparisonSeries
             {
@@ -88,6 +89,14 @@ public sealed class ComparisonReport
                 PartialTruePositives = RoundToInt(AggregateMetric(runs, r => r.PartialTruePositives, aggregate, bestRun)),
                 FalsePositives = RoundToInt(AggregateMetric(runs, r => r.FalsePositives, aggregate, bestRun)),
                 Missed = RoundToInt(AggregateMetric(runs, r => r.Missed, aggregate, bestRun)),
+                VisibleReasoningRunCount = visibleReasoningRunCount,
+                ReasoningParsedFindings = AggregateReasoningMetric(runs, r => r.ReasoningParsedFindingCount, aggregate, bestRun),
+                OutputParsedFindings = AggregateReasoningMetric(runs, r => r.OutputParsedFindingCount, aggregate, bestRun),
+                ReasoningTruePositives = AggregateReasoningMetric(runs, r => r.ReasoningTruePositiveCount, aggregate, bestRun),
+                OutputTruePositives = AggregateReasoningMetric(runs, r => r.OutputTruePositiveCount, aggregate, bestRun),
+                ReasoningOnlyTruePositives = AggregateReasoningMetric(runs, r => r.ReasoningOnlyTruePositiveCount, aggregate, bestRun),
+                OutputOnlyTruePositives = AggregateReasoningMetric(runs, r => r.OutputOnlyTruePositiveCount, aggregate, bestRun),
+                ReasoningToOutputCoverage = AggregateReasoningNullableMetric(runs, r => r.ReasoningToOutputCoverage, aggregate, bestRun),
                 PerVulnerabilityCredit = perVuln
             });
         }
@@ -133,6 +142,58 @@ public sealed class ComparisonReport
         }
 
         var values = runs.Select(selector).ToList();
+        return aggregate == ComparisonAggregate.Median ? Median(values) : values.Average();
+    }
+
+    private static double AggregateReasoningMetric(
+        IReadOnlyList<ArchiveRunScore> runs,
+        Func<ReasoningDisclosureDiagnostics, double> selector,
+        ComparisonAggregate aggregate,
+        ArchiveRunScore bestRun)
+    {
+        if (aggregate == ComparisonAggregate.Best)
+        {
+            var bestDiagnostics = bestRun.ReasoningDisclosure;
+            return bestDiagnostics?.HasVisibleReasoning == true ? selector(bestDiagnostics) : 0;
+        }
+
+        var values = runs
+            .Select(r => r.ReasoningDisclosure)
+            .Where(d => d?.HasVisibleReasoning == true)
+            .Select(d => selector(d!))
+            .ToList();
+        if (values.Count == 0)
+        {
+            return 0;
+        }
+
+        return aggregate == ComparisonAggregate.Median ? Median(values) : values.Average();
+    }
+
+    private static double? AggregateReasoningNullableMetric(
+        IReadOnlyList<ArchiveRunScore> runs,
+        Func<ReasoningDisclosureDiagnostics, double?> selector,
+        ComparisonAggregate aggregate,
+        ArchiveRunScore bestRun)
+    {
+        if (aggregate == ComparisonAggregate.Best)
+        {
+            var bestDiagnostics = bestRun.ReasoningDisclosure;
+            return bestDiagnostics?.HasVisibleReasoning == true ? selector(bestDiagnostics) : null;
+        }
+
+        var values = runs
+            .Select(r => r.ReasoningDisclosure)
+            .Where(d => d?.HasVisibleReasoning == true)
+            .Select(d => selector(d!))
+            .Where(value => value.HasValue)
+            .Select(value => value!.Value)
+            .ToList();
+        if (values.Count == 0)
+        {
+            return null;
+        }
+
         return aggregate == ComparisonAggregate.Median ? Median(values) : values.Average();
     }
 
@@ -203,6 +264,16 @@ public sealed class ComparisonSeries
     public int PartialTruePositives { get; init; }
     public int FalsePositives { get; init; }
     public int Missed { get; init; }
+
+    /// <summary>How many primary runs in this series exposed visible reasoning/thinking diagnostics.</summary>
+    public int VisibleReasoningRunCount { get; init; }
+    public double ReasoningParsedFindings { get; init; }
+    public double OutputParsedFindings { get; init; }
+    public double ReasoningTruePositives { get; init; }
+    public double OutputTruePositives { get; init; }
+    public double ReasoningOnlyTruePositives { get; init; }
+    public double OutputOnlyTruePositives { get; init; }
+    public double? ReasoningToOutputCoverage { get; init; }
 
     /// <summary>Per-vulnerability credit aligned to <see cref="ComparisonReport.VulnerabilityAxis"/>.</summary>
     public List<double> PerVulnerabilityCredit { get; init; } = [];

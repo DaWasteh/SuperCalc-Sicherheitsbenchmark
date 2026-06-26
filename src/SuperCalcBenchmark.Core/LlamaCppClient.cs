@@ -8,6 +8,7 @@ public sealed class LlamaCppClient : IDisposable
 {
     private const int LoopCheckMinimumChars = 1_500;
     private const int LoopCheckIntervalChars = 750;
+    private const int LoopConfirmationChecksRequired = 2;
     private const string LoopDetectedFinishReason = "loop_detected";
 
     private readonly HttpClient _httpClient;
@@ -620,17 +621,17 @@ public sealed class LlamaCppClient : IDisposable
 
     private sealed class StreamLoopState
     {
-        private int _nextContentCheck = LoopCheckMinimumChars;
-        private int _nextReasoningCheck = LoopCheckMinimumChars;
+        private readonly ChannelLoopTracker _content = new();
+        private readonly ChannelLoopTracker _reasoning = new();
 
         public bool TryDetect(StringBuilder contentBuilder, StringBuilder reasoningBuilder, out string diagnosticsSummary)
         {
-            if (TryDetectInBuilder(contentBuilder, "assistant content", ref _nextContentCheck, out diagnosticsSummary))
+            if (_content.TryDetect(contentBuilder, "assistant content", out diagnosticsSummary))
             {
                 return true;
             }
 
-            if (TryDetectInBuilder(reasoningBuilder, "reasoning content", ref _nextReasoningCheck, out diagnosticsSummary))
+            if (_reasoning.TryDetect(reasoningBuilder, "reasoning content", out diagnosticsSummary))
             {
                 return true;
             }
@@ -639,28 +640,57 @@ public sealed class LlamaCppClient : IDisposable
             return false;
         }
 
-        private static bool TryDetectInBuilder(StringBuilder builder, string label, ref int nextCheckAt, out string diagnosticsSummary)
+        private sealed class ChannelLoopTracker
         {
-            if (builder.Length < nextCheckAt)
+            private int _nextCheckAt = LoopCheckMinimumChars;
+            private int _consecutiveSuspicions;
+            private string _lastSignature = string.Empty;
+
+            public bool TryDetect(StringBuilder builder, string label, out string diagnosticsSummary)
             {
-                diagnosticsSummary = string.Empty;
-                return false;
+                if (builder.Length < _nextCheckAt)
+                {
+                    diagnosticsSummary = string.Empty;
+                    return false;
+                }
+
+                while (_nextCheckAt <= builder.Length)
+                {
+                    _nextCheckAt += LoopCheckIntervalChars;
+                }
+
+                var diagnostics = OutputLoopDetector.Analyze(builder.ToString());
+                if (!diagnostics.HasSuspectedLoop)
+                {
+                    _consecutiveSuspicions = 0;
+                    _lastSignature = string.Empty;
+                    diagnosticsSummary = string.Empty;
+                    return false;
+                }
+
+                var signature = BuildSignature(diagnostics);
+                _consecutiveSuspicions = string.Equals(signature, _lastSignature, StringComparison.Ordinal)
+                    ? _consecutiveSuspicions + 1
+                    : 1;
+                _lastSignature = signature;
+
+                if (_consecutiveSuspicions < LoopConfirmationChecksRequired)
+                {
+                    diagnosticsSummary = string.Empty;
+                    return false;
+                }
+
+                diagnosticsSummary = $"{label}: {diagnostics.Summary} (confirmed over {_consecutiveSuspicions} checks)";
+                return true;
             }
 
-            while (nextCheckAt <= builder.Length)
+            private static string BuildSignature(OutputLoopDiagnostics diagnostics)
             {
-                nextCheckAt += LoopCheckIntervalChars;
+                var top = diagnostics.Repetitions.FirstOrDefault();
+                return top is null
+                    ? diagnostics.Summary
+                    : $"{top.Kind}\n{top.Snippet}";
             }
-
-            var diagnostics = OutputLoopDetector.Analyze(builder.ToString());
-            if (!diagnostics.HasSuspectedLoop)
-            {
-                diagnosticsSummary = string.Empty;
-                return false;
-            }
-
-            diagnosticsSummary = $"{label}: {diagnostics.Summary}";
-            return true;
         }
     }
 

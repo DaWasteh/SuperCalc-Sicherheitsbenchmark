@@ -231,7 +231,7 @@ internal static partial class TestRunner
         try
         {
             var store = new ArchiveStore(tempRoot);
-            store.Save(FakeResult("Qwen3-Coder-30B-Q4_K_M.gguf", 70, 7, 0, 0, 3));
+            store.Save(FakeResult("Qwen3-Coder-30B-Q4_K_M.gguf", 70, 7, 0, 0, 3, includeReasoning: true));
 
             var report = ComparisonReport.Build(store.LoadGroups(), "supercalc-v3");
             var writer = new ComparisonHtmlWriter();
@@ -239,6 +239,7 @@ internal static partial class TestRunner
 
             Assert(html.Contains("barChart", StringComparison.Ordinal), "html should contain the bar chart canvas");
             Assert(html.Contains("radarChart", StringComparison.Ordinal), "html should contain the radar chart canvas");
+            Assert(html.Contains("reasoningChart", StringComparison.Ordinal), "html should include the Denken-vs-Sagen chart when diagnostics exist");
 
             const string open = "<script id=\"data\" type=\"application/json\">";
             var start = html.IndexOf(open, StringComparison.Ordinal);
@@ -252,9 +253,13 @@ internal static partial class TestRunner
             Assert(series.TryGetProperty("scoreMedian", out _), "payload should expose scoreMedian for uncertainty tables");
             Assert(series.TryGetProperty("scoreMin", out _), "payload should expose scoreMin for uncertainty bars");
             Assert(series.TryGetProperty("scoreMax", out _), "payload should expose scoreMax for uncertainty bars");
+            Assert(series.TryGetProperty("thinkingTp", out _), "payload should expose Denken/Gedacht TP statistics");
+            Assert(series.TryGetProperty("outputTp", out _), "payload should expose Sagen/Gesagt TP statistics");
+            Assert(series.GetProperty("visibleReasoningRuns").GetInt32() == 1, "payload should count visible reasoning runs");
 
             var csv = writer.BuildCsv(report);
             Assert(csv.Contains("model_family", StringComparison.Ordinal), "csv should have a header row");
+            Assert(csv.Contains("thinking_tp", StringComparison.Ordinal), "csv should include Denken-vs-Sagen columns");
         }
         finally
         {
@@ -264,7 +269,7 @@ internal static partial class TestRunner
 
     // Minimal but realistic BenchmarkRunResult with a single primary run whose per-vulnerability
     // credit is derived from the requested TP/partial/missed counts.
-    private static BenchmarkRunResult FakeResult(string model, double scorePercent, int fullTp, int partialTp, int fp, int missed)
+    private static BenchmarkRunResult FakeResult(string model, double scorePercent, int fullTp, int partialTp, int fp, int missed, bool includeReasoning = false)
     {
         var vulnerabilities = new List<VulnerabilityScore>();
         for (var i = 0; i < FakeVulnIds.Length; i++)
@@ -301,6 +306,23 @@ internal static partial class TestRunner
             Vulnerabilities = vulnerabilities
         };
 
+        var reasoningDisclosure = includeReasoning
+            ? new ReasoningDisclosureDiagnostics
+            {
+                HasVisibleReasoning = true,
+                Summary = "test reasoning disclosure",
+                ReasoningParsedFindingCount = fullTp + partialTp + 1,
+                OutputParsedFindingCount = fullTp + partialTp + fp,
+                ReasoningTruePositiveCount = fullTp + partialTp + 1,
+                OutputTruePositiveCount = fullTp + partialTp,
+                ReasoningOnlyTruePositiveCount = 1,
+                OutputOnlyTruePositiveCount = 0,
+                ReasoningToOutputCoverage = fullTp + partialTp + 1 == 0 ? 0 : (double)(fullTp + partialTp) / (fullTp + partialTp + 1),
+                ReasoningFalsePositives = 0,
+                OutputFalsePositives = fp
+            }
+            : new ReasoningDisclosureDiagnostics();
+
         var now = DateTimeOffset.Now;
         return new BenchmarkRunResult
         {
@@ -312,7 +334,7 @@ internal static partial class TestRunner
             SourceSha256 = "deadbeef",
             SourceHashMatches = true,
             OutputDirectory = string.Empty,
-            Run1 = new BenchmarkRunArtifacts { RunName = "Run 1", Score = score }
+            Run1 = new BenchmarkRunArtifacts { RunName = "Run 1", Score = score, ReasoningDisclosure = reasoningDisclosure }
         };
     }
 

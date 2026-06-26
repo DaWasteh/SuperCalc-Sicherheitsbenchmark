@@ -19,6 +19,7 @@ internal static partial class TestRunner
         Run("parser handles valid JSON", ParserHandlesValidJson);
         Run("parser handles markdown JSON fence", ParserHandlesMarkdownJsonFence);
         Run("parser treats schema echo as no findings", ParserTreatsSchemaEchoAsNoFindings);
+        Run("parser accepts schema metadata with findings", ParserAcceptsSchemaMetadataWithFindings);
         Run("parser salvages truncated findings JSON", ParserSalvagesTruncatedFindingsJson);
         Run("parser handles lenient finding shapes", ParserHandlesLenientFindingShapes);
         Run("llama client leaves thinking enabled by default", LlamaClientLeavesThinkingEnabledByDefault);
@@ -143,6 +144,37 @@ internal static partial class TestRunner
         Assert(result.UsedMarkdownJsonBlock, "schema echo came from a fenced JSON block");
         Assert(result.Findings.Count == 0, "schema echo should not become a false finding");
         Assert(result.Warning?.Contains("echo", StringComparison.OrdinalIgnoreCase) == true, "schema echo should carry a diagnostic warning");
+    }
+
+    private static void ParserAcceptsSchemaMetadataWithFindings()
+    {
+        var parser = new ResponseParser();
+        var result = parser.Parse("""
+        {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "title": "SuperCalc LLM Findings Response",
+          "type": "object",
+          "findings": [
+            {
+              "title": "Hardcoded Administrative Secret",
+              "vulnerability_type": "Hardcoded Credentials",
+              "cwe": "CWE-798",
+              "severity": "High",
+              "confidence": 0.95,
+              "file": "enhanced_calc.cpp",
+              "line_start": 73,
+              "line_end": 73,
+              "function_or_symbol": "config::security::ADMIN_SECRET",
+              "evidence": "constexpr char ADMIN_SECRET[] = \"SC_ENT_2025_AUTH\""
+            }
+          ]
+        }
+        """);
+
+        Assert(result.ParsedJson, "schema metadata plus real findings should parse as JSON");
+        Assert(result.Findings.Count == 1, $"expected one finding, got {result.Findings.Count}");
+        Assert(result.Findings[0].Cwe == "CWE-798", $"CWE should parse, got {result.Findings[0].Cwe}");
+        Assert(result.Warning?.Contains("schema metadata", StringComparison.OrdinalIgnoreCase) == true, "schema metadata should be diagnosed without suppressing findings");
     }
 
     private static void ParserSalvagesTruncatedFindingsJson()

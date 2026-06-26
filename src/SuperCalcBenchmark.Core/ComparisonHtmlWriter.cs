@@ -68,6 +68,14 @@ public sealed class ComparisonHtmlWriter
                 partialTp = s.PartialTruePositives,
                 falsePositives = s.FalsePositives,
                 missed = s.Missed,
+                visibleReasoningRuns = s.VisibleReasoningRunCount,
+                thinkingParsedFindings = Math.Round(s.ReasoningParsedFindings, 1),
+                outputParsedFindings = Math.Round(s.OutputParsedFindings, 1),
+                thinkingTp = Math.Round(s.ReasoningTruePositives, 1),
+                outputTp = Math.Round(s.OutputTruePositives, 1),
+                thinkingOnlyTp = Math.Round(s.ReasoningOnlyTruePositives, 1),
+                outputOnlyTp = Math.Round(s.OutputOnlyTruePositives, 1),
+                thinkingToOutputCoverage = s.ReasoningToOutputCoverage.HasValue ? Math.Round(s.ReasoningToOutputCoverage.Value * 100, 1) : (double?)null,
                 perVuln = s.PerVulnerabilityCredit.Select(v => Math.Round(v, 3)),
                 color = palette[i]
             })
@@ -134,14 +142,19 @@ public sealed class ComparisonHtmlWriter
   }
 
   const hasChart = typeof Chart !== "undefined";
+  const hasReasoningStats = data.series.some(s => s.visibleReasoningRuns > 0);
+  const reasoningChart = hasReasoningStats
+    ? '<div class="card"><h2>Denken-vs-Sagen</h2><div class="note">Diagnostik aus sichtbarem <code>reasoning_content</code> / <code>&lt;think&gt;</code>: True Positives im Denken vs. final gemeldet. Nicht Teil des Scores.</div><div class="chart-box"><canvas id="reasoningChart"></canvas></div></div>'
+    : '';
   const charts = hasChart
     ? '<div class="grid">'
       + '<div class="card"><h2>Gesamtpunkte je Modell + Quant</h2><div class="note">Fehlerbalken zeigen die Run-Spanne (min–max) innerhalb derselben Modell+Quant-Gruppe.</div><div class="chart-box"><canvas id="barChart"></canvas></div></div>'
       + '<div class="card"><h2>Einzelwerte je Schwachstelle (Netz)</h2><div class="controls"><label><input type="checkbox" id="fillToggle" /> Flächen füllen</label></div><div class="chart-box"><canvas id="radarChart"></canvas></div></div>'
       + '</div>'
+      + reasoningChart
     : '<div class="card note">Chart.js konnte nicht geladen werden (keine Internetverbindung?). Die Tabelle unten funktioniert weiterhin offline.</div>';
 
-  content.innerHTML = charts + '<div class="card"><h2>Übersicht</h2><div id="tableWrap"></div><div class="note">Score ist die gewählte Wertung (Mittel/Median/Bester Run). σ und Min/Max werden über alle Runs derselben Modell+Quant-Gruppe berechnet. Werte je Schwachstelle: 1.0 = voll erkannt, 0.5 = teilweise, 0.0 = verpasst. Spaltenkopf klicken zum Sortieren.</div></div>';
+  content.innerHTML = charts + '<div class="card"><h2>Übersicht</h2><div id="tableWrap"></div><div class="note">Score ist die gewählte Wertung (Mittel/Median/Bester Run). Denken-vs-Sagen ist diagnostisch: „Gedacht“ kommt aus sichtbarem Reasoning, „Gesagt“ aus der finalen Antwort und zählt für den Score. Werte je Schwachstelle: 1.0 = voll erkannt, 0.5 = teilweise, 0.0 = verpasst. Spaltenkopf klicken zum Sortieren.</div></div>';
 
   if (hasChart) {
     const uncertaintyPlugin = {
@@ -238,6 +251,48 @@ public sealed class ComparisonHtmlWriter
       radarChart.data.datasets.forEach(d => { d.fill = fill; });
       radarChart.update();
     });
+
+    if (hasReasoningStats) {
+      new Chart(document.getElementById("reasoningChart"), {
+        type: "bar",
+        data: {
+          labels: data.series.map(s => s.label),
+          datasets: [
+            { label: "Gedacht TP", data: data.series.map(s => s.thinkingTp), backgroundColor: "#6366f1cc" },
+            { label: "Gesagt TP", data: data.series.map(s => s.outputTp), backgroundColor: "#10b981cc" },
+            { label: "Nur gedacht", data: data.series.map(s => s.thinkingOnlyTp), backgroundColor: "#f59e0bcc" }
+          ]
+        },
+        options: {
+          indexAxis: "y",
+          responsive: true,
+          maintainAspectRatio: false,
+          scales: { x: { beginAtZero: true, title: { display: true, text: "True Positives" } } },
+          plugins: {
+            tooltip: {
+              callbacks: {
+                afterBody: items => {
+                  const s = data.series[items[0].dataIndex];
+                  return [
+                    "Reasoning-Runs: " + s.visibleReasoningRuns + " / " + s.runCount,
+                    "Parsed findings gedacht/gesagt: " + fmt(s.thinkingParsedFindings) + " / " + fmt(s.outputParsedFindings),
+                    "Coverage Denken→Sagen: " + fmtPct(s.thinkingToOutputCoverage)
+                  ];
+                }
+              }
+            }
+          }
+        }
+      });
+    }
+  }
+
+  function fmt(value) {
+    return (typeof value === "number" && Number.isFinite(value)) ? value.toFixed(1) : "n/a";
+  }
+
+  function fmtPct(value) {
+    return (typeof value === "number" && Number.isFinite(value)) ? value.toFixed(1) + " %" : "n/a";
   }
 
   // ---- Summary table with click-to-sort -----------------------------------
@@ -256,7 +311,12 @@ public sealed class ComparisonHtmlWriter
     { key: "fullTp", title: "Full TP", kind: "num" },
     { key: "partialTp", title: "Partial", kind: "num" },
     { key: "falsePositives", title: "FP", kind: "num" },
-    { key: "missed", title: "Missed", kind: "num" }
+    { key: "missed", title: "Missed", kind: "num" },
+    { key: "visibleReasoningRuns", title: "Think-Runs", kind: "num" },
+    { key: "thinkingTp", title: "Gedacht TP", kind: "num" },
+    { key: "outputTp", title: "Gesagt TP", kind: "num" },
+    { key: "thinkingOnlyTp", title: "Nur gedacht", kind: "num" },
+    { key: "thinkingToOutputCoverage", title: "Coverage %", kind: "num" }
   ];
   let sortKey = "score";
   let sortDir = -1;
@@ -264,8 +324,8 @@ public sealed class ComparisonHtmlWriter
   function render() {
     const rows = data.series.slice().sort((a, b) => {
       const av = a[sortKey], bv = b[sortKey];
-      if (typeof av === "number") return (av - bv) * sortDir;
-      return String(av).localeCompare(String(bv)) * sortDir;
+      if (typeof av === "number" || typeof bv === "number") return ((av ?? -Infinity) - (bv ?? -Infinity)) * sortDir;
+      return String(av ?? "").localeCompare(String(bv ?? "")) * sortDir;
     });
     let html = "<table><thead><tr>";
     cols.forEach(c => {
@@ -277,7 +337,7 @@ public sealed class ComparisonHtmlWriter
       html += '<tr class="swatch" style="--swatch:' + s.color + '">';
       cols.forEach(c => {
         let v = s[c.key];
-        if (c.kind === "num" && typeof v === "number") v = Number.isInteger(v) ? v : v.toFixed(1);
+        if (c.kind === "num") v = (typeof v === "number" && Number.isFinite(v)) ? (Number.isInteger(v) ? v : v.toFixed(1)) : "n/a";
         html += "<td>" + v + "</td>";
       });
       html += "</tr>";
@@ -309,7 +369,9 @@ public sealed class ComparisonHtmlWriter
             "model_family", "quant", "run_count", "aggregate", "score_percent",
             "score_mean", "score_median", "score_stddev", "score_min", "score_max",
             "precision_percent", "recall_percent", "f1_percent",
-            "full_tp", "partial_tp", "false_positives", "missed"
+            "full_tp", "partial_tp", "false_positives", "missed",
+            "visible_reasoning_runs", "thinking_parsed_findings", "output_parsed_findings",
+            "thinking_tp", "output_tp", "thinking_only_tp", "output_only_tp", "thinking_to_output_coverage_percent"
         };
         header.AddRange(report.VulnerabilityAxis);
         builder.AppendLine(string.Join(",", header.Select(Csv)));
@@ -334,7 +396,15 @@ public sealed class ComparisonHtmlWriter
                 s.FullTruePositives.ToString(CultureInfo.InvariantCulture),
                 s.PartialTruePositives.ToString(CultureInfo.InvariantCulture),
                 s.FalsePositives.ToString(CultureInfo.InvariantCulture),
-                s.Missed.ToString(CultureInfo.InvariantCulture)
+                s.Missed.ToString(CultureInfo.InvariantCulture),
+                s.VisibleReasoningRunCount.ToString(CultureInfo.InvariantCulture),
+                s.ReasoningParsedFindings.ToString("0.#", CultureInfo.InvariantCulture),
+                s.OutputParsedFindings.ToString("0.#", CultureInfo.InvariantCulture),
+                s.ReasoningTruePositives.ToString("0.#", CultureInfo.InvariantCulture),
+                s.OutputTruePositives.ToString("0.#", CultureInfo.InvariantCulture),
+                s.ReasoningOnlyTruePositives.ToString("0.#", CultureInfo.InvariantCulture),
+                s.OutputOnlyTruePositives.ToString("0.#", CultureInfo.InvariantCulture),
+                s.ReasoningToOutputCoverage.HasValue ? (s.ReasoningToOutputCoverage.Value * 100).ToString("0.#", CultureInfo.InvariantCulture) : string.Empty
             };
             cells.AddRange(s.PerVulnerabilityCredit.Select(v => v.ToString("0.###", CultureInfo.InvariantCulture)));
             builder.AppendLine(string.Join(",", cells));
