@@ -27,6 +27,8 @@ internal static partial class TestRunner
         Run("loop detector ignores normal output", LoopDetectorIgnoresNormalOutput);
         Run("perfect synthetic fixture scores 100", PerfectSyntheticFixtureScoresHigh);
         Run("duplicate finding is penalized", DuplicateFindingIsPenalized);
+        Run("reasoning disclosure compares thinking and output true positives", ReasoningDisclosureComparesThinkingAndOutputTruePositives);
+        Run("fixture scoring separates inline think block", FixtureScoringSeparatesInlineThinkBlock);
         Run("prompts do not contain hidden answer files", PromptsDoNotLeakHiddenGroundTruth);
         Run("model identity detects quant and family", ModelIdentityDetectsQuantAndFamily);
         Run("model identity honors manual quant override", ModelIdentityHonorsQuantOverride);
@@ -310,6 +312,89 @@ internal static partial class TestRunner
         Assert(score.FullTruePositives == 1, $"expected one assigned TP, got {score.FullTruePositives}");
         Assert(score.Duplicates == 1, $"expected one duplicate, got {score.Duplicates}");
         Assert(score.RawPoints == 4.0, $"expected 5 - 1 = 4 points, got {score.RawPoints}");
+    }
+
+    private static void ReasoningDisclosureComparesThinkingAndOutputTruePositives()
+    {
+        var (groundTruth, source) = LoadGroundTruthAndSource();
+        var parser = new ResponseParser();
+        var scoring = new ScoringEngine();
+
+        var reasoningJson = JsonSerializer.Serialize(new
+        {
+            findings = new[]
+            {
+                SyntheticFinding(groundTruth.Vulnerabilities[0]),
+                SyntheticFinding(groundTruth.Vulnerabilities[1])
+            }
+        }, JsonOptions);
+
+        var outputJson = JsonSerializer.Serialize(new
+        {
+            findings = new[]
+            {
+                SyntheticFinding(groundTruth.Vulnerabilities[0]),
+                SyntheticFinding(groundTruth.Vulnerabilities[2])
+            }
+        }, JsonOptions);
+
+        var reasoningParse = parser.Parse(reasoningJson);
+        var outputParse = parser.Parse(outputJson);
+        var reasoningScore = scoring.Score("thinking", reasoningParse.Findings, groundTruth, source);
+        var outputScore = scoring.Score("output", outputParse.Findings, groundTruth, source);
+        var diagnostics = ReasoningDisclosureAnalyzer.Analyze(reasoningJson, reasoningParse, reasoningScore, outputScore);
+
+        Assert(diagnostics.HasVisibleReasoning, "reasoning should be marked visible");
+        Assert(diagnostics.ReasoningTruePositiveCount == 2, $"expected two thinking TPs, got {diagnostics.ReasoningTruePositiveCount}");
+        Assert(diagnostics.OutputTruePositiveCount == 2, $"expected two output TPs, got {diagnostics.OutputTruePositiveCount}");
+        Assert(diagnostics.ReasoningOnlyTruePositiveCount == 1, $"expected one thinking-only TP, got {diagnostics.ReasoningOnlyTruePositiveCount}");
+        Assert(diagnostics.OutputOnlyTruePositiveCount == 1, $"expected one output-only TP, got {diagnostics.OutputOnlyTruePositiveCount}");
+        Assert(Math.Abs((diagnostics.ReasoningToOutputCoverage ?? -1) - 0.5) < 0.0001, $"expected 50% coverage, got {diagnostics.ReasoningToOutputCoverage}");
+        Assert(diagnostics.ReasoningOnlyTruePositiveIds.Contains(groundTruth.Vulnerabilities[1].Id), "second vulnerability should be thinking-only");
+        Assert(diagnostics.OutputOnlyTruePositiveIds.Contains(groundTruth.Vulnerabilities[2].Id), "third vulnerability should be output-only");
+    }
+
+    private static void FixtureScoringSeparatesInlineThinkBlock()
+    {
+        var (groundTruth, _) = LoadGroundTruthAndSource();
+        var tempRoot = Path.Combine(Path.GetTempPath(), "supercalc-inline-think-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(tempRoot);
+            var responsePath = Path.Combine(tempRoot, "response.txt");
+            var outputDirectory = Path.Combine(tempRoot, "out");
+
+            var reasoningJson = JsonSerializer.Serialize(new
+            {
+                findings = new[] { SyntheticFinding(groundTruth.Vulnerabilities[1]) }
+            }, JsonOptions);
+            var outputJson = JsonSerializer.Serialize(new
+            {
+                findings = new[] { SyntheticFinding(groundTruth.Vulnerabilities[0]) }
+            }, JsonOptions);
+
+            File.WriteAllText(responsePath, $"<think>{reasoningJson}</think>{Environment.NewLine}{outputJson}", Encoding.UTF8);
+
+            var result = new BenchmarkRunner().ScoreFixture(
+                new BenchmarkOptions
+                {
+                    Model = "inline-think-fixture",
+                    OutputDirectory = outputDirectory
+                },
+                responsePath);
+
+            var disclosure = result.Run1.ReasoningDisclosure;
+            Assert(!result.Run1.Response.Contains("<think", StringComparison.OrdinalIgnoreCase), "final output should not include inline think blocks");
+            Assert(result.Run1.ReasoningContent.Contains(groundTruth.Vulnerabilities[1].Title, StringComparison.OrdinalIgnoreCase), "inline thinking should be moved to reasoning content");
+            Assert(result.Run1.Score.FullTruePositives == 1, $"only final output should affect score; got {result.Run1.Score.FullTruePositives} full TPs");
+            Assert(disclosure.HasVisibleReasoning, "inline thinking should make disclosure diagnostics available");
+            Assert(disclosure.ReasoningOnlyTruePositiveIds.Contains(groundTruth.Vulnerabilities[1].Id), "thinking-only TP should come from inline think block");
+            Assert(disclosure.OutputOnlyTruePositiveIds.Contains(groundTruth.Vulnerabilities[0].Id), "output-only TP should come from final output");
+        }
+        finally
+        {
+            TryDeleteDirectory(tempRoot);
+        }
     }
 
     private static void PromptsDoNotLeakHiddenGroundTruth()

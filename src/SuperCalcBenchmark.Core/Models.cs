@@ -196,6 +196,28 @@ public sealed class RunComparison
     public double TruePositiveRetention { get; init; }
 }
 
+public sealed class ReasoningDisclosureDiagnostics
+{
+    public bool HasVisibleReasoning { get; init; }
+    public string Summary { get; init; } = string.Empty;
+    public int ReasoningParsedFindingCount { get; init; }
+    public int OutputParsedFindingCount { get; init; }
+    public int ReasoningTruePositiveCount { get; init; }
+    public int OutputTruePositiveCount { get; init; }
+    public int ReasoningOnlyTruePositiveCount { get; init; }
+    public int OutputOnlyTruePositiveCount { get; init; }
+    public double? ReasoningToOutputCoverage { get; init; }
+    public int ReasoningFalsePositives { get; init; }
+    public int OutputFalsePositives { get; init; }
+    public bool ReasoningParsedJson { get; init; }
+    public bool ReasoningUsedTextFallback { get; init; }
+    public string? ReasoningParseWarning { get; init; }
+    public List<string> ReasoningTruePositiveIds { get; init; } = [];
+    public List<string> OutputTruePositiveIds { get; init; } = [];
+    public List<string> ReasoningOnlyTruePositiveIds { get; init; } = [];
+    public List<string> OutputOnlyTruePositiveIds { get; init; } = [];
+}
+
 public sealed record ChatCompletionResult
 {
     public string AssistantContent { get; init; } = string.Empty;
@@ -265,6 +287,7 @@ public sealed class BenchmarkRunArtifacts
     public bool RetriedWithoutThinkingControl { get; init; }
     public ParseResult Parse { get; init; } = new();
     public ScoringResult Score { get; init; } = new();
+    public ReasoningDisclosureDiagnostics ReasoningDisclosure { get; init; } = new();
 }
 
 public sealed class BenchmarkRunResult

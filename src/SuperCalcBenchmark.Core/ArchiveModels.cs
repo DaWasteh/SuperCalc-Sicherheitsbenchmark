@@ -119,13 +119,25 @@ public sealed class ArchiveRunScore
     public double F1 { get; set; }
 
     /// <summary>
+    /// Optional, non-scoring diagnostic comparing true positives visible in reasoning_content
+    /// or inline &lt;think&gt; blocks against true positives reported in the final assistant output.
+    /// </summary>
+    [JsonPropertyName("reasoningDisclosure")]
+    public ReasoningDisclosureDiagnostics? ReasoningDisclosure { get; set; }
+
+    /// <summary>
     /// Per-vulnerability credit in [0,1] keyed by ground-truth id: 1.0 full, 0.5 partial,
     /// 0.0 missed. This is the series the radar/net chart plots.
     /// </summary>
     [JsonPropertyName("vulnerabilityCredit")]
     public Dictionary<string, double> VulnerabilityCredit { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
-    public static ArchiveRunScore FromScore(ScoringResult score)
+    public static ArchiveRunScore FromArtifacts(BenchmarkRunArtifacts artifacts)
+        => FromScore(
+            artifacts.Score,
+            string.IsNullOrWhiteSpace(artifacts.ReasoningDisclosure.Summary) ? null : artifacts.ReasoningDisclosure);
+
+    public static ArchiveRunScore FromScore(ScoringResult score, ReasoningDisclosureDiagnostics? reasoningDisclosure = null)
     {
         var credit = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
         foreach (var vulnerability in score.Vulnerabilities)
@@ -145,6 +157,7 @@ public sealed class ArchiveRunScore
             Precision = score.Precision,
             Recall = score.Recall,
             F1 = score.F1,
+            ReasoningDisclosure = reasoningDisclosure,
             VulnerabilityCredit = credit
         };
     }

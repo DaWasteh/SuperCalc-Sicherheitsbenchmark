@@ -777,7 +777,8 @@ public partial class MainWindow : Window
         var details = $"TP: {score.FullTruePositives} full + {score.PartialTruePositives} partial | " +
                       $"FP: {score.FalsePositives} | FN: {score.Missed}\n" +
                       $"Precision: {score.Precision:P1} | Recall: {score.Recall:P1} | F1: {score.F1:P1}\n" +
-                      $"Finish: {artifacts.FinishReason} | Content: {artifacts.Response.Length} chars | Reasoning: {artifacts.ReasoningContent.Length} chars";
+                      $"Finish: {artifacts.FinishReason} | Content: {artifacts.Response.Length} chars | Reasoning: {artifacts.ReasoningContent.Length} chars\n" +
+                      $"Denken-vs-Sagen: {FormatReasoningDisclosure(artifacts.ReasoningDisclosure)}";
 
         if (!string.IsNullOrWhiteSpace(artifacts.Parse.Warning))
         {
@@ -799,6 +800,12 @@ public partial class MainWindow : Window
         if (reasoningLoop.HasSuspectedLoop)
         {
             AppendLog($"WARNUNG {artifacts.RunName}: möglicher Loop im Thinking — {reasoningLoop.Summary}");
+        }
+
+        var disclosure = artifacts.ReasoningDisclosure;
+        if (disclosure.HasVisibleReasoning && disclosure.ReasoningOnlyTruePositiveCount > 0)
+        {
+            AppendLog($"INFO {artifacts.RunName}: Denken-vs-Sagen-Lücke — {disclosure.ReasoningOnlyTruePositiveCount} TP(s) nur im Thinking ({string.Join(", ", disclosure.ReasoningOnlyTruePositiveIds)}).");
         }
     }
 
@@ -901,6 +908,7 @@ public partial class MainWindow : Window
         var builder = new StringBuilder();
         builder.AppendLine($"Finish: {EmptyFallback(artifacts.FinishReason)} | Output: {artifacts.Response.Length:N0} chars | Thinking: {artifacts.ReasoningContent.Length:N0} chars");
         builder.AppendLine($"response_format: {artifacts.UsedResponseFormat} | retry ohne response_format: {artifacts.RetriedWithoutResponseFormat} | thinking-disable hint: {artifacts.UsedThinkingControl}");
+        builder.AppendLine($"Denken-vs-Sagen: {FormatReasoningDisclosure(artifacts.ReasoningDisclosure)}");
         builder.AppendLine($"Loop-Check Output: {responseLoop.Summary}");
         builder.AppendLine($"Loop-Check Thinking: {reasoningLoop.Summary}");
 
@@ -989,6 +997,22 @@ public partial class MainWindow : Window
     }
 
     private static string EmptyFallback(string value) => string.IsNullOrWhiteSpace(value) ? "<empty>" : value;
+
+    private static string FormatReasoningDisclosure(ReasoningDisclosureDiagnostics diagnostics)
+    {
+        if (!diagnostics.HasVisibleReasoning)
+        {
+            return "kein sichtbares Thinking";
+        }
+
+        return $"Thinking-TPs {diagnostics.ReasoningTruePositiveCount}, " +
+               $"Output-TPs {diagnostics.OutputTruePositiveCount}, " +
+               $"nur gedacht {diagnostics.ReasoningOnlyTruePositiveCount}, " +
+               $"nur gesagt {diagnostics.OutputOnlyTruePositiveCount}, " +
+               $"Coverage {FormatNullablePercent(diagnostics.ReasoningToOutputCoverage)}";
+    }
+
+    private static string FormatNullablePercent(double? value) => value is null ? "n/a" : value.Value.ToString("P1", System.Globalization.CultureInfo.InvariantCulture);
 
     private void Progress(string message)
     {

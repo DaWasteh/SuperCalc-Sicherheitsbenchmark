@@ -23,6 +23,7 @@ assignees: ''
 **Run 1 Score:** [Traceable score according to docs/SCORING_METHODOLOGY.md]
 **Run 2 Self-Validation Score:** [Traceable score according to docs/SCORING_METHODOLOGY.md]
 **Overall Score:** [Preferred final score and rationale]
+**Denken-vs-Sagen Diagnostic (optional):** [Thinking TPs → Output TPs, thinking-only TPs, coverage; diagnostic only, not part of score]
 
 ### 🐛 Detected Vulnerabilities
 

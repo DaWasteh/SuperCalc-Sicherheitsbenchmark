@@ -76,14 +76,16 @@ public sealed class BenchmarkRunner
             cancellationToken).ConfigureAwait(false);
 
         progress?.Invoke("Parsing and scoring Run 1...");
-        var run1Parse = _responseParser.Parse(run1Completion.AssistantContent);
+        var run1Content = SplitThinkingContent(run1Completion.AssistantContent, run1Completion.ReasoningContent);
+        var run1Parse = _responseParser.Parse(run1Content.OutputContent);
         var run1Score = _scoringEngine.Score("Run 1", run1Parse.Findings, groundTruth, source);
+        var run1ReasoningDisclosure = BuildReasoningDisclosure("Run 1", run1Content.ReasoningContent, run1Score, groundTruth, source);
         result.Run1 = new BenchmarkRunArtifacts
         {
             RunName = "Run 1",
             Prompt = run1Prompt,
-            Response = run1Completion.AssistantContent,
-            ReasoningContent = run1Completion.ReasoningContent,
+            Response = run1Content.OutputContent,
+            ReasoningContent = run1Content.ReasoningContent,
             RawResponse = run1Completion.RawResponse,
             RequestJson = run1Completion.RequestJson,
             FinishReason = run1Completion.FinishReason,
@@ -92,7 +94,8 @@ public sealed class BenchmarkRunner
             UsedThinkingControl = run1Completion.UsedThinkingControl,
             RetriedWithoutThinkingControl = run1Completion.RetriedWithoutThinkingControl,
             Parse = run1Parse,
-            Score = run1Score
+            Score = run1Score,
+            ReasoningDisclosure = run1ReasoningDisclosure
         };
 
         // Surface Run 1 to the caller immediately so the UI can render its score,
@@ -100,7 +103,7 @@ public sealed class BenchmarkRunner
         onRunCompleted?.Invoke(result.Run1);
 
         progress?.Invoke("Building Run 2 self-validation prompt...");
-        var run2Prompt = _promptBuilder.BuildSelfValidationPrompt(source, options.SelfValidatePromptPath, options.SchemaPath, run1Completion.AssistantContent);
+        var run2Prompt = _promptBuilder.BuildSelfValidationPrompt(source, options.SelfValidatePromptPath, options.SchemaPath, run1Content.OutputContent);
         progress?.Invoke("Sending Run 2 self-validation to llama-server...");
         var run2Completion = await client.CreateChatCompletionAsync(
             options.ServerUrl,
@@ -112,14 +115,16 @@ public sealed class BenchmarkRunner
             cancellationToken).ConfigureAwait(false);
 
         progress?.Invoke("Parsing and scoring Run 2...");
-        var run2Parse = _responseParser.Parse(run2Completion.AssistantContent);
+        var run2Content = SplitThinkingContent(run2Completion.AssistantContent, run2Completion.ReasoningContent);
+        var run2Parse = _responseParser.Parse(run2Content.OutputContent);
         var run2Score = _scoringEngine.Score("Run 2", run2Parse.Findings, groundTruth, source);
+        var run2ReasoningDisclosure = BuildReasoningDisclosure("Run 2", run2Content.ReasoningContent, run2Score, groundTruth, source);
         result.Run2 = new BenchmarkRunArtifacts
         {
             RunName = "Run 2",
             Prompt = run2Prompt,
-            Response = run2Completion.AssistantContent,
-            ReasoningContent = run2Completion.ReasoningContent,
+            Response = run2Content.OutputContent,
+            ReasoningContent = run2Content.ReasoningContent,
             RawResponse = run2Completion.RawResponse,
             RequestJson = run2Completion.RequestJson,
             FinishReason = run2Completion.FinishReason,
@@ -128,7 +133,8 @@ public sealed class BenchmarkRunner
             UsedThinkingControl = run2Completion.UsedThinkingControl,
             RetriedWithoutThinkingControl = run2Completion.RetriedWithoutThinkingControl,
             Parse = run2Parse,
-            Score = run2Score
+            Score = run2Score,
+            ReasoningDisclosure = run2ReasoningDisclosure
         };
 
         onRunCompleted?.Invoke(result.Run2);
@@ -154,8 +160,10 @@ public sealed class BenchmarkRunner
         ValidatePreflight(options, source, groundTruth);
 
         var response = File.ReadAllText(responsePath, System.Text.Encoding.UTF8);
-        var parse = _responseParser.Parse(response);
+        var content = SplitThinkingContent(response, reasoningContent: string.Empty);
+        var parse = _responseParser.Parse(content.OutputContent);
         var score = _scoringEngine.Score(runName, parse.Findings, groundTruth, source);
+        var reasoningDisclosure = BuildReasoningDisclosure(runName, content.ReasoningContent, score, groundTruth, source);
         var outputDirectory = _reportWriter.CreateRunDirectory(WithModelFallback(options, runName), startedAt);
 
         var result = new BenchmarkRunResult
@@ -177,12 +185,14 @@ public sealed class BenchmarkRunner
             {
                 RunName = runName,
                 Prompt = string.Empty,
-                Response = response,
+                Response = content.OutputContent,
+                ReasoningContent = content.ReasoningContent,
                 RawResponse = response,
                 RequestJson = string.Empty,
                 UsedResponseFormat = false,
                 Parse = parse,
-                Score = score
+                Score = score,
+                ReasoningDisclosure = reasoningDisclosure
             }
         };
 
@@ -214,6 +224,94 @@ public sealed class BenchmarkRunner
                 QuantOverride = original.QuantOverride
             };
         }
+    }
+
+    private static (string OutputContent, string ReasoningContent) SplitThinkingContent(string assistantContent, string reasoningContent)
+    {
+        var (outputContent, inlineReasoning) = ExtractInlineThinkBlocks(assistantContent);
+        var combinedReasoning = CombineReasoning(reasoningContent, inlineReasoning);
+        return (outputContent, combinedReasoning);
+    }
+
+    private static (string OutputContent, string InlineReasoning) ExtractInlineThinkBlocks(string assistantContent)
+    {
+        assistantContent ??= string.Empty;
+        var output = new System.Text.StringBuilder();
+        var reasoning = new System.Text.StringBuilder();
+        var cursor = 0;
+        var extractedAnyBlock = false;
+
+        while (cursor < assistantContent.Length)
+        {
+            var start = assistantContent.IndexOf("<think", cursor, StringComparison.OrdinalIgnoreCase);
+            if (start < 0)
+            {
+                output.Append(assistantContent, cursor, assistantContent.Length - cursor);
+                break;
+            }
+
+            var tagEnd = assistantContent.IndexOf('>', start);
+            if (tagEnd < 0)
+            {
+                output.Append(assistantContent, cursor, assistantContent.Length - cursor);
+                break;
+            }
+
+            var end = assistantContent.IndexOf("</think>", tagEnd + 1, StringComparison.OrdinalIgnoreCase);
+            if (end < 0)
+            {
+                output.Append(assistantContent, cursor, assistantContent.Length - cursor);
+                break;
+            }
+
+            extractedAnyBlock = true;
+            output.Append(assistantContent, cursor, start - cursor);
+            var block = assistantContent[(tagEnd + 1)..end].Trim();
+            if (!string.IsNullOrWhiteSpace(block))
+            {
+                if (reasoning.Length > 0)
+                {
+                    reasoning.AppendLine().AppendLine();
+                }
+
+                reasoning.Append(block);
+            }
+
+            cursor = end + "</think>".Length;
+        }
+
+        return extractedAnyBlock
+            ? (output.ToString().Trim(), reasoning.ToString().Trim())
+            : (assistantContent, string.Empty);
+    }
+
+    private static string CombineReasoning(string reasoningContent, string inlineReasoning)
+    {
+        reasoningContent ??= string.Empty;
+        inlineReasoning ??= string.Empty;
+        if (string.IsNullOrWhiteSpace(reasoningContent))
+        {
+            return inlineReasoning.Trim();
+        }
+
+        if (string.IsNullOrWhiteSpace(inlineReasoning))
+        {
+            return reasoningContent;
+        }
+
+        return reasoningContent.TrimEnd() + Environment.NewLine + Environment.NewLine + inlineReasoning.Trim();
+    }
+
+    private ReasoningDisclosureDiagnostics BuildReasoningDisclosure(
+        string runName,
+        string reasoningContent,
+        ScoringResult outputScore,
+        GroundTruthDocument groundTruth,
+        SourceDocument source)
+    {
+        var reasoningParse = _responseParser.Parse(reasoningContent);
+        var reasoningScore = _scoringEngine.Score($"{runName} Thinking", reasoningParse.Findings, groundTruth, source);
+        return ReasoningDisclosureAnalyzer.Analyze(reasoningContent, reasoningParse, reasoningScore, outputScore);
     }
 
     private static void TryArchive(BenchmarkRunResult result, BenchmarkOptions options, Action<string>? progress)

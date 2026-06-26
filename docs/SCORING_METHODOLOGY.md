@@ -27,7 +27,7 @@ Each LLM response is normalized into findings with these fields:
 - impact / trigger
 - recommendation
 
-Raw model output is always stored next to the normalized parse.
+Raw model output is always stored next to the normalized parse. If the runtime exposes visible `reasoning_content` or inline `<think>...</think>` blocks, the tool also parses and matches that text separately for the non-scoring **Denken-vs-Sagen** diagnostic: unique true positives seen in thinking are compared with unique true positives reported in the final assistant output. This helps distinguish discovery failures from reporting/self-filtering failures, but it never changes the 0..100 benchmark score because not every model exposes reasoning and unstructured thinking can be undercounted.
 
 ## Matching weights
 
@@ -90,6 +90,7 @@ The report should include:
 - New findings added by self-validation.
 - False-positive reduction.
 - True-positive retention.
+- Optional Denken-vs-Sagen counts when visible reasoning is available: thinking true positives, final-output true positives, thinking-only true positives, output-only true positives, and thinking→output coverage.
 
 Run 2 is not allowed to use hidden ground truth; it only receives the code and the model's own Run-1 answer.
 

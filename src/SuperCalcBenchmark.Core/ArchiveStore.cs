@@ -85,12 +85,12 @@ public sealed class ArchiveStore
         var runs = new List<ArchiveRunScore>();
         if (result.Run1?.Score is not null)
         {
-            runs.Add(ArchiveRunScore.FromScore(result.Run1.Score));
+            runs.Add(ArchiveRunScore.FromArtifacts(result.Run1));
         }
 
         if (result.Run2?.Score is not null)
         {
-            runs.Add(ArchiveRunScore.FromScore(result.Run2.Score));
+            runs.Add(ArchiveRunScore.FromArtifacts(result.Run2));
         }
 
         return new ArchiveRecord

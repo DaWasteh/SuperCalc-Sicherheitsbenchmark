@@ -159,6 +159,7 @@ public sealed class ReportWriter
         builder.AppendLine($"| Retried without thinking hint | {artifacts.RetriedWithoutThinkingControl} |");
         builder.AppendLine($"| Parsed JSON | {artifacts.Parse.ParsedJson} |");
         builder.AppendLine($"| Used text fallback | {artifacts.Parse.UsedTextFallback} |");
+        AppendReasoningDisclosureRows(builder, artifacts.ReasoningDisclosure);
         var responseLoop = OutputLoopDetector.Analyze(artifacts.Response);
         var reasoningLoop = OutputLoopDetector.Analyze(artifacts.ReasoningContent);
         builder.AppendLine($"| Assistant loop check | {EscapePipe(responseLoop.Summary)} |");
@@ -169,6 +170,12 @@ public sealed class ReportWriter
         }
 
         builder.AppendLine();
+        if (artifacts.ReasoningDisclosure.HasVisibleReasoning)
+        {
+            builder.AppendLine("> `Denken-vs-Sagen` is diagnostic only and is not included in the 100-point benchmark score. It uses the same hidden-ground-truth matcher on visible `reasoning_content` / inline `<think>` blocks, so unstructured thinking can be undercounted.");
+            builder.AppendLine();
+        }
+
         if (string.IsNullOrWhiteSpace(artifacts.Response) && !string.IsNullOrWhiteSpace(artifacts.ReasoningContent))
         {
             builder.AppendLine($"> Warning: the server returned `reasoning_content` but an empty final `message.content`. This usually means Qwen thinking was not disabled or the model exhausted `max_tokens` before producing a final answer.");
@@ -177,6 +184,23 @@ public sealed class ReportWriter
 
         AppendLoopDetails(builder, "assistant content", responseLoop);
         AppendLoopDetails(builder, "thinking/reasoning content", reasoningLoop);
+    }
+
+    private static void AppendReasoningDisclosureRows(StringBuilder builder, ReasoningDisclosureDiagnostics diagnostics)
+    {
+        builder.AppendLine($"| Denken-vs-Sagen | {EscapePipe(diagnostics.Summary)} |");
+        builder.AppendLine($"| Thinking parsed findings | {diagnostics.ReasoningParsedFindingCount} |");
+        builder.AppendLine($"| Output parsed findings | {diagnostics.OutputParsedFindingCount} |");
+        builder.AppendLine($"| Thinking TPs vs output TPs | {diagnostics.ReasoningTruePositiveCount} → {diagnostics.OutputTruePositiveCount} |");
+        builder.AppendLine($"| Thinking-only TPs | {FormatList(diagnostics.ReasoningOnlyTruePositiveIds)} |");
+        builder.AppendLine($"| Output-only TPs | {FormatList(diagnostics.OutputOnlyTruePositiveIds)} |");
+        builder.AppendLine($"| Thinking→Output coverage | {FormatNullablePercent(diagnostics.ReasoningToOutputCoverage)} |");
+        builder.AppendLine($"| Thinking FPs vs output FPs | {diagnostics.ReasoningFalsePositives} → {diagnostics.OutputFalsePositives} |");
+        builder.AppendLine($"| Thinking parse mode | JSON={diagnostics.ReasoningParsedJson}, textFallback={diagnostics.ReasoningUsedTextFallback} |");
+        if (!string.IsNullOrWhiteSpace(diagnostics.ReasoningParseWarning))
+        {
+            builder.AppendLine($"| Thinking parse warning | {EscapePipe(diagnostics.ReasoningParseWarning)} |");
+        }
     }
 
     private static void AppendLoopDetails(StringBuilder builder, string label, OutputLoopDiagnostics diagnostics)
@@ -266,6 +290,8 @@ public sealed class ReportWriter
     }
 
     private static string FormatMaxTokens(int maxTokens) => maxTokens < 0 ? "-1 (server max/unbounded)" : maxTokens.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+    private static string FormatNullablePercent(double? value) => value is null ? "n/a" : value.Value.ToString("P1", System.Globalization.CultureInfo.InvariantCulture);
 
     private static string FormatList(IReadOnlyList<string> items) => items.Count == 0 ? "-" : string.Join(", ", items.Select(i => $"`{i}`"));
 
