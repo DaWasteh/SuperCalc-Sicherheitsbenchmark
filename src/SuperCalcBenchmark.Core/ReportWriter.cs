@@ -77,6 +77,7 @@ public sealed class ReportWriter
         builder.AppendLine($"- Server context window: `{(result.ServerContextSize?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown")}`");
         builder.AppendLine($"- Requested max completion tokens: `{FormatMaxTokens(result.MaxTokens)}`");
         builder.AppendLine($"- Thinking disable requested: `{result.DisableThinking}`");
+        builder.AppendLine($"- Streaming loop guard enabled: `{result.AbortOnLoop}`");
         builder.AppendLine($"- Started: `{result.StartedAt:O}`");
         builder.AppendLine($"- Completed: `{result.CompletedAt:O}`");
         builder.AppendLine($"- Source: `{result.SourceFile}`");
@@ -151,6 +152,11 @@ public sealed class ReportWriter
         builder.AppendLine("| Field | Value |");
         builder.AppendLine("| ----- | ----- |");
         builder.AppendLine($"| Finish reason | `{EscapePipe(artifacts.FinishReason)}` |");
+        builder.AppendLine($"| Loop aborted by client | {artifacts.LoopDetected} |");
+        if (!string.IsNullOrWhiteSpace(artifacts.LoopDiagnosticsSummary))
+        {
+            builder.AppendLine($"| Loop abort reason | {EscapePipe(artifacts.LoopDiagnosticsSummary)} |");
+        }
         builder.AppendLine($"| Assistant content chars | {artifacts.Response.Length} |");
         builder.AppendLine($"| Reasoning content chars | {artifacts.ReasoningContent.Length} |");
         builder.AppendLine($"| Used response_format | {artifacts.UsedResponseFormat} |");
@@ -173,6 +179,12 @@ public sealed class ReportWriter
         if (artifacts.ReasoningDisclosure.HasVisibleReasoning)
         {
             builder.AppendLine("> `Denken-vs-Sagen` is diagnostic only and is not included in the 100-point benchmark score. It uses the same hidden-ground-truth matcher on visible `reasoning_content` / inline `<think>` blocks, so unstructured thinking can be undercounted.");
+            builder.AppendLine();
+        }
+
+        if (artifacts.LoopDetected)
+        {
+            builder.AppendLine("> Warning: the client closed the streaming request early because the live output matched the loop/repetition guard. The saved output is intentionally partial so the benchmark does not hang or exhaust memory.");
             builder.AppendLine();
         }
 

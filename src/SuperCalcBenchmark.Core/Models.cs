@@ -225,6 +225,8 @@ public sealed record ChatCompletionResult
     public string RawResponse { get; init; } = string.Empty;
     public string RequestJson { get; init; } = string.Empty;
     public string FinishReason { get; init; } = string.Empty;
+    public bool LoopDetected { get; init; }
+    public string LoopDiagnosticsSummary { get; init; } = string.Empty;
     public bool UsedResponseFormat { get; init; }
     public bool RetriedWithoutResponseFormat { get; init; }
     public bool UsedThinkingControl { get; init; }
@@ -235,7 +237,8 @@ public enum ChatStreamDeltaKind
 {
     AttemptStart,
     Reasoning,
-    Content
+    Content,
+    LoopDetected
 }
 
 /// <summary>
@@ -270,6 +273,12 @@ public sealed record ChatStreamDelta
         Kind = ChatStreamDeltaKind.Content,
         Text = text
     };
+
+    public static ChatStreamDelta LoopDetected(string text) => new()
+    {
+        Kind = ChatStreamDeltaKind.LoopDetected,
+        Text = text
+    };
 }
 
 public sealed class BenchmarkRunArtifacts
@@ -281,6 +290,8 @@ public sealed class BenchmarkRunArtifacts
     public string RawResponse { get; init; } = string.Empty;
     public string RequestJson { get; init; } = string.Empty;
     public string FinishReason { get; init; } = string.Empty;
+    public bool LoopDetected { get; init; }
+    public string LoopDiagnosticsSummary { get; init; } = string.Empty;
     public bool UsedResponseFormat { get; init; }
     public bool RetriedWithoutResponseFormat { get; init; }
     public bool UsedThinkingControl { get; init; }
@@ -300,6 +311,7 @@ public sealed class BenchmarkRunResult
     public string Model { get; init; } = string.Empty;
     public int MaxTokens { get; init; }
     public bool DisableThinking { get; init; }
+    public bool AbortOnLoop { get; init; }
     public int? ServerContextSize { get; init; }
     public string SourceFile { get; init; } = string.Empty;
     public string SourceSha256 { get; init; } = string.Empty;
@@ -332,6 +344,12 @@ public sealed class BenchmarkOptions
     public bool AllowHashMismatch { get; init; }
     public bool SkipResponseFormat { get; init; }
     public bool DisableThinking { get; init; }
+
+    /// <summary>
+    /// Stream completions through a repetition guard and close the request early when
+    /// the assistant gets stuck in a likely model loop.
+    /// </summary>
+    public bool AbortOnLoop { get; init; } = true;
 
     /// <summary>
     /// When set, each completed run is archived as a compact scorecard under this folder

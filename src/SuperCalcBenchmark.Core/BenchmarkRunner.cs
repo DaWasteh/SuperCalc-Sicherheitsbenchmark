@@ -55,6 +55,7 @@ public sealed class BenchmarkRunner
             Model = options.Model,
             MaxTokens = options.MaxTokens,
             DisableThinking = options.DisableThinking,
+            AbortOnLoop = options.AbortOnLoop,
             ServerContextSize = serverContextSize,
             SourceFile = options.SourcePath,
             SourceSha256 = source.Sha256,
@@ -75,6 +76,11 @@ public sealed class BenchmarkRunner
             streamProgress,
             cancellationToken).ConfigureAwait(false);
 
+        if (run1Completion.LoopDetected)
+        {
+            progress?.Invoke($"Run 1 stopped early by loop guard: {run1Completion.LoopDiagnosticsSummary}");
+        }
+
         progress?.Invoke("Parsing and scoring Run 1...");
         var run1Content = SplitThinkingContent(run1Completion.AssistantContent, run1Completion.ReasoningContent);
         var run1Parse = _responseParser.Parse(run1Content.OutputContent);
@@ -89,6 +95,8 @@ public sealed class BenchmarkRunner
             RawResponse = run1Completion.RawResponse,
             RequestJson = run1Completion.RequestJson,
             FinishReason = run1Completion.FinishReason,
+            LoopDetected = run1Completion.LoopDetected,
+            LoopDiagnosticsSummary = run1Completion.LoopDiagnosticsSummary,
             UsedResponseFormat = run1Completion.UsedResponseFormat,
             RetriedWithoutResponseFormat = run1Completion.RetriedWithoutResponseFormat,
             UsedThinkingControl = run1Completion.UsedThinkingControl,
@@ -114,6 +122,11 @@ public sealed class BenchmarkRunner
             streamProgress,
             cancellationToken).ConfigureAwait(false);
 
+        if (run2Completion.LoopDetected)
+        {
+            progress?.Invoke($"Run 2 stopped early by loop guard: {run2Completion.LoopDiagnosticsSummary}");
+        }
+
         progress?.Invoke("Parsing and scoring Run 2...");
         var run2Content = SplitThinkingContent(run2Completion.AssistantContent, run2Completion.ReasoningContent);
         var run2Parse = _responseParser.Parse(run2Content.OutputContent);
@@ -128,6 +141,8 @@ public sealed class BenchmarkRunner
             RawResponse = run2Completion.RawResponse,
             RequestJson = run2Completion.RequestJson,
             FinishReason = run2Completion.FinishReason,
+            LoopDetected = run2Completion.LoopDetected,
+            LoopDiagnosticsSummary = run2Completion.LoopDiagnosticsSummary,
             UsedResponseFormat = run2Completion.UsedResponseFormat,
             RetriedWithoutResponseFormat = run2Completion.RetriedWithoutResponseFormat,
             UsedThinkingControl = run2Completion.UsedThinkingControl,
@@ -176,6 +191,7 @@ public sealed class BenchmarkRunner
             Model = string.IsNullOrWhiteSpace(options.Model) ? runName : options.Model,
             MaxTokens = options.MaxTokens,
             DisableThinking = options.DisableThinking,
+            AbortOnLoop = options.AbortOnLoop,
             SourceFile = options.SourcePath,
             SourceSha256 = source.Sha256,
             ExpectedSourceSha256 = groundTruth.SourceSha256,
@@ -220,6 +236,7 @@ public sealed class BenchmarkRunner
                 AllowHashMismatch = original.AllowHashMismatch,
                 SkipResponseFormat = original.SkipResponseFormat,
                 DisableThinking = original.DisableThinking,
+                AbortOnLoop = original.AbortOnLoop,
                 ArchiveDirectory = original.ArchiveDirectory,
                 QuantOverride = original.QuantOverride
             };

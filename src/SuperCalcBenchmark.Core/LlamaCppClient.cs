@@ -6,6 +6,10 @@ namespace SuperCalcBenchmark.Core;
 
 public sealed class LlamaCppClient : IDisposable
 {
+    private const int LoopCheckMinimumChars = 1_500;
+    private const int LoopCheckIntervalChars = 750;
+    private const string LoopDetectedFinishReason = "loop_detected";
+
     private readonly HttpClient _httpClient;
     private readonly bool _ownsClient;
 
@@ -112,7 +116,7 @@ public sealed class LlamaCppClient : IDisposable
         BenchmarkOptions options)
     {
         var firstAttempt = BuildAttempts(options)[0];
-        var request = BuildChatRequest(model, systemPrompt, userPrompt, options, firstAttempt.IncludeResponseFormat, firstAttempt.IncludeThinkingControl);
+        var request = BuildChatRequest(model, systemPrompt, userPrompt, options, firstAttempt.IncludeResponseFormat, firstAttempt.IncludeThinkingControl, stream: options.AbortOnLoop);
         return JsonSerializer.Serialize(request, JsonOptions);
     }
 
@@ -142,10 +146,11 @@ public sealed class LlamaCppClient : IDisposable
             // (otherwise tokens from a retried attempt would append to the failed one).
             streamProgress?.Report(ChatStreamDelta.AttemptStart(attempt.Label, i, attempts.Count));
 
-            var request = BuildChatRequest(model, systemPrompt, userPrompt, options, attempt.IncludeResponseFormat, attempt.IncludeThinkingControl, stream: streamProgress is not null);
+            var useStreaming = streamProgress is not null || options.AbortOnLoop;
+            var request = BuildChatRequest(model, systemPrompt, userPrompt, options, attempt.IncludeResponseFormat, attempt.IncludeThinkingControl, stream: useStreaming);
 
-            var completion = streamProgress is not null
-                ? await PostChatCompletionStreamingAsync(serverUrl, request, streamProgress, cancellationToken).ConfigureAwait(false)
+            var completion = useStreaming
+                ? await PostChatCompletionStreamingAsync(serverUrl, request, streamProgress, options.AbortOnLoop, cancellationToken).ConfigureAwait(false)
                 : await PostChatCompletionAsync(serverUrl, request, cancellationToken).ConfigureAwait(false);
 
             if (!completion.Success)
@@ -163,6 +168,11 @@ public sealed class LlamaCppClient : IDisposable
             };
 
             firstSuccessful ??= result;
+            if (result.LoopDetected)
+            {
+                return result;
+            }
+
             if (!ReturnedOnlyReasoning(result))
             {
                 return result;
@@ -334,7 +344,8 @@ public sealed class LlamaCppClient : IDisposable
     private async Task<(bool Success, ChatCompletionResult? Result, string Error)> PostChatCompletionStreamingAsync(
         string serverUrl,
         object request,
-        IProgress<ChatStreamDelta> streamProgress,
+        IProgress<ChatStreamDelta>? streamProgress,
+        bool abortOnLoop,
         CancellationToken cancellationToken)
     {
         var requestJson = JsonSerializer.Serialize(request, JsonOptions);
@@ -358,7 +369,11 @@ public sealed class LlamaCppClient : IDisposable
         var contentBuilder = new StringBuilder();
         var reasoningBuilder = new StringBuilder();
         var rawBuilder = new StringBuilder();
+        var nonSseBuilder = new StringBuilder();
         var finishReason = string.Empty;
+        var loopDetected = false;
+        var loopDiagnosticsSummary = string.Empty;
+        var loopState = new StreamLoopState();
 
         try
         {
@@ -383,6 +398,13 @@ public sealed class LlamaCppClient : IDisposable
 
                 if (!line.StartsWith("data:", StringComparison.Ordinal))
                 {
+                    // Some OpenAI-compatible test doubles or gateways ignore stream=true
+                    // and return a normal JSON body. Keep those lines so we can parse the
+                    // response after the read completes instead of treating it as empty.
+                    if (rawBuilder.Length == 0 && contentBuilder.Length == 0 && reasoningBuilder.Length == 0)
+                    {
+                        nonSseBuilder.AppendLine(line);
+                    }
                     continue;
                 }
 
@@ -400,6 +422,14 @@ public sealed class LlamaCppClient : IDisposable
                 rawBuilder.AppendLine(payload);
 
                 finishReason = ConsumeStreamChunk(payload, contentBuilder, reasoningBuilder, finishReason, streamProgress);
+                if (abortOnLoop && loopState.TryDetect(contentBuilder, reasoningBuilder, out var diagnosticsSummary))
+                {
+                    loopDetected = true;
+                    loopDiagnosticsSummary = diagnosticsSummary;
+                    finishReason = LoopDetectedFinishReason;
+                    streamProgress?.Report(ChatStreamDelta.LoopDetected(diagnosticsSummary));
+                    break;
+                }
             }
         }
         catch (OperationCanceledException)
@@ -416,6 +446,31 @@ public sealed class LlamaCppClient : IDisposable
             }
         }
 
+        if (rawBuilder.Length == 0 && nonSseBuilder.Length > 0 && contentBuilder.Length == 0 && reasoningBuilder.Length == 0)
+        {
+            try
+            {
+                var fallbackText = nonSseBuilder.ToString();
+                var extracted = ExtractChatMessageContent(fallbackText);
+                return (true, new ChatCompletionResult
+                {
+                    AssistantContent = extracted.AssistantContent,
+                    ReasoningContent = extracted.ReasoningContent,
+                    FinishReason = extracted.FinishReason,
+                    RawResponse = fallbackText.TrimEnd(),
+                    RequestJson = requestJson,
+                    UsedResponseFormat = requestJson.Contains("response_format", StringComparison.Ordinal),
+                    UsedThinkingControl = requestJson.Contains("chat_template_kwargs", StringComparison.Ordinal),
+                    RetriedWithoutResponseFormat = false,
+                    RetriedWithoutThinkingControl = false
+                }, string.Empty);
+            }
+            catch (Exception ex) when (ex is JsonException or InvalidOperationException)
+            {
+                return (false, null, $"Could not parse non-SSE chat response: {ex.Message}. Raw: {TrimForError(nonSseBuilder.ToString())}");
+            }
+        }
+
         var assistantContent = contentBuilder.ToString();
         var reasoningContent = reasoningBuilder.ToString();
 
@@ -424,6 +479,8 @@ public sealed class LlamaCppClient : IDisposable
             AssistantContent = assistantContent,
             ReasoningContent = reasoningContent,
             FinishReason = finishReason,
+            LoopDetected = loopDetected,
+            LoopDiagnosticsSummary = loopDiagnosticsSummary,
             RawResponse = rawBuilder.ToString().TrimEnd(),
             RequestJson = requestJson,
             UsedResponseFormat = requestJson.Contains("response_format", StringComparison.Ordinal),
@@ -438,7 +495,7 @@ public sealed class LlamaCppClient : IDisposable
         StringBuilder contentBuilder,
         StringBuilder reasoningBuilder,
         string finishReason,
-        IProgress<ChatStreamDelta> streamProgress)
+        IProgress<ChatStreamDelta>? streamProgress)
     {
         JsonDocument document;
         try
@@ -492,13 +549,13 @@ public sealed class LlamaCppClient : IDisposable
             if (!string.IsNullOrEmpty(reasoningPiece))
             {
                 reasoningBuilder.Append(reasoningPiece);
-                streamProgress.Report(ChatStreamDelta.Reasoning(reasoningPiece));
+                streamProgress?.Report(ChatStreamDelta.Reasoning(reasoningPiece));
             }
 
             if (!string.IsNullOrEmpty(contentPiece))
             {
                 contentBuilder.Append(contentPiece);
-                streamProgress.Report(ChatStreamDelta.Content(contentPiece));
+                streamProgress?.Report(ChatStreamDelta.Content(contentPiece));
             }
         }
 
@@ -559,6 +616,52 @@ public sealed class LlamaCppClient : IDisposable
     private static bool ReturnedOnlyReasoning(ChatCompletionResult result)
     {
         return string.IsNullOrWhiteSpace(result.AssistantContent) && !string.IsNullOrWhiteSpace(result.ReasoningContent);
+    }
+
+    private sealed class StreamLoopState
+    {
+        private int _nextContentCheck = LoopCheckMinimumChars;
+        private int _nextReasoningCheck = LoopCheckMinimumChars;
+
+        public bool TryDetect(StringBuilder contentBuilder, StringBuilder reasoningBuilder, out string diagnosticsSummary)
+        {
+            if (TryDetectInBuilder(contentBuilder, "assistant content", ref _nextContentCheck, out diagnosticsSummary))
+            {
+                return true;
+            }
+
+            if (TryDetectInBuilder(reasoningBuilder, "reasoning content", ref _nextReasoningCheck, out diagnosticsSummary))
+            {
+                return true;
+            }
+
+            diagnosticsSummary = string.Empty;
+            return false;
+        }
+
+        private static bool TryDetectInBuilder(StringBuilder builder, string label, ref int nextCheckAt, out string diagnosticsSummary)
+        {
+            if (builder.Length < nextCheckAt)
+            {
+                diagnosticsSummary = string.Empty;
+                return false;
+            }
+
+            while (nextCheckAt <= builder.Length)
+            {
+                nextCheckAt += LoopCheckIntervalChars;
+            }
+
+            var diagnostics = OutputLoopDetector.Analyze(builder.ToString());
+            if (!diagnostics.HasSuspectedLoop)
+            {
+                diagnosticsSummary = string.Empty;
+                return false;
+            }
+
+            diagnosticsSummary = $"{label}: {diagnostics.Summary}";
+            return true;
+        }
     }
 
     private sealed record ChatRequestAttempt(

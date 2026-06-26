@@ -111,7 +111,7 @@ public partial class MainWindow : Window
         StatusTextBlock.Text = "Benchmark läuft... Run 1 + Run 2 können je nach Modell einige Minuten dauern.";
         AppendLog($"Benchmark startet für Modell: {model}");
         AppendLog($"Repository: {_repositoryRoot}");
-        AppendLog($"Request-Settings: max_tokens={options.MaxTokens}, response_format={!options.SkipResponseFormat}, disable_thinking={options.DisableThinking}, timeout={options.Timeout.TotalSeconds:0}s");
+        AppendLog($"Request-Settings: max_tokens={options.MaxTokens}, response_format={!options.SkipResponseFormat}, disable_thinking={options.DisableThinking}, loop_abort={options.AbortOnLoop}, timeout={options.Timeout.TotalSeconds:0}s");
 
         try
         {
@@ -356,6 +356,15 @@ public partial class MainWindow : Window
                 }
                 _liveContentChars += delta.Text.Length;
                 UpdateLiveStatusCounts();
+                break;
+
+            case ChatStreamDeltaKind.LoopDetected:
+                if (_liveStatusBlock is not null)
+                {
+                    _liveStatusBlock.Text = "Loop erkannt — Anfrage wird abgebrochen. " + delta.Text;
+                    _liveStatusBlock.Foreground = Brushes.DarkOrange;
+                }
+                AppendLog("Loop erkannt; Streaming-Anfrage wird abgebrochen: " + delta.Text);
                 break;
         }
     }
@@ -901,16 +910,23 @@ public partial class MainWindow : Window
     {
         var responseLoop = OutputLoopDetector.Analyze(artifacts.Response);
         var reasoningLoop = OutputLoopDetector.Analyze(artifacts.ReasoningContent);
-        var hasWarning = responseLoop.HasSuspectedLoop
+        var hasWarning = artifacts.LoopDetected
+            || responseLoop.HasSuspectedLoop
             || reasoningLoop.HasSuspectedLoop
             || (string.IsNullOrWhiteSpace(artifacts.Response) && !string.IsNullOrWhiteSpace(artifacts.ReasoningContent));
 
         var builder = new StringBuilder();
         builder.AppendLine($"Finish: {EmptyFallback(artifacts.FinishReason)} | Output: {artifacts.Response.Length:N0} chars | Thinking: {artifacts.ReasoningContent.Length:N0} chars");
+        builder.AppendLine($"Loop-Abbruch: {artifacts.LoopDetected} {artifacts.LoopDiagnosticsSummary}");
         builder.AppendLine($"response_format: {artifacts.UsedResponseFormat} | retry ohne response_format: {artifacts.RetriedWithoutResponseFormat} | thinking-disable hint: {artifacts.UsedThinkingControl}");
         builder.AppendLine($"Denken-vs-Sagen: {FormatReasoningDisclosure(artifacts.ReasoningDisclosure)}");
         builder.AppendLine($"Loop-Check Output: {responseLoop.Summary}");
         builder.AppendLine($"Loop-Check Thinking: {reasoningLoop.Summary}");
+
+        if (artifacts.LoopDetected)
+        {
+            builder.AppendLine("WARNUNG: Die Streaming-Anfrage wurde wegen eines wahrscheinlichen Modell-Loops vorzeitig geschlossen.");
+        }
 
         if (string.IsNullOrWhiteSpace(artifacts.Response) && !string.IsNullOrWhiteSpace(artifacts.ReasoningContent))
         {

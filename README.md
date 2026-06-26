@@ -195,7 +195,7 @@ Official/fair runs should leave thinking/reasoning enabled so each model can use
 
 For day-to-day GUI runs the default output cap is `8192` tokens and **response_format überspringen** is enabled, which is closer to llama-web-ui behavior and avoids JSON-mode hangs on models that do not handle OpenAI JSON mode well. For maximum-capability official runs you can still set Max Tokens to `-1` and clear **response_format überspringen** if the loaded server/model supports it reliably.
 
-The **Raw Outputs** tab exposes the exact request JSON, the generated user prompt, final assistant output, reasoning/thinking content, and the raw API response. Thinking is collapsed by default and rendered gray/italic; final output is highlighted red. **Prompt anzeigen** renders the Run-1 prompt and first request JSON before anything is sent to the server. The same completion diagnostics, loop/repetition checks, and the non-scoring **Denken-vs-Sagen** diagnostic are written to `report.md`: visible `reasoning_content` or inline `<think>...</think>` blocks are parsed/scored separately and compared with final-output true positives to show whether the model appeared to notice vulnerabilities it did not report.
+The **Raw Outputs** tab exposes the exact request JSON, the generated user prompt, final assistant output, reasoning/thinking content, and the raw API response. Thinking is collapsed by default and rendered gray/italic; final output is highlighted red. **Prompt anzeigen** renders the Run-1 prompt and first request JSON before anything is sent to the server. The same completion diagnostics, loop/repetition checks, and the non-scoring **Denken-vs-Sagen** diagnostic are written to `report.md`: visible `reasoning_content` or inline `<think>...</think>` blocks are parsed/scored separately and compared with final-output true positives to show whether the model appeared to notice vulnerabilities it did not report. The benchmark streams completions through a loop guard by default; if repeated loop-sized segments appear while tokens are still arriving, the client closes that request early, stores the partial output, and reports `finish_reason=loop_detected` instead of letting a small model run indefinitely.
 
 CLI quick start:
 
@@ -210,7 +210,7 @@ dotnet run --project src/SuperCalcBenchmark.Cli -- run `
   --model MODEL_ID
 ```
 
-By default the CLI leaves model thinking/reasoning enabled and sends `--max-tokens -1` to llama.cpp, meaning no client-side completion cap; the server's configured context window (`--ctx-size` / `n_ctx`) and timeout still apply. Use `--max-tokens <positive>` to cap completion length, or `--disable-thinking` for Qwen/debug runs where you want final JSON without a thinking phase.
+By default the CLI leaves model thinking/reasoning enabled, sends `--max-tokens -1` to llama.cpp, and keeps the streaming loop guard enabled. `--max-tokens -1` means no client-side completion cap; the server's configured context window (`--ctx-size` / `n_ctx`) and timeout still apply. Use `--max-tokens <positive>` to cap completion length, `--disable-thinking` for Qwen/debug runs where you want final JSON without a thinking phase, or `--no-loop-abort` only when you deliberately want to observe an unbounded repetition failure.
 
 The tool writes `run.json`, prompts, visible responses, reasoning diagnostics, raw API responses, CSV ledgers, and `report.md` to `%LOCALAPPDATA%\SuperCalcBenchmark\Runs\YYYYMMDD-HHMMSS_model\` unless `--out <dir>` is supplied. Fixture scoring is available without a live LLM server:
 

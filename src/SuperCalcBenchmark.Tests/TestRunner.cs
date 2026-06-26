@@ -25,6 +25,8 @@ internal static partial class TestRunner
         Run("llama client disables Qwen thinking when requested", LlamaClientDisablesQwenThinkingWhenRequested);
         Run("loop detector flags repeated reasoning", LoopDetectorFlagsRepeatedReasoning);
         Run("loop detector ignores normal output", LoopDetectorIgnoresNormalOutput);
+        Run("loop detector ignores perfect fixture repetition", LoopDetectorIgnoresPerfectFixtureRepetition);
+        Run("llama streaming loop guard aborts repeated reasoning", LlamaStreamingLoopGuardAbortsRepeatedReasoning);
         Run("perfect synthetic fixture scores 100", PerfectSyntheticFixtureScoresHigh);
         Run("duplicate finding is penalized", DuplicateFindingIsPenalized);
         Run("reasoning disclosure compares thinking and output true positives", ReasoningDisclosureComparesThinkingAndOutputTruePositives);
@@ -287,6 +289,32 @@ internal static partial class TestRunner
         Assert(!diagnostics.HasSuspectedLoop, "short normal output should not be flagged as a loop");
     }
 
+    private static void LoopDetectorIgnoresPerfectFixtureRepetition()
+    {
+        var fixture = File.ReadAllText(Path.Combine("tools", "response-fixtures", "perfect.json"), Encoding.UTF8);
+        var diagnostics = OutputLoopDetector.Analyze(fixture);
+        Assert(!diagnostics.HasSuspectedLoop, "normal structured fixture repetition should not be flagged as a loop");
+    }
+
+    private static void LlamaStreamingLoopGuardAbortsRepeatedReasoning()
+    {
+        var handler = new LoopingStreamHandler();
+        using var client = new LlamaCppClient(TimeSpan.FromSeconds(5), handler);
+        var result = client.CreateChatCompletionAsync(
+            "http://unit.test",
+            "loop-model",
+            "system",
+            "user",
+            new BenchmarkOptions { Model = "loop-model" },
+            cancellationToken: CancellationToken.None).GetAwaiter().GetResult();
+
+        Assert(handler.RequestBody.Contains("\"stream\": true", StringComparison.Ordinal), "loop guard should force streaming so it can interrupt a model loop");
+        Assert(result.LoopDetected, "streaming loop guard should mark the result as loop-detected");
+        Assert(result.FinishReason == "loop_detected", $"finish reason should be loop_detected, got {result.FinishReason}");
+        Assert(result.LoopDiagnosticsSummary.Contains("reasoning content", StringComparison.Ordinal), "diagnostics should identify the looping channel");
+        Assert(result.ReasoningContent.Length < handler.FullReasoningLength, "guard should stop reading before the full synthetic loop is consumed");
+    }
+
     private static void PerfectSyntheticFixtureScoresHigh()
     {
         var (groundTruth, source) = LoadGroundTruthAndSource();
@@ -467,6 +495,47 @@ internal static partial class TestRunner
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(responseJson, Encoding.UTF8, "application/json")
+            };
+        }
+    }
+
+    private sealed class LoopingStreamHandler : HttpMessageHandler
+    {
+        public string RequestBody { get; private set; } = string.Empty;
+        public int FullReasoningLength { get; private set; }
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            RequestBody = request.Content is null
+                ? string.Empty
+                : await request.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+
+            const string repeatedLine = "I will inspect validate_password, then I will inspect validate_password again, then I will inspect validate_password again because the same branch may be important.\n";
+            var sse = new StringBuilder();
+            for (var i = 0; i < 120; i++)
+            {
+                FullReasoningLength += repeatedLine.Length;
+                var payload = JsonSerializer.Serialize(new Dictionary<string, object?>
+                {
+                    ["choices"] = new object[]
+                    {
+                        new Dictionary<string, object?>
+                        {
+                            ["finish_reason"] = null,
+                            ["delta"] = new Dictionary<string, object?>
+                            {
+                                ["reasoning_content"] = repeatedLine
+                            }
+                        }
+                    }
+                });
+                sse.Append("data: ").Append(payload).Append("\n\n");
+            }
+
+            sse.Append("data: [DONE]\n\n");
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(sse.ToString(), Encoding.UTF8, "text/event-stream")
             };
         }
     }

@@ -232,6 +232,7 @@ internal static class Program
             AllowHashMismatch = args.Has("--allow-hash-mismatch"),
             SkipResponseFormat = args.Has("--skip-response-format"),
             DisableThinking = args.Has("--disable-thinking"),
+            AbortOnLoop = !args.Has("--no-loop-abort"),
             ArchiveDirectory = ResolveArchiveDirectory(args),
             QuantOverride = args.GetNullable("--quant")
         };
@@ -316,6 +317,7 @@ internal static class Program
         Console.WriteLine("  --timeout-seconds <int>    Default: 1200");
         Console.WriteLine("  --skip-response-format     Do not send llama.cpp response_format");
         Console.WriteLine("  --disable-thinking         Send chat_template_kwargs.enable_thinking=false for Qwen/debug runs");
+        Console.WriteLine("  --no-loop-abort            Disable streaming repetition guard (not recommended)");
         Console.WriteLine("  --allow-hash-mismatch      Development escape hatch; do not use for official scoring");
         Console.WriteLine();
         Console.WriteLine("Archive / comparison options:");
