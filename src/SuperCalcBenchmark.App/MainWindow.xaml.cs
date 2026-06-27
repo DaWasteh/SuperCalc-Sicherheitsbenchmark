@@ -1,10 +1,12 @@
 using System.Diagnostics;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Media;
 using SuperCalcBenchmark.Core;
 
@@ -18,6 +20,49 @@ public partial class MainWindow : Window
     private CancellationTokenSource? _run2ManualStop;
     private int _activeRunNumber;
     private BenchmarkRunResult? _lastResult;
+    private BenchmarkTheme _currentTheme = BenchmarkTheme.Light;
+
+    private enum BenchmarkTheme
+    {
+        Light,
+        Dark
+    }
+
+    private const string WindowBackgroundBrushKey = "WindowBackgroundBrush";
+    private const string SurfaceBrushKey = "SurfaceBrush";
+    private const string SurfaceRaisedBrushKey = "SurfaceRaisedBrush";
+    private const string ControlBackgroundBrushKey = "ControlBackgroundBrush";
+    private const string ControlDisabledBackgroundBrushKey = "ControlDisabledBackgroundBrush";
+    private const string ButtonBackgroundBrushKey = "ButtonBackgroundBrush";
+    private const string ButtonHoverBackgroundBrushKey = "ButtonHoverBackgroundBrush";
+    private const string BorderBrushKey = "BorderBrush";
+    private const string TextPrimaryBrushKey = "TextPrimaryBrush";
+    private const string TextSecondaryBrushKey = "TextSecondaryBrush";
+    private const string TextDisabledBrushKey = "TextDisabledBrush";
+    private const string AccentBrushKey = "AccentBrush";
+    private const string AccentForegroundBrushKey = "AccentForegroundBrush";
+    private const string SelectedBackgroundBrushKey = "SelectedBackgroundBrush";
+    private const string SelectedForegroundBrushKey = "SelectedForegroundBrush";
+    private const string DataGridHeaderBackgroundBrushKey = "DataGridHeaderBackgroundBrush";
+    private const string DataGridAlternatingRowBrushKey = "DataGridAlternatingRowBrush";
+    private const string InfoTextBrushKey = "InfoTextBrush";
+    private const string InfoBackgroundBrushKey = "InfoBackgroundBrush";
+    private const string WarningTextBrushKey = "WarningTextBrush";
+    private const string WarningBackgroundBrushKey = "WarningBackgroundBrush";
+    private const string DangerTextBrushKey = "DangerTextBrush";
+    private const string DangerBackgroundBrushKey = "DangerBackgroundBrush";
+    private const string CodeBackgroundBrushKey = "CodeBackgroundBrush";
+    private const string RequestTextBrushKey = "RequestTextBrush";
+    private const string RequestBackgroundBrushKey = "RequestBackgroundBrush";
+    private const string OutputTextBrushKey = "OutputTextBrush";
+    private const string OutputBackgroundBrushKey = "OutputBackgroundBrush";
+    private const string ReasoningTextBrushKey = "ReasoningTextBrush";
+    private const string ReasoningBackgroundBrushKey = "ReasoningBackgroundBrush";
+
+    private const int DwmwaUseImmersiveDarkMode = 20;
+    private const int DwmwaUseImmersiveDarkModeBefore20H1 = 19;
+    private const int DwmwaCaptionColor = 35;
+    private const int DwmwaTextColor = 36;
 
     // Live-streaming UI state. Tokens arrive via IProgress and are appended to these
     // text boxes in real time. _activeLivePanel points at whichever run is currently
@@ -32,6 +77,8 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        SourceInitialized += MainWindow_SourceInitialized;
+        ApplyTheme(BenchmarkTheme.Light);
         _repositoryRoot = FindRepositoryRoot();
         DotNetInfoTextBlock.Text = $".NET {Environment.Version.Major} | {_repositoryRoot}";
         ShowRawOutputPlaceholder(Run1RawPanel, "Noch kein Run-1-Output. Nach dem Benchmark siehst du hier Prompt, Thinking, Output und Raw API Response.");
@@ -39,6 +86,190 @@ public partial class MainWindow : Window
         AppendLog("Bereit. Wenn du ein neues Modell in llama-server geladen hast: Refresh Models klicken, Modell wählen, Benchmark starten.");
         InitializeComparisonPlaceholder();
         Loaded += MainWindow_Loaded;
+    }
+
+    private void ThemeComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (sender is ComboBox comboBox)
+        {
+            ApplyTheme(comboBox.SelectedIndex == 1 ? BenchmarkTheme.Dark : BenchmarkTheme.Light);
+        }
+    }
+
+    private void MainWindow_SourceInitialized(object? sender, EventArgs e)
+    {
+        ApplyWindowChromeTheme(_currentTheme);
+    }
+
+    private void ApplyTheme(BenchmarkTheme theme)
+    {
+        _currentTheme = theme;
+        var resources = Application.Current.Resources;
+
+        if (theme == BenchmarkTheme.Dark)
+        {
+            SetBrush(resources, WindowBackgroundBrushKey, "#0F172A");
+            SetBrush(resources, SurfaceBrushKey, "#111827");
+            SetBrush(resources, SurfaceRaisedBrushKey, "#1F2937");
+            SetBrush(resources, ControlBackgroundBrushKey, "#0B1220");
+            SetBrush(resources, ControlDisabledBackgroundBrushKey, "#1E293B");
+            SetBrush(resources, ButtonBackgroundBrushKey, "#1F2937");
+            SetBrush(resources, ButtonHoverBackgroundBrushKey, "#334155");
+            SetBrush(resources, BorderBrushKey, "#475569");
+            SetBrush(resources, TextPrimaryBrushKey, "#E5E7EB");
+            SetBrush(resources, TextSecondaryBrushKey, "#AAB4C2");
+            SetBrush(resources, TextDisabledBrushKey, "#94A3B8");
+            SetBrush(resources, AccentBrushKey, "#60A5FA");
+            SetBrush(resources, AccentForegroundBrushKey, "#06101F");
+            SetBrush(resources, SelectedBackgroundBrushKey, "#1D4ED8");
+            SetBrush(resources, SelectedForegroundBrushKey, "#F8FAFC");
+            SetBrush(resources, DataGridHeaderBackgroundBrushKey, "#1E293B");
+            SetBrush(resources, DataGridAlternatingRowBrushKey, "#172033");
+            SetBrush(resources, InfoTextBrushKey, "#93C5FD");
+            SetBrush(resources, InfoBackgroundBrushKey, "#0F2746");
+            SetBrush(resources, WarningTextBrushKey, "#FBBF24");
+            SetBrush(resources, WarningBackgroundBrushKey, "#3A2A0B");
+            SetBrush(resources, DangerTextBrushKey, "#FCA5A5");
+            SetBrush(resources, DangerBackgroundBrushKey, "#3A1017");
+            SetBrush(resources, CodeBackgroundBrushKey, "#0B1220");
+            SetBrush(resources, RequestTextBrushKey, "#C4B5FD");
+            SetBrush(resources, RequestBackgroundBrushKey, "#151A33");
+            SetBrush(resources, OutputTextBrushKey, "#FDA4AF");
+            SetBrush(resources, OutputBackgroundBrushKey, "#311217");
+            SetBrush(resources, ReasoningTextBrushKey, "#CBD5E1");
+            SetBrush(resources, ReasoningBackgroundBrushKey, "#151B27");
+            ApplySystemBrushes(resources, theme);
+            ApplyWindowChromeTheme(theme);
+            return;
+        }
+
+        SetBrush(resources, WindowBackgroundBrushKey, "#F5F7FA");
+        SetBrush(resources, SurfaceBrushKey, "#FFFFFF");
+        SetBrush(resources, SurfaceRaisedBrushKey, "#FAFBFC");
+        SetBrush(resources, ControlBackgroundBrushKey, "#FFFFFF");
+        SetBrush(resources, ControlDisabledBackgroundBrushKey, "#EEF1F5");
+        SetBrush(resources, ButtonBackgroundBrushKey, "#F3F4F6");
+        SetBrush(resources, ButtonHoverBackgroundBrushKey, "#E5E7EB");
+        SetBrush(resources, BorderBrushKey, "#D0D7DE");
+        SetBrush(resources, TextPrimaryBrushKey, "#1F2937");
+        SetBrush(resources, TextSecondaryBrushKey, "#5B6472");
+        SetBrush(resources, TextDisabledBrushKey, "#4B5563");
+        SetBrush(resources, AccentBrushKey, "#2563EB");
+        SetBrush(resources, AccentForegroundBrushKey, "#FFFFFF");
+        SetBrush(resources, SelectedBackgroundBrushKey, "#DBEAFE");
+        SetBrush(resources, SelectedForegroundBrushKey, "#1E3A8A");
+        SetBrush(resources, DataGridHeaderBackgroundBrushKey, "#F3F4F6");
+        SetBrush(resources, DataGridAlternatingRowBrushKey, "#F8FAFC");
+        SetBrush(resources, InfoTextBrushKey, "#1D4ED8");
+        SetBrush(resources, InfoBackgroundBrushKey, "#EFF6FF");
+        SetBrush(resources, WarningTextBrushKey, "#B45309");
+        SetBrush(resources, WarningBackgroundBrushKey, "#FFF7ED");
+        SetBrush(resources, DangerTextBrushKey, "#B91C1C");
+        SetBrush(resources, DangerBackgroundBrushKey, "#FEF2F2");
+        SetBrush(resources, CodeBackgroundBrushKey, "#FFFFFF");
+        SetBrush(resources, RequestTextBrushKey, "#4338CA");
+        SetBrush(resources, RequestBackgroundBrushKey, "#F6F8FF");
+        SetBrush(resources, OutputTextBrushKey, "#B91C1C");
+        SetBrush(resources, OutputBackgroundBrushKey, "#FFF6F6");
+        SetBrush(resources, ReasoningTextBrushKey, "#4B5563");
+        SetBrush(resources, ReasoningBackgroundBrushKey, "#F8F8F8");
+        ApplySystemBrushes(resources, theme);
+        ApplyWindowChromeTheme(theme);
+    }
+
+    private void ApplyWindowChromeTheme(BenchmarkTheme theme)
+    {
+        if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        {
+            return;
+        }
+
+        var handle = new WindowInteropHelper(this).Handle;
+        if (handle == IntPtr.Zero)
+        {
+            return;
+        }
+
+        var isDark = theme == BenchmarkTheme.Dark ? 1 : 0;
+        _ = DwmSetWindowAttribute(handle, DwmwaUseImmersiveDarkMode, ref isDark, Marshal.SizeOf<int>());
+        _ = DwmSetWindowAttribute(handle, DwmwaUseImmersiveDarkModeBefore20H1, ref isDark, Marshal.SizeOf<int>());
+
+        var captionColor = ColorRef(theme == BenchmarkTheme.Dark ? "#0F172A" : "#F5F7FA");
+        var titleTextColor = ColorRef(theme == BenchmarkTheme.Dark ? "#F8FAFC" : "#111827");
+        _ = DwmSetWindowAttribute(handle, DwmwaCaptionColor, ref captionColor, Marshal.SizeOf<int>());
+        _ = DwmSetWindowAttribute(handle, DwmwaTextColor, ref titleTextColor, Marshal.SizeOf<int>());
+    }
+
+    private static int ColorRef(string hex)
+    {
+        var color = (Color)ColorConverter.ConvertFromString(hex)!;
+        return color.R | (color.G << 8) | (color.B << 16);
+    }
+
+    [DllImport("dwmapi.dll")]
+    private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int attributeValue, int attributeSize);
+
+    private static void ApplySystemBrushes(ResourceDictionary resources, BenchmarkTheme theme)
+    {
+        if (theme == BenchmarkTheme.Dark)
+        {
+            // Several built-in WPF control templates (ComboBox, TabItem, disabled Button,
+            // ScrollBar) use SystemColors instead of the control's Background setter.
+            // Override them too, otherwise dark mode gets light-gray controls with pale text.
+            SetBrush(resources, SystemColors.ControlBrushKey, "#1F2937");
+            SetBrush(resources, SystemColors.ControlTextBrushKey, "#E5E7EB");
+            SetBrush(resources, SystemColors.ControlDarkBrushKey, "#475569");
+            SetBrush(resources, SystemColors.ControlDarkDarkBrushKey, "#64748B");
+            SetBrush(resources, SystemColors.ControlLightBrushKey, "#334155");
+            SetBrush(resources, SystemColors.ControlLightLightBrushKey, "#0B1220");
+            SetBrush(resources, SystemColors.WindowBrushKey, "#0B1220");
+            SetBrush(resources, SystemColors.WindowTextBrushKey, "#E5E7EB");
+            SetBrush(resources, SystemColors.GrayTextBrushKey, "#94A3B8");
+            SetBrush(resources, SystemColors.HighlightBrushKey, "#1D4ED8");
+            SetBrush(resources, SystemColors.HighlightTextBrushKey, "#F8FAFC");
+            SetBrush(resources, SystemColors.InactiveBorderBrushKey, "#475569");
+            SetBrush(resources, SystemColors.ActiveBorderBrushKey, "#64748B");
+            SetBrush(resources, SystemColors.WindowFrameBrushKey, "#475569");
+            SetBrush(resources, SystemColors.MenuBrushKey, "#111827");
+            SetBrush(resources, SystemColors.MenuTextBrushKey, "#E5E7EB");
+            SetBrush(resources, SystemColors.MenuHighlightBrushKey, "#1D4ED8");
+            SetBrush(resources, SystemColors.MenuBarBrushKey, "#111827");
+            SetBrush(resources, SystemColors.ScrollBarBrushKey, "#1E293B");
+            SetBrush(resources, SystemColors.HotTrackBrushKey, "#93C5FD");
+            SetBrush(resources, SystemColors.InfoBrushKey, "#0F2746");
+            SetBrush(resources, SystemColors.InfoTextBrushKey, "#E5E7EB");
+            return;
+        }
+
+        SetBrush(resources, SystemColors.ControlBrushKey, "#F3F4F6");
+        SetBrush(resources, SystemColors.ControlTextBrushKey, "#1F2937");
+        SetBrush(resources, SystemColors.ControlDarkBrushKey, "#D0D7DE");
+        SetBrush(resources, SystemColors.ControlDarkDarkBrushKey, "#9CA3AF");
+        SetBrush(resources, SystemColors.ControlLightBrushKey, "#E5E7EB");
+        SetBrush(resources, SystemColors.ControlLightLightBrushKey, "#FFFFFF");
+        SetBrush(resources, SystemColors.WindowBrushKey, "#FFFFFF");
+        SetBrush(resources, SystemColors.WindowTextBrushKey, "#1F2937");
+        SetBrush(resources, SystemColors.GrayTextBrushKey, "#4B5563");
+        SetBrush(resources, SystemColors.HighlightBrushKey, "#2563EB");
+        SetBrush(resources, SystemColors.HighlightTextBrushKey, "#FFFFFF");
+        SetBrush(resources, SystemColors.InactiveBorderBrushKey, "#D0D7DE");
+        SetBrush(resources, SystemColors.ActiveBorderBrushKey, "#9CA3AF");
+        SetBrush(resources, SystemColors.WindowFrameBrushKey, "#D0D7DE");
+        SetBrush(resources, SystemColors.MenuBrushKey, "#FFFFFF");
+        SetBrush(resources, SystemColors.MenuTextBrushKey, "#1F2937");
+        SetBrush(resources, SystemColors.MenuHighlightBrushKey, "#DBEAFE");
+        SetBrush(resources, SystemColors.MenuBarBrushKey, "#FFFFFF");
+        SetBrush(resources, SystemColors.ScrollBarBrushKey, "#E5E7EB");
+        SetBrush(resources, SystemColors.HotTrackBrushKey, "#1D4ED8");
+        SetBrush(resources, SystemColors.InfoBrushKey, "#EFF6FF");
+        SetBrush(resources, SystemColors.InfoTextBrushKey, "#1F2937");
+    }
+
+    private static void SetBrush(ResourceDictionary resources, object key, string color)
+    {
+        var brush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(color)!);
+        brush.Freeze();
+        resources[key] = brush;
     }
 
     private void InitializeComparisonPlaceholder()
@@ -233,7 +464,7 @@ public partial class MainWindow : Window
         if (_activeRunNumber == runNumber && _liveStatusBlock is not null)
         {
             _liveStatusBlock.Text = message;
-            _liveStatusBlock.Foreground = Brushes.DarkOrange;
+            _liveStatusBlock.SetResourceReference(TextBlock.ForegroundProperty, WarningTextBrushKey);
         }
     }
 
@@ -346,10 +577,10 @@ public partial class MainWindow : Window
         {
             Text = $"{runLabel}: warte auf erste Tokens vom Server...",
             FontWeight = FontWeights.SemiBold,
-            Foreground = Brushes.SteelBlue,
             TextWrapping = TextWrapping.Wrap,
             Margin = new Thickness(0, 0, 0, 6)
         };
+        _liveStatusBlock.SetResourceReference(TextBlock.ForegroundProperty, InfoTextBrushKey);
         panel.Children.Add(_liveStatusBlock);
 
         _liveReasoningBox = CreateLiveBox();
@@ -373,7 +604,7 @@ public partial class MainWindow : Window
 
     private static TextBox CreateLiveBox()
     {
-        return new TextBox
+        var textBox = new TextBox
         {
             IsReadOnly = true,
             AcceptsReturn = true,
@@ -383,9 +614,12 @@ public partial class MainWindow : Window
             MinHeight = 90,
             MaxHeight = 300,
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-            HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
-            BorderBrush = Brushes.LightGray
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Auto
         };
+        textBox.SetResourceReference(Control.ForegroundProperty, TextPrimaryBrushKey);
+        textBox.SetResourceReference(Control.BackgroundProperty, CodeBackgroundBrushKey);
+        textBox.SetResourceReference(Control.BorderBrushProperty, BorderBrushKey);
+        return textBox;
     }
 
     private void OnStreamDelta(ChatStreamDelta delta)
@@ -405,6 +639,7 @@ public partial class MainWindow : Window
                     _liveStatusBlock.Text = delta.AttemptCount > 1
                         ? $"Versuch {attemptNo}/{delta.AttemptCount} ({delta.AttemptLabel}) — streamt..."
                         : $"Streamt... ({delta.AttemptLabel})";
+                    _liveStatusBlock.SetResourceReference(TextBlock.ForegroundProperty, InfoTextBrushKey);
                 }
                 break;
 
@@ -432,7 +667,7 @@ public partial class MainWindow : Window
                 if (_liveStatusBlock is not null)
                 {
                     _liveStatusBlock.Text = "Loop erkannt — Anfrage wird abgebrochen. " + delta.Text;
-                    _liveStatusBlock.Foreground = Brushes.DarkOrange;
+                    _liveStatusBlock.SetResourceReference(TextBlock.ForegroundProperty, WarningTextBrushKey);
                 }
                 AppendLog("Loop erkannt; Streaming-Anfrage wird abgebrochen: " + delta.Text);
                 break;
@@ -959,36 +1194,41 @@ public partial class MainWindow : Window
     private static void PopulatePromptPreviewPanel(StackPanel panel, string title, string prompt, string requestJson)
     {
         panel.Children.Clear();
-        panel.Children.Add(new Border
+
+        var titleText = new TextBlock
+        {
+            Text = title,
+            FontWeight = FontWeights.SemiBold,
+            TextWrapping = TextWrapping.Wrap
+        };
+        titleText.SetResourceReference(TextBlock.ForegroundProperty, InfoTextBrushKey);
+
+        var titleBorder = new Border
         {
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(4),
             Padding = new Thickness(8),
             Margin = new Thickness(0, 0, 0, 8),
-            BorderBrush = Brushes.SteelBlue,
-            Background = new SolidColorBrush(Color.FromRgb(240, 247, 255)),
-            Child = new TextBlock
-            {
-                Text = title,
-                Foreground = Brushes.SteelBlue,
-                FontWeight = FontWeights.SemiBold,
-                TextWrapping = TextWrapping.Wrap
-            }
-        });
+            Child = titleText
+        };
+        titleBorder.SetResourceReference(Border.BorderBrushProperty, InfoTextBrushKey);
+        titleBorder.SetResourceReference(Border.BackgroundProperty, InfoBackgroundBrushKey);
+        panel.Children.Add(titleBorder);
+
         panel.Children.Add(CreateTextExpander(
             "Erste Request-JSON (System + User + Parameter)",
             requestJson,
-            Brushes.DarkSlateBlue,
+            RequestTextBrushKey,
             FontStyles.Normal,
             isExpanded: true,
-            background: Color.FromRgb(246, 248, 255)));
+            backgroundBrushKey: RequestBackgroundBrushKey));
         panel.Children.Add(CreateTextExpander(
             $"User-Prompt ({prompt.Length:N0} chars)",
             prompt,
-            Brushes.Black,
+            TextPrimaryBrushKey,
             FontStyles.Normal,
             isExpanded: true,
-            background: Colors.White));
+            backgroundBrushKey: CodeBackgroundBrushKey));
     }
 
     private static void PopulateRawOutputPanel(StackPanel panel, BenchmarkRunArtifacts artifacts)
@@ -998,50 +1238,51 @@ public partial class MainWindow : Window
         panel.Children.Add(CreateTextExpander(
             "Gesendeter Request JSON (System + User + Parameter)",
             artifacts.RequestJson,
-            Brushes.DarkSlateBlue,
+            RequestTextBrushKey,
             FontStyles.Normal,
             isExpanded: false,
-            background: Color.FromRgb(246, 248, 255)));
+            backgroundBrushKey: RequestBackgroundBrushKey));
         panel.Children.Add(CreateTextExpander(
             "User-Prompt aus dem Programm",
             artifacts.Prompt,
-            Brushes.Black,
+            TextPrimaryBrushKey,
             FontStyles.Normal,
             isExpanded: false,
-            background: Colors.White));
+            backgroundBrushKey: CodeBackgroundBrushKey));
         panel.Children.Add(CreateTextExpander(
             $"assistant message.content — OUTPUT ({artifacts.Response.Length:N0} chars)",
             artifacts.Response,
-            Brushes.Red,
+            OutputTextBrushKey,
             FontStyles.Normal,
             isExpanded: true,
-            background: Color.FromRgb(255, 246, 246)));
+            backgroundBrushKey: OutputBackgroundBrushKey));
         panel.Children.Add(CreateTextExpander(
             $"assistant message.reasoning_content — THINKING ({artifacts.ReasoningContent.Length:N0} chars)",
             artifacts.ReasoningContent,
-            Brushes.DimGray,
+            ReasoningTextBrushKey,
             FontStyles.Italic,
             isExpanded: false,
-            background: Color.FromRgb(248, 248, 248)));
+            backgroundBrushKey: ReasoningBackgroundBrushKey));
         panel.Children.Add(CreateTextExpander(
             $"Raw API response, unverändert ({artifacts.RawResponse.Length:N0} chars)",
             artifacts.RawResponse,
-            Brushes.Black,
+            TextPrimaryBrushKey,
             FontStyles.Normal,
             isExpanded: false,
-            background: Colors.White));
+            backgroundBrushKey: CodeBackgroundBrushKey));
     }
 
     private static void ShowRawOutputPlaceholder(StackPanel panel, string message)
     {
         panel.Children.Clear();
-        panel.Children.Add(new TextBlock
+        var placeholder = new TextBlock
         {
             Text = message,
-            Foreground = Brushes.DimGray,
             TextWrapping = TextWrapping.Wrap,
             Margin = new Thickness(4)
-        });
+        };
+        placeholder.SetResourceReference(TextBlock.ForegroundProperty, TextSecondaryBrushKey);
+        panel.Children.Add(placeholder);
     }
 
     private static Border CreateDiagnosticsBlock(BenchmarkRunArtifacts artifacts)
@@ -1081,22 +1322,25 @@ public partial class MainWindow : Window
         AppendRepetitionDetails(builder, "Output", responseLoop);
         AppendRepetitionDetails(builder, "Thinking", reasoningLoop);
 
-        return new Border
+        var textBlock = new TextBlock
+        {
+            Text = builder.ToString().TrimEnd(),
+            FontFamily = new FontFamily("Segoe UI"),
+            TextWrapping = TextWrapping.Wrap
+        };
+        textBlock.SetResourceReference(TextBlock.ForegroundProperty, hasWarning ? DangerTextBrushKey : TextSecondaryBrushKey);
+
+        var border = new Border
         {
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(4),
             Padding = new Thickness(8),
             Margin = new Thickness(0, 0, 0, 8),
-            BorderBrush = hasWarning ? Brushes.DarkOrange : Brushes.LightGray,
-            Background = new SolidColorBrush(hasWarning ? Color.FromRgb(255, 248, 225) : Color.FromRgb(247, 247, 247)),
-            Child = new TextBlock
-            {
-                Text = builder.ToString().TrimEnd(),
-                FontFamily = new FontFamily("Segoe UI"),
-                Foreground = hasWarning ? Brushes.DarkRed : Brushes.DimGray,
-                TextWrapping = TextWrapping.Wrap
-            }
+            Child = textBlock
         };
+        border.SetResourceReference(Border.BorderBrushProperty, hasWarning ? WarningTextBrushKey : BorderBrushKey);
+        border.SetResourceReference(Border.BackgroundProperty, hasWarning ? WarningBackgroundBrushKey : SurfaceRaisedBrushKey);
+        return border;
     }
 
     private static void AppendRepetitionDetails(StringBuilder builder, string label, OutputLoopDiagnostics diagnostics)
@@ -1115,45 +1359,50 @@ public partial class MainWindow : Window
     private static Expander CreateTextExpander(
         string header,
         string text,
-        Brush foreground,
+        string foregroundBrushKey,
         FontStyle fontStyle,
         bool isExpanded,
-        Color background)
+        string backgroundBrushKey)
     {
         var displayText = string.IsNullOrEmpty(text) ? "<empty>" : text;
+        var paragraph = new Paragraph(new Run(displayText))
+        {
+            Margin = new Thickness(0),
+            FontStyle = fontStyle
+        };
+        paragraph.SetResourceReference(TextElement.ForegroundProperty, foregroundBrushKey);
+
         var document = new FlowDocument
         {
             PagePadding = new Thickness(8),
             FontFamily = new FontFamily("Consolas"),
             FontSize = 12,
-            PageWidth = 20000,
-            Background = new SolidColorBrush(background)
+            PageWidth = 20000
         };
-        document.Blocks.Add(new Paragraph(new Run(displayText))
+        document.SetResourceReference(FlowDocument.BackgroundProperty, backgroundBrushKey);
+        document.Blocks.Add(paragraph);
+
+        var richTextBox = new RichTextBox
         {
-            Margin = new Thickness(0),
-            Foreground = foreground,
-            FontStyle = fontStyle
-        });
+            IsReadOnly = true,
+            FontFamily = new FontFamily("Consolas"),
+            FontSize = 12,
+            MinHeight = 90,
+            MaxHeight = 360,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+            Document = document
+        };
+        richTextBox.SetResourceReference(Control.ForegroundProperty, foregroundBrushKey);
+        richTextBox.SetResourceReference(Control.BackgroundProperty, backgroundBrushKey);
+        richTextBox.SetResourceReference(Control.BorderBrushProperty, BorderBrushKey);
 
         return new Expander
         {
             Header = header,
             IsExpanded = isExpanded,
             Margin = new Thickness(0, 6, 0, 0),
-            Content = new RichTextBox
-            {
-                IsReadOnly = true,
-                FontFamily = new FontFamily("Consolas"),
-                FontSize = 12,
-                MinHeight = 90,
-                MaxHeight = 360,
-                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
-                BorderBrush = Brushes.LightGray,
-                Background = new SolidColorBrush(background),
-                Document = document
-            }
+            Content = richTextBox
         };
     }
 
