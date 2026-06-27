@@ -76,6 +76,7 @@ public sealed class ReportWriter
         builder.AppendLine($"- Server: `{result.ServerUrl}`");
         builder.AppendLine($"- Server context window: `{(result.ServerContextSize?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown")}`");
         builder.AppendLine($"- Requested max completion tokens: `{FormatMaxTokens(result.MaxTokens)}`");
+        builder.AppendLine($"- HTTP request timeout: `{FormatTimeout(result.TimeoutSeconds)}`");
         builder.AppendLine($"- Thinking disable requested: `{result.DisableThinking}`");
         builder.AppendLine($"- Streaming loop guard enabled: `{result.AbortOnLoop}`");
         builder.AppendLine($"- Started: `{result.StartedAt:O}`");
@@ -307,6 +308,8 @@ public sealed class ReportWriter
 
     private static string FormatMaxTokens(int maxTokens) => maxTokens < 0 ? "-1 (server max/unbounded)" : maxTokens.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
+    private static string FormatTimeout(int seconds) => seconds <= 0 ? "unknown" : FormatDuration(seconds * 1000L);
+
     private static string FormatDuration(long durationMs)
     {
         if (durationMs <= 0)
@@ -315,6 +318,11 @@ public sealed class ReportWriter
         }
 
         var span = TimeSpan.FromMilliseconds(durationMs);
+        if (span.TotalHours >= 1)
+        {
+            return $"{span.TotalHours:0.0} h";
+        }
+
         return span.TotalMinutes >= 1
             ? $"{span.TotalMinutes:0.0} min"
             : $"{span.TotalSeconds:0.0} s";

@@ -110,6 +110,7 @@ public sealed class ArchiveStore
             ServerLabel = string.IsNullOrWhiteSpace(result.ServerUrl) ? string.Empty : "server-" + HashServerUrl(result.ServerUrl)[..8],
             ServerContextSize = result.ServerContextSize,
             MaxTokens = result.MaxTokens,
+            TimeoutSeconds = result.TimeoutSeconds,
             Seed = result.Seed,
             SkipResponseFormat = result.SkipResponseFormat,
             DisableThinking = result.DisableThinking,

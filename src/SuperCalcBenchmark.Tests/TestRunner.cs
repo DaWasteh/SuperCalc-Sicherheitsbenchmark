@@ -22,6 +22,7 @@ internal static partial class TestRunner
         Run("parser accepts schema metadata with findings", ParserAcceptsSchemaMetadataWithFindings);
         Run("parser salvages truncated findings JSON", ParserSalvagesTruncatedFindingsJson);
         Run("parser handles lenient finding shapes", ParserHandlesLenientFindingShapes);
+        Run("official timeout covers slow reasoning budget", OfficialTimeoutCoversSlowReasoningBudget);
         Run("llama client leaves thinking enabled by default", LlamaClientLeavesThinkingEnabledByDefault);
         Run("llama client disables Qwen thinking when requested", LlamaClientDisablesQwenThinkingWhenRequested);
         Run("loop detector flags repeated reasoning", LoopDetectorFlagsRepeatedReasoning);
@@ -113,6 +114,18 @@ internal static partial class TestRunner
         Assert(result.Findings.Count == 1, "one finding expected");
         Assert(result.Findings[0].Index == 1, "finding should be indexed");
         Assert(result.Findings[0].Cwe == "CWE-134", "CWE should parse");
+    }
+
+    private static void OfficialTimeoutCoversSlowReasoningBudget()
+    {
+        var options = new BenchmarkOptions();
+        var budgetChars = BenchmarkDefaults.SlowModelReasoningBudgetCharacters + BenchmarkDefaults.SlowModelOutputBudgetCharacters;
+        var budgetTokens = (int)Math.Ceiling((double)budgetChars / BenchmarkDefaults.EstimatedCharactersPerGeneratedToken);
+        var generationSeconds = (double)budgetTokens / BenchmarkDefaults.SlowModelMinimumTokensPerSecond;
+        var requiredSeconds = generationSeconds + BenchmarkDefaults.PromptReadSafetySeconds;
+
+        Assert(options.Timeout.TotalSeconds == BenchmarkDefaults.OfficialRequestTimeoutSeconds, "BenchmarkOptions should use the official slow-model timeout by default");
+        Assert(options.Timeout.TotalSeconds >= requiredSeconds, $"default timeout should cover {budgetChars:N0} generated chars at {BenchmarkDefaults.SlowModelMinimumTokensPerSecond} tok/s plus prompt-reading margin");
     }
 
     private static void ParserHandlesMarkdownJsonFence()

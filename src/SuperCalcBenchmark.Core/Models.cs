@@ -320,6 +320,7 @@ public sealed class BenchmarkRunResult
     public string ServerUrl { get; init; } = string.Empty;
     public string Model { get; init; } = string.Empty;
     public int MaxTokens { get; init; }
+    public int TimeoutSeconds { get; init; }
     public int Seed { get; init; }
     public bool SkipResponseFormat { get; init; }
     public bool DisableThinking { get; init; }
@@ -352,7 +353,7 @@ public sealed class BenchmarkOptions
     public double TopP { get; init; } = 1.0;
     public int MaxTokens { get; init; } = -1;
     public int Seed { get; init; } = 12345;
-    public TimeSpan Timeout { get; init; } = TimeSpan.FromMinutes(20);
+    public TimeSpan Timeout { get; init; } = BenchmarkDefaults.OfficialRequestTimeout;
     public bool AllowHashMismatch { get; init; }
     public bool SkipResponseFormat { get; init; }
     public bool DisableThinking { get; init; }

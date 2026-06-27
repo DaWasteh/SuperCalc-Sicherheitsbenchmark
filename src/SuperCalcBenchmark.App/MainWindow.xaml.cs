@@ -250,7 +250,7 @@ public partial class MainWindow : Window
     private BenchmarkOptions BuildOptions(string model)
     {
         var maxTokens = ParseInt(MaxTokensTextBox.Text, "Max Tokens", -1, min: -1);
-        var timeoutSeconds = ParseInt(TimeoutTextBox.Text, "Timeout", 1200, min: 30);
+        var timeoutSeconds = ParseInt(TimeoutTextBox.Text, "Timeout", BenchmarkDefaults.OfficialRequestTimeoutSeconds, min: 30);
         var seed = ParseInt(SeedTextBox.Text, "Seed", 12345, min: int.MinValue);
         var outputDirectory = string.IsNullOrWhiteSpace(OutputDirectoryTextBox.Text)
             ? null

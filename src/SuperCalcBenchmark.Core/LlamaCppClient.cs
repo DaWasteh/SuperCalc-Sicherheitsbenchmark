@@ -33,7 +33,7 @@ public sealed class LlamaCppClient : IDisposable
             _httpClient = new HttpClient(handler, disposeHandler: false);
         }
 
-        _httpClient.Timeout = timeout ?? TimeSpan.FromMinutes(20);
+        _httpClient.Timeout = timeout ?? BenchmarkDefaults.OfficialRequestTimeout;
         _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", "no-key");
     }
 

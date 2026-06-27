@@ -49,7 +49,7 @@
                         <TextBlock Text="Max Tokens (-1=max)" VerticalAlignment="Center" Margin="4" />
                         <TextBox x:Name="MaxTokensTextBox" Text="-1" Width="90" ToolTip="-1 (empfohlen für Reasoning-Modelle): kein Limit, llama.cpp generiert bis EOS/Kontext/Timeout — Thinking UND finale Antwort haben Platz. Eine feste Zahl teilt sich das Budget zwischen Thinking und Antwort; bei denkenden Modellen kann dann die Antwort leer bleiben." />
                         <TextBlock Text="Timeout (Sek.)" VerticalAlignment="Center" Margin="12,4,4,4" />
-                        <TextBox x:Name="TimeoutTextBox" Text="1200" Width="90" />
+                        <TextBox x:Name="TimeoutTextBox" Text="14400" Width="90" ToolTip="4h pro Request: ausgelegt für große lokale Reasoning-Modelle mit ca. 3 tok/s, ~80k Thinking-Zeichen plus finale Antwort und Prompt-Lesezeit." />
                         <TextBlock Text="Seed" VerticalAlignment="Center" Margin="12,4,4,4" />
                         <TextBox x:Name="SeedTextBox" Text="12345" Width="90" />
                         <CheckBox x:Name="SkipResponseFormatCheckBox" Content="response_format überspringen" IsChecked="True" VerticalAlignment="Center" Margin="16,4,4,4" ToolTip="Kompatibler mit llama-web-ui; JSON wird weiterhin per Parser extrahiert." />

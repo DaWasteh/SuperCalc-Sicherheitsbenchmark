@@ -57,7 +57,7 @@ internal static class Program
     private static async Task<int> ListModelsAsync(ParsedArgs args)
     {
         var server = args.Get("--server", "http://127.0.0.1:1234");
-        using var client = new LlamaCppClient(TimeSpan.FromSeconds(args.GetInt("--timeout-seconds", 30)));
+        using var client = new LlamaCppClient(TimeSpan.FromSeconds(args.GetInt("--timeout-seconds", BenchmarkDefaults.ModelListTimeoutSeconds)));
         var models = await client.GetModelsAsync(server);
         if (models.Count == 0)
         {
@@ -233,7 +233,7 @@ internal static class Program
             OutputDirectory = args.GetNullable("--out"),
             MaxTokens = args.GetInt("--max-tokens", -1),
             Seed = args.GetInt("--seed", 12345),
-            Timeout = TimeSpan.FromSeconds(args.GetInt("--timeout-seconds", 1200)),
+            Timeout = TimeSpan.FromSeconds(args.GetInt("--timeout-seconds", BenchmarkDefaults.OfficialRequestTimeoutSeconds)),
             AllowHashMismatch = args.Has("--allow-hash-mismatch"),
             SkipResponseFormat = args.Has("--skip-response-format"),
             DisableThinking = args.Has("--disable-thinking"),
@@ -349,7 +349,7 @@ internal static class Program
         Console.WriteLine("  --top-p <number>           Default: 1.0");
         Console.WriteLine("  --seed <int>               Default: 12345");
         Console.WriteLine("  --max-tokens <int>         Default: -1 (llama.cpp max/unbounded; server ctx/timeout still apply)");
-        Console.WriteLine("  --timeout-seconds <int>    Default: 1200");
+        Console.WriteLine($"  --timeout-seconds <int>    Run default: {BenchmarkDefaults.OfficialRequestTimeoutSeconds} (4h/request); models default: {BenchmarkDefaults.ModelListTimeoutSeconds}");
         Console.WriteLine("  --skip-response-format     Do not send llama.cpp response_format");
         Console.WriteLine("  --disable-thinking         Send chat_template_kwargs.enable_thinking=false for Qwen/debug runs");
         Console.WriteLine("  --profile <official|debug|fixture>  Label archived run context. Default: official");

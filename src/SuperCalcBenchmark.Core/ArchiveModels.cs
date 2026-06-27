@@ -59,6 +59,9 @@ public sealed class ArchiveRecord
     [JsonPropertyName("maxTokens")]
     public int MaxTokens { get; set; }
 
+    [JsonPropertyName("timeoutSeconds")]
+    public int TimeoutSeconds { get; set; }
+
     [JsonPropertyName("seed")]
     public int? Seed { get; set; }
 

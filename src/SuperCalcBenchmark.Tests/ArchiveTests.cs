@@ -359,6 +359,7 @@ internal static partial class TestRunner
             var path = store.Save(result);
             var record = store.LoadAll().Single();
             Assert(record.SchemaVersion == ArchiveRecord.CurrentSchemaVersion, "new archives should use current schema version");
+            Assert(record.TimeoutSeconds == BenchmarkDefaults.OfficialRequestTimeoutSeconds, "request timeout should be archived for slow-model diagnostics");
             Assert(File.ReadAllText(path).Contains("\"schemaVersion\": 2", StringComparison.Ordinal), "saved JSON should declare schema v2");
             var run = record.Runs.Single();
             Assert(run.FinishReason == "length", "finish reason should be archived");
@@ -449,6 +450,8 @@ internal static partial class TestRunner
             Model = model,
             StartedAt = now,
             CompletedAt = now,
+            MaxTokens = -1,
+            TimeoutSeconds = BenchmarkDefaults.OfficialRequestTimeoutSeconds,
             Seed = 12345,
             SourceFile = "enhanced_calc.cpp",
             SourceSha256 = "deadbeef",
