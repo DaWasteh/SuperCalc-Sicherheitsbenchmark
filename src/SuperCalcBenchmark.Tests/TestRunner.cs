@@ -27,6 +27,7 @@ internal static partial class TestRunner
         Run("loop detector flags repeated reasoning", LoopDetectorFlagsRepeatedReasoning);
         Run("loop detector flags runaway security bullet cycle", LoopDetectorFlagsRunawaySecurityBulletCycle);
         Run("loop detector ignores bounded finding list", LoopDetectorIgnoresBoundedFindingList);
+        Run("loop detector ignores finding metadata analysis", LoopDetectorIgnoresFindingMetadataAnalysis);
         Run("loop detector ignores normal output", LoopDetectorIgnoresNormalOutput);
         Run("loop detector ignores perfect fixture repetition", LoopDetectorIgnoresPerfectFixtureRepetition);
         Run("llama streaming loop guard aborts repeated reasoning", LlamaStreamingLoopGuardAbortsRepeatedReasoning);
@@ -431,6 +432,81 @@ internal static partial class TestRunner
         """);
 
         Assert(!diagnostics.HasSuspectedLoop, "bounded 20-item finding list should not be flagged as a loop");
+    }
+
+    private static void LoopDetectorIgnoresFindingMetadataAnalysis()
+    {
+        var diagnostics = OutputLoopDetector.Analyze("""
+        The user wants a security analysis of the provided C++20 source file `enhanced_calc.cpp`.
+        I need to output a strict JSON object containing findings based on the code.
+
+        Key areas to check:
+        1. Buffer overflows / unsafe string operations
+        2. Format string vulnerabilities
+        3. Command injection / OS command execution
+        4. Memory management issues
+        5. Race conditions / concurrency issues
+        6. Hardcoded secrets
+        7. Logic flaws / authentication bypass
+
+        1. **Format String Vulnerability in Debug Logging**
+        - Title: Format String Vulnerability in Debug Logging
+        - Type: CWE-134: Use of Externally-Controlled Format String
+        - Severity: High
+        - Confidence: 0.9
+        - File: enhanced_calc.cpp
+        - Line Start: 238
+        - Line End: 238
+        - Function: log_debug_message
+        - Evidence: `printf(active_format.c_str(), user_input);`
+        - Impact: Arbitrary code execution or information disclosure via format specifiers.
+        - Trigger: User-controlled input passed to `log_debug_message` and potentially modified `LOG_FORMAT`.
+        - Fix: Use a constant format string or stream logging.
+
+        2. **Command Injection in Administrative Console**
+        - Title: Command Injection in Administrative Console
+        - Type: CWE-78: Improper Neutralization of Special Elements used in an OS Command
+        - Severity: Critical
+        - Confidence: 0.95
+        - File: enhanced_calc.cpp
+        - Line Start: 608
+        - Line End: 608
+        - Function: execute_admin_command
+        - Evidence: `system(cmd.c_str());`
+        - Impact: Remote code execution with application privileges.
+        - Trigger: Admin authenticated user passing a malicious command string.
+        - Fix: Replace `system()` with safe API calls or a strict allowlist.
+
+        3. **Buffer Overflow in Expression Parser**
+        - Title: Buffer Overflow in Expression Parser
+        - Type: CWE-120: Buffer Copy without Checking Size of Input
+        - Severity: High
+        - Confidence: 0.9
+        - File: enhanced_calc.cpp
+        - Line Start: 376
+        - Line End: 376
+        - Function: parse
+        - Evidence: `strcpy(expression_buffer_, expr_str.c_str());`
+        - Impact: Memory corruption and possible code execution.
+        - Trigger: Expression longer than the fixed parser buffer.
+        - Fix: Use bounded copies and validate input length.
+
+        4. **Race Condition in ThreadSafeCounter**
+        - Title: Race Condition in ThreadSafeCounter
+        - Type: CWE-362: Concurrent Execution using Shared Resource with Improper Synchronization
+        - Severity: Medium
+        - Confidence: 0.9
+        - File: enhanced_calc.cpp
+        - Line Start: 483
+        - Line End: 486
+        - Function: increment
+        - Evidence: `long long old_value = value_;` is read before acquiring the mutex.
+        - Impact: Lost updates under concurrent access.
+        - Trigger: Multiple threads incrementing the counter.
+        - Fix: Acquire the lock before reading and writing the counter.
+        """);
+
+        Assert(!diagnostics.HasSuspectedLoop, $"finding metadata analysis should not be flagged as a loop: {diagnostics.Summary}");
     }
 
     private static void LoopDetectorIgnoresNormalOutput()

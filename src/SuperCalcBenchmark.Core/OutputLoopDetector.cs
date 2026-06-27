@@ -16,7 +16,7 @@ public static partial class OutputLoopDetector
     private const int MinimumRepeatedParagraphLength = 100;
     private const int ShingleSize = 24;
     private const int ShingleStride = 8;
-    private const int MinimumRunawayListItems = 18;
+    private const int MinimumRunawayListItems = 36;
     private const int MinimumRunawayListNumber = 30;
     private const int MinimumRepeatedTopicOccurrences = 3;
     private const int MinimumRepeatedTopicHeadings = 10;
@@ -24,7 +24,12 @@ public static partial class OutputLoopDetector
     private static readonly HashSet<string> TopicStopWords = new(StringComparer.Ordinal)
     {
         "about", "across", "again", "against", "also", "because", "before", "being", "between", "could", "from", "have", "into", "more", "over", "same", "should", "than", "then", "their", "there", "these", "this", "through", "under", "were", "when", "where", "which", "while", "with", "without", "would",
-        "assessment", "challenge", "classification", "comprehensive", "concern", "coverage", "critical", "detailed", "documentation", "enhanced", "enhancement", "evolution", "framework", "hardening", "immediate", "improvement", "issue", "mechanism", "methodical", "mitigation", "neutralization", "optimization", "potential", "precision", "prevention", "prioritization", "refinement", "remediation", "resilience", "review", "risk", "security", "strategy", "system", "systematic", "systemic", "targeted", "technical", "transformation", "vulnerability"
+        "assessment", "challenge", "classification", "comprehensive", "concern", "confidence", "coverage", "critical", "detailed", "documentation", "enhanced", "enhancement", "evidence", "evolution", "finding", "findings", "framework", "function", "hardening", "immediate", "impact", "improvement", "issue", "location", "mechanism", "methodical", "mitigation", "neutralization", "optimization", "potential", "precision", "prevention", "prioritization", "recommendation", "refinement", "remediation", "resilience", "review", "risk", "security", "severity", "strategy", "system", "systematic", "systemic", "targeted", "technical", "transformation", "trigger", "vulnerability"
+    };
+
+    private static readonly HashSet<string> FindingMetadataHeadings = new(StringComparer.Ordinal)
+    {
+        "confidence", "cwe", "description", "evidence", "file", "fix", "function", "impact", "line", "line end", "line start", "lines", "location", "recommendation", "severity", "source", "title", "trigger", "type"
     };
 
     private sealed record ListHeading(int? Number, string Title);
@@ -205,7 +210,7 @@ public static partial class OutputLoopDetector
             }
 
             var title = ExtractHeadingTitle(rest);
-            if (title.Length >= 3 && !LooksLikeJsonOrSchemaLine(title))
+            if (title.Length >= 3 && !LooksLikeJsonOrSchemaLine(title) && !LooksLikeFindingMetadataHeading(title))
             {
                 headings.Add(new ListHeading(number, title));
             }
@@ -259,6 +264,19 @@ public static partial class OutputLoopDetector
             || trimmed.StartsWith(']')
             || trimmed.StartsWith('"')
             || trimmed.Contains("\":", StringComparison.Ordinal);
+    }
+
+    private static bool LooksLikeFindingMetadataHeading(string title)
+    {
+        var normalized = NormalizeWhitespace(title)
+            .Trim('`', '*', '_', ' ', '\t')
+            .ToLowerInvariant();
+
+        return FindingMetadataHeadings.Contains(normalized)
+            || normalized.StartsWith("line ", StringComparison.Ordinal)
+            || normalized.StartsWith("lines ", StringComparison.Ordinal)
+            || normalized.StartsWith("cwe-", StringComparison.Ordinal)
+            || normalized.StartsWith("cwe ", StringComparison.Ordinal);
     }
 
     private static IEnumerable<string> ExtractTopicKeys(string title)

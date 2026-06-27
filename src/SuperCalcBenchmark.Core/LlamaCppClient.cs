@@ -674,9 +674,7 @@ public sealed class LlamaCppClient : IDisposable
                     : 1;
                 _lastSignature = signature;
 
-                var requiredChecks = diagnostics.Repetitions.Any(candidate => candidate.Kind == "runaway enumerated topic cycle")
-                    ? 1
-                    : LoopConfirmationChecksRequired;
+                const int requiredChecks = LoopConfirmationChecksRequired;
                 if (_consecutiveSuspicions < requiredChecks)
                 {
                     diagnosticsSummary = string.Empty;
