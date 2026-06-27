@@ -999,7 +999,7 @@ public partial class MainWindow : Window
 
         if (artifacts.LoopDetected)
         {
-            builder.AppendLine("WARNUNG: Die Streaming-Anfrage wurde wegen eines wahrscheinlichen Modell-Loops vorzeitig geschlossen.");
+            builder.AppendLine("WARNUNG: Die Streaming-Anfrage wurde wegen eines wahrscheinlichen Loops in der finalen Antwort vorzeitig geschlossen. Thinking wird nur diagnostiziert, nicht live abgebrochen.");
         }
 
         if (string.IsNullOrWhiteSpace(artifacts.Response) && !string.IsNullOrWhiteSpace(artifacts.ReasoningContent))

@@ -361,7 +361,8 @@ public sealed class BenchmarkOptions
 
     /// <summary>
     /// Stream completions through a repetition guard and close the request early when
-    /// the assistant gets stuck in a likely model loop.
+    /// final assistant content gets stuck in a likely model loop. Visible reasoning_content
+    /// is not live-aborted; it is kept for diagnostics so reasoning models can finish.
     /// </summary>
     public bool AbortOnLoop { get; init; } = true;
 

@@ -189,7 +189,7 @@ public sealed class ReportWriter
 
         if (artifacts.LoopDetected)
         {
-            builder.AppendLine("> Warning: the client closed the streaming request early because the live output matched the loop/repetition guard. The saved output is intentionally partial so the benchmark does not hang or exhaust memory.");
+            builder.AppendLine("> Warning: the client closed the streaming request early because final assistant content matched the loop/repetition guard. Visible reasoning_content is not live-aborted; the saved final output is intentionally partial so the benchmark does not hang or exhaust memory.");
             builder.AppendLine();
         }
 

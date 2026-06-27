@@ -423,7 +423,7 @@ public sealed class LlamaCppClient : IDisposable
                 rawBuilder.AppendLine(payload);
 
                 finishReason = ConsumeStreamChunk(payload, contentBuilder, reasoningBuilder, finishReason, streamProgress);
-                if (abortOnLoop && loopState.TryDetect(contentBuilder, reasoningBuilder, out var diagnosticsSummary))
+                if (abortOnLoop && loopState.TryDetect(contentBuilder, out var diagnosticsSummary))
                 {
                     loopDetected = true;
                     loopDiagnosticsSummary = diagnosticsSummary;
@@ -622,16 +622,15 @@ public sealed class LlamaCppClient : IDisposable
     private sealed class StreamLoopState
     {
         private readonly ChannelLoopTracker _content = new();
-        private readonly ChannelLoopTracker _reasoning = new();
 
-        public bool TryDetect(StringBuilder contentBuilder, StringBuilder reasoningBuilder, out string diagnosticsSummary)
+        public bool TryDetect(StringBuilder contentBuilder, out string diagnosticsSummary)
         {
+            // Do not abort visible reasoning_content. Qwen-style reasoning models often
+            // repeat bounded checklists while still making progress toward the final JSON;
+            // cutting that channel short harms official scores. We still stream it for the
+            // UI/report and run post-hoc diagnostics, but live interruption is limited to
+            // final assistant content loops.
             if (_content.TryDetect(contentBuilder, "assistant content", out diagnosticsSummary))
-            {
-                return true;
-            }
-
-            if (_reasoning.TryDetect(reasoningBuilder, "reasoning content", out diagnosticsSummary))
             {
                 return true;
             }

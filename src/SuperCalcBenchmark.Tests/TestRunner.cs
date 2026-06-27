@@ -32,7 +32,8 @@ internal static partial class TestRunner
         Run("loop detector ignores bounded reasoning checklist churn", LoopDetectorIgnoresBoundedReasoningChecklistChurn);
         Run("loop detector ignores normal output", LoopDetectorIgnoresNormalOutput);
         Run("loop detector ignores perfect fixture repetition", LoopDetectorIgnoresPerfectFixtureRepetition);
-        Run("llama streaming loop guard aborts repeated reasoning", LlamaStreamingLoopGuardAbortsRepeatedReasoning);
+        Run("llama streaming loop guard ignores repeated reasoning", LlamaStreamingLoopGuardIgnoresRepeatedReasoning);
+        Run("llama streaming loop guard aborts repeated content", LlamaStreamingLoopGuardAbortsRepeatedContent);
         Run("perfect synthetic fixture scores 100", PerfectSyntheticFixtureScoresHigh);
         Run("duplicate finding is penalized", DuplicateFindingIsPenalized);
         Run("reasoning disclosure compares thinking and output true positives", ReasoningDisclosureComparesThinkingAndOutputTruePositives);
@@ -618,9 +619,9 @@ internal static partial class TestRunner
         Assert(!diagnostics.HasSuspectedLoop, "normal structured fixture repetition should not be flagged as a loop");
     }
 
-    private static void LlamaStreamingLoopGuardAbortsRepeatedReasoning()
+    private static void LlamaStreamingLoopGuardIgnoresRepeatedReasoning()
     {
-        var handler = new LoopingStreamHandler();
+        var handler = new LoopingStreamHandler(StreamLoopChannel.Reasoning, appendFinalContent: true);
         using var client = new LlamaCppClient(TimeSpan.FromSeconds(5), handler);
         var result = client.CreateChatCompletionAsync(
             "http://unit.test",
@@ -630,11 +631,30 @@ internal static partial class TestRunner
             new BenchmarkOptions { Model = "loop-model" },
             cancellationToken: CancellationToken.None).GetAwaiter().GetResult();
 
-        Assert(handler.RequestBody.Contains("\"stream\": true", StringComparison.Ordinal), "loop guard should force streaming so it can interrupt a model loop");
-        Assert(result.LoopDetected, "streaming loop guard should mark the result as loop-detected");
+        Assert(handler.RequestBody.Contains("\"stream\": true", StringComparison.Ordinal), "loop guard should still force streaming for live UI and final-content protection");
+        Assert(!result.LoopDetected, "repeated visible reasoning should not be live-aborted");
+        Assert(result.FinishReason == "stop", $"finish reason should be stop, got {result.FinishReason}");
+        Assert(result.ReasoningContent.Length == handler.FullStreamedTextLength, "guard should allow the full synthetic reasoning stream to complete");
+        Assert(result.AssistantContent.Contains("final", StringComparison.Ordinal), "final assistant content should still be captured after reasoning");
+    }
+
+    private static void LlamaStreamingLoopGuardAbortsRepeatedContent()
+    {
+        var handler = new LoopingStreamHandler(StreamLoopChannel.Content, appendFinalContent: false);
+        using var client = new LlamaCppClient(TimeSpan.FromSeconds(5), handler);
+        var result = client.CreateChatCompletionAsync(
+            "http://unit.test",
+            "loop-model",
+            "system",
+            "user",
+            new BenchmarkOptions { Model = "loop-model" },
+            cancellationToken: CancellationToken.None).GetAwaiter().GetResult();
+
+        Assert(handler.RequestBody.Contains("\"stream\": true", StringComparison.Ordinal), "loop guard should force streaming so it can interrupt final-content loops");
+        Assert(result.LoopDetected, "streaming loop guard should mark repeated final content as loop-detected");
         Assert(result.FinishReason == "loop_detected", $"finish reason should be loop_detected, got {result.FinishReason}");
-        Assert(result.LoopDiagnosticsSummary.Contains("reasoning content", StringComparison.Ordinal), "diagnostics should identify the looping channel");
-        Assert(result.ReasoningContent.Length < handler.FullReasoningLength, "guard should stop reading before the full synthetic loop is consumed");
+        Assert(result.LoopDiagnosticsSummary.Contains("assistant content", StringComparison.Ordinal), "diagnostics should identify the looping channel");
+        Assert(result.AssistantContent.Length < handler.FullStreamedTextLength, "guard should stop reading before the full synthetic content loop is consumed");
     }
 
     private static void PerfectSyntheticFixtureScoresHigh()
@@ -821,10 +841,16 @@ internal static partial class TestRunner
         }
     }
 
-    private sealed class LoopingStreamHandler : HttpMessageHandler
+    private enum StreamLoopChannel
+    {
+        Reasoning,
+        Content
+    }
+
+    private sealed class LoopingStreamHandler(StreamLoopChannel channel, bool appendFinalContent) : HttpMessageHandler
     {
         public string RequestBody { get; private set; } = string.Empty;
-        public int FullReasoningLength { get; private set; }
+        public int FullStreamedTextLength { get; private set; }
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
@@ -834,24 +860,17 @@ internal static partial class TestRunner
 
             const string repeatedLine = "I will inspect validate_password, then I will inspect validate_password again, then I will inspect validate_password again because the same branch may be important.\n";
             var sse = new StringBuilder();
+            var fieldName = channel == StreamLoopChannel.Reasoning ? "reasoning_content" : "content";
             for (var i = 0; i < 120; i++)
             {
-                FullReasoningLength += repeatedLine.Length;
-                var payload = JsonSerializer.Serialize(new Dictionary<string, object?>
-                {
-                    ["choices"] = new object[]
-                    {
-                        new Dictionary<string, object?>
-                        {
-                            ["finish_reason"] = null,
-                            ["delta"] = new Dictionary<string, object?>
-                            {
-                                ["reasoning_content"] = repeatedLine
-                            }
-                        }
-                    }
-                });
-                sse.Append("data: ").Append(payload).Append("\n\n");
+                FullStreamedTextLength += repeatedLine.Length;
+                sse.Append("data: ").Append(StreamPayload(fieldName, repeatedLine, finishReason: null)).Append("\n\n");
+            }
+
+            if (appendFinalContent)
+            {
+                const string finalContent = "{\"summary\":\"final\",\"findings\":[]}";
+                sse.Append("data: ").Append(StreamPayload("content", finalContent, finishReason: "stop")).Append("\n\n");
             }
 
             sse.Append("data: [DONE]\n\n");
@@ -859,6 +878,24 @@ internal static partial class TestRunner
             {
                 Content = new StringContent(sse.ToString(), Encoding.UTF8, "text/event-stream")
             };
+        }
+
+        private static string StreamPayload(string fieldName, string value, string? finishReason)
+        {
+            return JsonSerializer.Serialize(new Dictionary<string, object?>
+            {
+                ["choices"] = new object[]
+                {
+                    new Dictionary<string, object?>
+                    {
+                        ["finish_reason"] = finishReason,
+                        ["delta"] = new Dictionary<string, object?>
+                        {
+                            [fieldName] = value
+                        }
+                    }
+                }
+            });
         }
     }
 
