@@ -29,7 +29,7 @@ public static partial class OutputLoopDetector
 
     private static readonly HashSet<string> FindingMetadataHeadings = new(StringComparer.Ordinal)
     {
-        "confidence", "cwe", "description", "evidence", "file", "fix", "function", "impact", "line", "line end", "line start", "lines", "location", "recommendation", "severity", "source", "title", "trigger", "type"
+        "confidence", "constraint checklist", "constraint checklist & confidence score", "cwe", "description", "double check line numbers", "evidence", "file", "fix", "function", "impact", "json structure", "key areas to check", "line", "line end", "line start", "line-by-line analysis", "lines", "location", "mental checklist", "mental sandbox", "recommendation", "schema", "severity", "source", "title", "trigger", "type"
     };
 
     private sealed record ListHeading(int? Number, string Title);
@@ -132,12 +132,13 @@ public static partial class OutputLoopDetector
             .DefaultIfEmpty(0)
             .Max();
 
-        if (headings.Count < MinimumRunawayListItems && maxNumber < MinimumRunawayListNumber)
+        var eligibleHeadings = SelectRunawayEligibleHeadings(headings, maxNumber);
+        if (eligibleHeadings.Count == 0)
         {
             return;
         }
 
-        var headingTopics = headings
+        var headingTopics = eligibleHeadings
             .Select(heading => ExtractTopicKeys(heading.Title).ToHashSet(StringComparer.Ordinal))
             .Where(topics => topics.Count > 0)
             .ToList();
@@ -170,6 +171,24 @@ public static partial class OutputLoopDetector
 
         var snippet = string.Join(", ", topicCounts.Take(8).Select(topic => topic.Topic));
         candidates.Add(new RepetitionCandidate("runaway enumerated topic cycle", snippet, repeatedTopicHeadingCount));
+    }
+
+    private static IReadOnlyList<ListHeading> SelectRunawayEligibleHeadings(IReadOnlyList<ListHeading> headings, int maxNumber)
+    {
+        // Reasoning models often build several bounded numbered lists (checklist,
+        // candidate findings, final selection, mental sandbox) and naturally repeat
+        // the same vulnerability topics. That is progress, not a runaway list. Only
+        // treat numbered headings as a runaway cycle when the numbering itself grows
+        // past the threshold. Bullet-only loops still use the aggregate item count.
+        if (maxNumber >= MinimumRunawayListNumber)
+        {
+            return headings.Where(heading => heading.Number.HasValue).ToList();
+        }
+
+        var bulletHeadings = headings.Where(heading => !heading.Number.HasValue).ToList();
+        return bulletHeadings.Count >= MinimumRunawayListItems
+            ? bulletHeadings
+            : [];
     }
 
     private static List<ListHeading> ExtractListHeadings(string text)

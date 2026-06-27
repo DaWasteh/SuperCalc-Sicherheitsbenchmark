@@ -28,6 +28,7 @@ internal static partial class TestRunner
         Run("loop detector flags runaway security bullet cycle", LoopDetectorFlagsRunawaySecurityBulletCycle);
         Run("loop detector ignores bounded finding list", LoopDetectorIgnoresBoundedFindingList);
         Run("loop detector ignores finding metadata analysis", LoopDetectorIgnoresFindingMetadataAnalysis);
+        Run("loop detector ignores bounded reasoning checklist churn", LoopDetectorIgnoresBoundedReasoningChecklistChurn);
         Run("loop detector ignores normal output", LoopDetectorIgnoresNormalOutput);
         Run("loop detector ignores perfect fixture repetition", LoopDetectorIgnoresPerfectFixtureRepetition);
         Run("llama streaming loop guard aborts repeated reasoning", LlamaStreamingLoopGuardAbortsRepeatedReasoning);
@@ -507,6 +508,79 @@ internal static partial class TestRunner
         """);
 
         Assert(!diagnostics.HasSuspectedLoop, $"finding metadata analysis should not be flagged as a loop: {diagnostics.Summary}");
+    }
+
+    private static void LoopDetectorIgnoresBoundedReasoningChecklistChurn()
+    {
+        var diagnostics = OutputLoopDetector.Analyze("""
+        The user wants me to perform a blind security analysis and then return strict JSON.
+
+        Initial scan checklist:
+        1. Buffer overflows and unsafe fixed-size copies
+        2. Format string vulnerabilities in logging
+        3. Command injection through system calls
+        4. Integer overflow in calculator operations
+        5. Race conditions in shared counters
+        6. Hardcoded secrets in configuration
+        7. Authentication bypass logic
+        8. Path traversal in config loading
+        9. Weak randomness in session token generation
+
+        Line-by-line analysis:
+        1. Hardcoded Secret at line 73
+        2. Format String Vulnerability at line 238
+        3. Buffer Overflow in parser at line 377
+        4. Race Condition in ThreadSafeCounter at line 486
+        5. Command Injection in ConfigLoader at line 557
+        6. Authentication Bypass in AdminConsole at line 595
+        7. Command Injection in AdminConsole at line 608
+        8. Path Traversal in reload_config at line 610
+        9. Weak Randomness in generate_session_token at line 642
+        10. Buffer Overflow in evaluate_expression at line 840
+
+        Prioritized findings:
+        1. Buffer Overflow in evaluate_expression
+        2. Command Injection in AdminConsole
+        3. Command Injection in ConfigLoader
+        4. Hardcoded Credentials
+        5. Authentication Bypass
+        6. Race Condition in ThreadSafeCounter
+        7. Format String Vulnerability
+        8. Path Traversal
+        9. Weak Randomness
+        10. Buffer Overflow in parser
+
+        Final selection:
+        1. Buffer Overflow in evaluate_expression
+        2. Command Injection in AdminConsole
+        3. Command Injection in ConfigLoader
+        4. Hardcoded Credentials
+        5. Authentication Bypass
+        6. Race Condition in ThreadSafeCounter
+        7. Format String Vulnerability
+        8. Path Traversal
+
+        Constraint Checklist:
+        1. Analyze only supplied source code? Yes.
+        2. Do not guess expected number? Yes.
+        3. Use exact line-level evidence? Yes.
+        4. Lower confidence when uncertain? Yes.
+        5. Quote relevant evidence? Yes.
+        6. Return JSON only? Yes.
+        7. Match schema? Yes.
+
+        Mental Sandbox:
+        1. Check buffer overflow line numbers.
+        2. Check command injection line numbers.
+        3. Check hardcoded secret line numbers.
+        4. Check authentication bypass line numbers.
+        5. Check race condition line numbers.
+        6. Check format string line numbers.
+        7. Check path traversal line numbers.
+        8. Check weak randomness line numbers.
+        """);
+
+        Assert(!diagnostics.HasSuspectedLoop, $"bounded multi-stage reasoning checklist should not be flagged as a loop: {diagnostics.Summary}");
     }
 
     private static void LoopDetectorIgnoresNormalOutput()

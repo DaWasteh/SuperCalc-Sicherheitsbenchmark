@@ -8,7 +8,7 @@ public sealed class LlamaCppClient : IDisposable
 {
     private const int LoopCheckMinimumChars = 1_500;
     private const int LoopCheckIntervalChars = 750;
-    private const int LoopConfirmationChecksRequired = 2;
+    private const int LoopConfirmationChecksRequired = 4;
     private const string LoopDetectedFinishReason = "loop_detected";
 
     private readonly HttpClient _httpClient;
