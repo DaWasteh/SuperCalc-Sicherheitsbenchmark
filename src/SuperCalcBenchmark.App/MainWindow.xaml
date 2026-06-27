@@ -229,9 +229,14 @@
                     <DataGrid Grid.Row="2" x:Name="ComparisonGrid"
                               AutoGenerateColumns="False"
                               CanUserAddRows="False"
-                              CanUserDeleteRows="False">
+                              CanUserDeleteRows="False"
+                              ColumnWidth="Auto"
+                              EnableColumnVirtualization="False"
+                              EnableRowVirtualization="False"
+                              ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                              ScrollViewer.VerticalScrollBarVisibility="Auto">
                         <DataGrid.Columns>
-                            <DataGridTemplateColumn Header="Modell" SortMemberPath="ModelFamily" Width="*">
+                            <DataGridTemplateColumn Header="Modell" SortMemberPath="ModelFamily" Width="Auto">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
                                         <TextBox Text="{Binding ModelFamily, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
@@ -246,7 +251,7 @@
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
-                            <DataGridTemplateColumn Header="Quant" SortMemberPath="Quant" Width="120">
+                            <DataGridTemplateColumn Header="Quant" SortMemberPath="Quant" Width="Auto">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
                                         <TextBox Text="{Binding Quant, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
@@ -261,22 +266,22 @@
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
-                            <DataGridTextColumn Header="Runs" Binding="{Binding RunCount}" IsReadOnly="True" Width="60" />
-                            <DataGridTextColumn Header="Score" Binding="{Binding ScorePercent, StringFormat=0.##}" IsReadOnly="True" Width="80" />
-                            <DataGridTextColumn Header="Critical" Binding="{Binding CriticalRecall, StringFormat=P1}" IsReadOnly="True" Width="80" />
-                            <DataGridTextColumn Header="Stability" Binding="{Binding Stability, StringFormat=P1}" IsReadOnly="True" Width="80" />
-                            <DataGridTextColumn Header="Run2 Δ" Binding="{Binding Run2Delta, StringFormat=0.##}" IsReadOnly="True" Width="80" />
-                            <DataGridTextColumn Header="Median" Binding="{Binding ScoreMedian, StringFormat=0.##}" IsReadOnly="True" Width="80" />
-                            <DataGridTextColumn Header="σ" Binding="{Binding ScoreStdDev, StringFormat=0.##}" IsReadOnly="True" Width="60" />
-                            <DataGridTextColumn Header="Min" Binding="{Binding ScoreMin, StringFormat=0.##}" IsReadOnly="True" Width="60" />
-                            <DataGridTextColumn Header="Max" Binding="{Binding ScoreMax, StringFormat=0.##}" IsReadOnly="True" Width="60" />
-                            <DataGridTextColumn Header="Precision" Binding="{Binding Precision, StringFormat=P1}" IsReadOnly="True" Width="90" />
-                            <DataGridTextColumn Header="Recall" Binding="{Binding Recall, StringFormat=P1}" IsReadOnly="True" Width="90" />
-                            <DataGridTextColumn Header="F1" Binding="{Binding F1, StringFormat=P1}" IsReadOnly="True" Width="80" />
-                            <DataGridTextColumn Header="Full TP" Binding="{Binding FullTruePositives}" IsReadOnly="True" Width="70" />
-                            <DataGridTextColumn Header="Partial" Binding="{Binding PartialTruePositives}" IsReadOnly="True" Width="70" />
-                            <DataGridTextColumn Header="FP" Binding="{Binding FalsePositives}" IsReadOnly="True" Width="60" />
-                            <DataGridTextColumn Header="Missed" Binding="{Binding Missed}" IsReadOnly="True" Width="70" />
+                            <DataGridTextColumn Header="Runs" Binding="{Binding RunCount}" IsReadOnly="True" Width="Auto" />
+                            <DataGridTextColumn Header="Score" Binding="{Binding ScorePercent, StringFormat=0.##}" IsReadOnly="True" Width="Auto" />
+                            <DataGridTextColumn Header="Critical" Binding="{Binding CriticalRecall, StringFormat=P1}" IsReadOnly="True" Width="Auto" />
+                            <DataGridTextColumn Header="Stability" Binding="{Binding Stability, StringFormat=P1}" IsReadOnly="True" Width="Auto" />
+                            <DataGridTextColumn Header="Run2 Δ" Binding="{Binding Run2Delta, StringFormat=0.##}" IsReadOnly="True" Width="Auto" />
+                            <DataGridTextColumn Header="Median" Binding="{Binding ScoreMedian, StringFormat=0.##}" IsReadOnly="True" Width="Auto" />
+                            <DataGridTextColumn Header="σ" Binding="{Binding ScoreStdDev, StringFormat=0.##}" IsReadOnly="True" Width="Auto" />
+                            <DataGridTextColumn Header="Min" Binding="{Binding ScoreMin, StringFormat=0.##}" IsReadOnly="True" Width="Auto" />
+                            <DataGridTextColumn Header="Max" Binding="{Binding ScoreMax, StringFormat=0.##}" IsReadOnly="True" Width="Auto" />
+                            <DataGridTextColumn Header="Precision" Binding="{Binding Precision, StringFormat=P1}" IsReadOnly="True" Width="Auto" />
+                            <DataGridTextColumn Header="Recall" Binding="{Binding Recall, StringFormat=P1}" IsReadOnly="True" Width="Auto" />
+                            <DataGridTextColumn Header="F1" Binding="{Binding F1, StringFormat=P1}" IsReadOnly="True" Width="Auto" />
+                            <DataGridTextColumn Header="Full TP" Binding="{Binding FullTruePositives}" IsReadOnly="True" Width="Auto" />
+                            <DataGridTextColumn Header="Partial" Binding="{Binding PartialTruePositives}" IsReadOnly="True" Width="Auto" />
+                            <DataGridTextColumn Header="FP" Binding="{Binding FalsePositives}" IsReadOnly="True" Width="Auto" />
+                            <DataGridTextColumn Header="Missed" Binding="{Binding Missed}" IsReadOnly="True" Width="Auto" />
                         </DataGrid.Columns>
                     </DataGrid>
                 </Grid>
