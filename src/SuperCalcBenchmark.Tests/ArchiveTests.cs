@@ -240,6 +240,7 @@ internal static partial class TestRunner
             Assert(html.Contains("barChart", StringComparison.Ordinal), "html should contain the bar chart canvas");
             Assert(html.Contains("radarChart", StringComparison.Ordinal), "html should contain the radar chart canvas");
             Assert(html.Contains("reasoningChart", StringComparison.Ordinal), "html should include the Denken-vs-Sagen chart when diagnostics exist");
+            Assert(html.Contains("heatmap", StringComparison.Ordinal), "html should include the vulnerability heatmap");
 
             const string open = "<script id=\"data\" type=\"application/json\">";
             var start = html.IndexOf(open, StringComparison.Ordinal);
@@ -249,16 +250,20 @@ internal static partial class TestRunner
             var json = html[start..end].Trim();
             using var doc = JsonDocument.Parse(json);
             Assert(doc.RootElement.GetProperty("series").GetArrayLength() == 1, "payload should contain one series");
+            Assert(doc.RootElement.TryGetProperty("axis", out _), "payload should expose vulnerability metadata axis");
             var series = doc.RootElement.GetProperty("series")[0];
             Assert(series.TryGetProperty("scoreMedian", out _), "payload should expose scoreMedian for uncertainty tables");
             Assert(series.TryGetProperty("scoreMin", out _), "payload should expose scoreMin for uncertainty bars");
             Assert(series.TryGetProperty("scoreMax", out _), "payload should expose scoreMax for uncertainty bars");
+            Assert(series.TryGetProperty("criticalRecall", out _), "payload should expose severity metrics");
+            Assert(series.TryGetProperty("parseSuccessRate", out _), "payload should expose parse/completion health metrics");
             Assert(series.TryGetProperty("thinkingTp", out _), "payload should expose Denken/Gedacht TP statistics");
             Assert(series.TryGetProperty("outputTp", out _), "payload should expose Sagen/Gesagt TP statistics");
             Assert(series.GetProperty("visibleReasoningRuns").GetInt32() == 1, "payload should count visible reasoning runs");
 
             var csv = writer.BuildCsv(report);
             Assert(csv.Contains("model_family", StringComparison.Ordinal), "csv should have a header row");
+            Assert(csv.Contains("critical_recall_percent", StringComparison.Ordinal), "csv should include severity metric columns");
             Assert(csv.Contains("thinking_tp", StringComparison.Ordinal), "csv should include Denken-vs-Sagen columns");
         }
         finally
@@ -267,9 +272,194 @@ internal static partial class TestRunner
         }
     }
 
+    private static void ArchiveLoadsV1ScorecardsWithV2Fallbacks()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "supercalc-v1-load-test-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var directory = Path.Combine(tempRoot, "supercalc-v3", "legacy-model__Q4_K_M");
+            Directory.CreateDirectory(directory);
+            File.WriteAllText(Path.Combine(directory, "legacy.json"), """
+{
+  "schemaVersion": 1,
+  "recordId": "legacy",
+  "benchmarkId": "supercalc-v3",
+  "toolVersion": "test",
+  "rawModelId": "legacy-model-Q4_K_M.gguf",
+  "modelFamily": "legacy-model",
+  "quant": "Q4_K_M",
+  "groupKey": "legacy-model__Q4_K_M",
+  "sourceSha256": "deadbeef",
+  "sourceHashMatches": true,
+  "startedAt": "2026-01-01T00:00:00Z",
+  "completedAt": "2026-01-01T00:00:01Z",
+  "runs": [
+    {
+      "runName": "Run 1",
+      "scorePercent": 50,
+      "rawPoints": 10,
+      "fullTruePositives": 1,
+      "partialTruePositives": 1,
+      "falsePositives": 0,
+      "missed": 2,
+      "precision": 1,
+      "recall": 0.5,
+      "f1": 0.66,
+      "vulnerabilityCredit": { "SC-V3-001": 1.0, "SC-V3-002": 0.5, "SC-V3-003": 0.0 }
+    }
+  ]
+}
+""", System.Text.Encoding.UTF8);
+
+            var record = new ArchiveStore(tempRoot).LoadAll().Single();
+            Assert(record.SchemaVersion == 1, "legacy schema version should be preserved on load");
+            Assert(record.GroupKey == "legacy-model__Q4_K_M", "group key should be rebuilt from editable identity fields");
+            var run = record.Runs.Single();
+            Assert(run.VulnerabilityResults.Count == 3, "v1 vulnerabilityCredit should synthesize v2 vulnerabilityResults");
+            Assert(run.VulnerabilityResults.Single(v => v.Id == "SC-V3-002").Status == "partial", "partial credit should synthesize partial status");
+            Assert(run.ParseMode == "unknown", "missing v1 parse mode should normalize to unknown");
+        }
+        finally
+        {
+            TryDeleteDirectory(tempRoot);
+        }
+    }
+
+    private static void ArchiveV2StoresCompletionAndParseDiagnostics()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "supercalc-v2-diagnostics-test-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var store = new ArchiveStore(tempRoot);
+            var result = FakeResult("Qwen3-Coder-30B-Q4_K_M.gguf", 70, 2, 0, 1, 2, includeReasoning: true);
+            var runStarted = DateTimeOffset.UtcNow;
+            var runCompleted = runStarted.AddSeconds(2);
+            result.Run1 = new BenchmarkRunArtifacts
+            {
+                RunName = "Run 1",
+                StartedAt = runStarted,
+                CompletedAt = runCompleted,
+                Prompt = "prompt",
+                Response = string.Empty,
+                ReasoningContent = "visible thought",
+                RawResponse = "{\"raw\":true}",
+                RequestJson = "{\"request\":true}",
+                FinishReason = "length",
+                LoopDetected = true,
+                LoopDiagnosticsSummary = "repeated reasoning",
+                UsedResponseFormat = true,
+                RetriedWithoutResponseFormat = true,
+                UsedThinkingControl = true,
+                RetriedWithoutThinkingControl = false,
+                Parse = new ParseResult { ParsedJson = true, UsedMarkdownJsonBlock = true, ParseMode = "markdown_json" },
+                Score = result.Run1.Score,
+                ReasoningDisclosure = result.Run1.ReasoningDisclosure
+            };
+
+            var path = store.Save(result);
+            var record = store.LoadAll().Single();
+            Assert(record.SchemaVersion == ArchiveRecord.CurrentSchemaVersion, "new archives should use current schema version");
+            Assert(File.ReadAllText(path).Contains("\"schemaVersion\": 2", StringComparison.Ordinal), "saved JSON should declare schema v2");
+            var run = record.Runs.Single();
+            Assert(run.FinishReason == "length", "finish reason should be archived");
+            Assert(run.LoopDetected, "loop flag should be archived");
+            Assert(run.EmptyOutputWithReasoning, "empty output with reasoning should be diagnosed");
+            Assert(run.ParseMode == "markdown_json", "parse mode should be archived");
+            Assert(run.DurationMs >= 2000, "per-run duration should be archived");
+            Assert(run.PromptChars == "prompt".Length, "prompt character count should be archived without storing the prompt");
+            Assert(run.VulnerabilityResults.Count == FakeVulnIds.Length, "v2 scorecards should include rich vulnerability results");
+        }
+        finally
+        {
+            TryDeleteDirectory(tempRoot);
+        }
+    }
+
+    private static void ComparisonMetadataDeltaAndStabilityMetricsWork()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "supercalc-metadata-test-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var metadataPath = WriteFakeMetadata(tempRoot);
+            var metadata = VulnerabilityMetadataIndex.Load(metadataPath);
+            var store = new ArchiveStore(Path.Combine(tempRoot, "archive"));
+            store.Save(FakeResult("Qwen3-Coder-30B-Q4_K_M.gguf", 25, 1, 0, 0, 3));
+            store.Save(FakeResult("Qwen3-Coder-30B-Q4_K_M.gguf", 50, 2, 0, 0, 2));
+
+            var report = ComparisonReport.Build(store.LoadGroups(), "supercalc-v3", ComparisonAggregate.Average, metadataIndex: metadata);
+            var series = report.Series.Single();
+            Assert(Math.Abs(series.CriticalRecall - 0.5) < 0.001, $"critical recall should average critical credits, got {series.CriticalRecall}");
+            Assert(Math.Abs(series.HighRecall - 0.5) < 0.001, $"high recall should be 0.5, got {series.HighRecall}");
+            Assert(Math.Abs(series.VulnerabilityStability - 0.75) < 0.001, $"stability should reflect per-vuln volatility, got {series.VulnerabilityStability}");
+
+            var withRun2 = FakeResult("Delta-Model-Q5_K_M.gguf", 25, 1, 0, 2, 3);
+            withRun2.Run2 = new BenchmarkRunArtifacts
+            {
+                RunName = "Run 2",
+                Score = FakeScore("Run 2", 50, 2, 0, 1, 2)
+            };
+            store.Save(withRun2);
+
+            var delta = ComparisonReport.Build(store.LoadGroups(), "supercalc-v3", ComparisonAggregate.Average, metadataIndex: metadata, runView: ComparisonRunView.Delta);
+            var deltaSeries = delta.Series.Single(s => s.Quant == "Q5_K_M");
+            Assert(Math.Abs(deltaSeries.ScorePercent - 25) < 0.001, $"delta score should be 25, got {deltaSeries.ScorePercent}");
+            Assert(Math.Abs(deltaSeries.Run2ScoreDelta - 25) < 0.001, $"pair metric delta should be 25, got {deltaSeries.Run2ScoreDelta}");
+            Assert(Math.Abs(deltaSeries.Run2FpReduction - 1) < 0.001, $"FP reduction should be 1, got {deltaSeries.Run2FpReduction}");
+            Assert(deltaSeries.Run2AddedTruePositiveIds.Contains("SC-V3-002", StringComparer.OrdinalIgnoreCase), "Run 2 should add SC-V3-002");
+        }
+        finally
+        {
+            TryDeleteDirectory(tempRoot);
+        }
+    }
+
+    private static string WriteFakeMetadata(string root)
+    {
+        var path = Path.Combine(root, "ground_truth.json");
+        Directory.CreateDirectory(root);
+        File.WriteAllText(path, """
+{
+  "benchmark_id": "supercalc-v3",
+  "source_file": "enhanced_calc.cpp",
+  "source_sha256": "deadbeef",
+  "policy": { "hidden_from_model": true },
+  "vulnerabilities": [
+    { "id": "SC-V3-001", "title": "critical injection", "severity": "Critical", "cwe": ["CWE-134"], "strict_scoreable": true, "locations": [{ "file": "enhanced_calc.cpp", "symbol": "string_utils::log_debug_message", "line_start": 1, "line_end": 1 }] },
+    { "id": "SC-V3-002", "title": "high numeric", "severity": "High", "cwe": ["CWE-190"], "strict_scoreable": true, "locations": [{ "file": "enhanced_calc.cpp", "symbol": "math_engine::FunctionRegistry::fact", "line_start": 1, "line_end": 1 }] },
+    { "id": "SC-V3-003", "title": "critical memory", "severity": "Critical", "cwe": ["CWE-416"], "strict_scoreable": true, "locations": [{ "file": "enhanced_calc.cpp", "symbol": "memory::MemoryPool::cleanup", "line_start": 1, "line_end": 1 }] },
+    { "id": "SC-V3-004", "title": "low division", "severity": "Low", "cwe": ["CWE-369"], "strict_scoreable": true, "locations": [{ "file": "enhanced_calc.cpp", "symbol": "calculator::SuperCalc::run", "line_start": 1, "line_end": 1 }] }
+  ]
+}
+""", System.Text.Encoding.UTF8);
+        return path;
+    }
+
     // Minimal but realistic BenchmarkRunResult with a single primary run whose per-vulnerability
     // credit is derived from the requested TP/partial/missed counts.
     private static BenchmarkRunResult FakeResult(string model, double scorePercent, int fullTp, int partialTp, int fp, int missed, bool includeReasoning = false)
+    {
+        var score = FakeScore("Run 1", scorePercent, fullTp, partialTp, fp, missed);
+        var reasoningDisclosure = FakeReasoningDisclosure(fullTp, partialTp, fp, includeReasoning);
+        var now = DateTimeOffset.Now;
+        return new BenchmarkRunResult
+        {
+            BenchmarkId = "supercalc-v3",
+            BenchmarkProfile = "official",
+            ToolVersion = "test",
+            Model = model,
+            StartedAt = now,
+            CompletedAt = now,
+            Seed = 12345,
+            SourceFile = "enhanced_calc.cpp",
+            SourceSha256 = "deadbeef",
+            ExpectedSourceSha256 = "deadbeef",
+            SourceHashMatches = true,
+            OutputDirectory = string.Empty,
+            Run1 = new BenchmarkRunArtifacts { RunName = "Run 1", StartedAt = now, CompletedAt = now, Score = score, ReasoningDisclosure = reasoningDisclosure }
+        };
+    }
+
+    private static ScoringResult FakeScore(string runName, double scorePercent, int fullTp, int partialTp, int fp, int missed)
     {
         var vulnerabilities = new List<VulnerabilityScore>();
         for (var i = 0; i < FakeVulnIds.Length; i++)
@@ -283,30 +473,36 @@ internal static partial class TestRunner
             {
                 Id = FakeVulnIds[i],
                 Title = "vuln " + FakeVulnIds[i],
-                Severity = "High",
+                Severity = i == 0 || i == 2 ? "Critical" : "High",
                 Found = found,
-                Partial = partial
+                Partial = partial,
+                FindingIndex = found ? i + 1 : null,
+                MatchScore = found ? 0.9 : 0
             });
         }
 
-        var score = new ScoringResult
+        return new ScoringResult
         {
-            RunName = "Run 1",
+            RunName = runName,
             ScoreableVulnerabilityCount = FakeVulnIds.Length,
             FindingCount = fullTp + partialTp + fp,
             FullTruePositives = fullTp,
             PartialTruePositives = partialTp,
             FalsePositives = fp,
+            Duplicates = 1,
+            IgnoredLowConfidence = 1,
             Missed = missed,
-            RawPoints = fullTp * 5.0,
+            RawPoints = fullTp * 5.0 + partialTp * 2.5,
             ScorePercent = scorePercent,
-            Precision = (fullTp + partialTp + fp) == 0 ? 0 : (double)fullTp / (fullTp + partialTp + fp),
-            Recall = FakeVulnIds.Length == 0 ? 0 : (double)fullTp / FakeVulnIds.Length,
+            Precision = (fullTp + partialTp + fp) == 0 ? 0 : (fullTp + partialTp * 0.5) / (fullTp + partialTp + fp),
+            Recall = FakeVulnIds.Length == 0 ? 0 : (fullTp + partialTp * 0.5) / FakeVulnIds.Length,
             F1 = 0.5,
             Vulnerabilities = vulnerabilities
         };
+    }
 
-        var reasoningDisclosure = includeReasoning
+    private static ReasoningDisclosureDiagnostics FakeReasoningDisclosure(int fullTp, int partialTp, int fp, bool includeReasoning)
+        => includeReasoning
             ? new ReasoningDisclosureDiagnostics
             {
                 HasVisibleReasoning = true,
@@ -322,21 +518,6 @@ internal static partial class TestRunner
                 OutputFalsePositives = fp
             }
             : new ReasoningDisclosureDiagnostics();
-
-        var now = DateTimeOffset.Now;
-        return new BenchmarkRunResult
-        {
-            BenchmarkId = "supercalc-v3",
-            ToolVersion = "test",
-            Model = model,
-            StartedAt = now,
-            CompletedAt = now,
-            SourceSha256 = "deadbeef",
-            SourceHashMatches = true,
-            OutputDirectory = string.Empty,
-            Run1 = new BenchmarkRunArtifacts { RunName = "Run 1", Score = score, ReasoningDisclosure = reasoningDisclosure }
-        };
-    }
 
     private static void TryDeleteDirectory(string path)
     {

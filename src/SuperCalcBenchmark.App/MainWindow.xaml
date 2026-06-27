@@ -204,7 +204,22 @@
                             <ComboBoxItem Content="Median" />
                             <ComboBoxItem Content="Bester Run" />
                         </ComboBox>
-                        <Button x:Name="OpenComparisonButton" Content="Diagramme öffnen (HTML)" Margin="16,4,4,4" Click="OpenComparisonButton_Click" IsEnabled="False" ToolTip="Erzeugt Säulen- und Netzdiagramm als HTML und öffnet es im Browser." />
+                        <TextBlock Text="Run-Sicht" VerticalAlignment="Center" Margin="16,4,4,4" />
+                        <ComboBox x:Name="RunViewComboBox" Width="140" SelectionChanged="ComparisonFilter_Changed">
+                            <ComboBoxItem Content="Primary" IsSelected="True" />
+                            <ComboBoxItem Content="Run 1" />
+                            <ComboBoxItem Content="Run 2" />
+                            <ComboBoxItem Content="Delta" />
+                        </ComboBox>
+                        <TextBlock Text="Metrik" VerticalAlignment="Center" Margin="16,4,4,4" />
+                        <ComboBox x:Name="MetricComboBox" Width="180" SelectionChanged="ComparisonFilter_Changed">
+                            <ComboBoxItem Content="Score" IsSelected="True" />
+                            <ComboBoxItem Content="Critical Recall" />
+                            <ComboBoxItem Content="F1" />
+                            <ComboBoxItem Content="Stability" />
+                            <ComboBoxItem Content="Run2-Delta" />
+                        </ComboBox>
+                        <Button x:Name="OpenComparisonButton" Content="Diagramme öffnen (HTML)" Margin="16,4,4,4" Click="OpenComparisonButton_Click" IsEnabled="False" ToolTip="Erzeugt interaktive Vergleichsdiagramme als HTML und öffnet sie im Browser." />
                         <Button x:Name="OpenArchiveFolderButton" Content="Archiv bearbeiten" Click="OpenArchiveFolderButton_Click" ToolTip="Öffnet die Scorecard-JSONs. modelFamily/quant können manuell korrigiert werden; danach Archiv neu laden." />
                     </WrapPanel>
 
@@ -248,6 +263,9 @@
                             </DataGridTemplateColumn>
                             <DataGridTextColumn Header="Runs" Binding="{Binding RunCount}" IsReadOnly="True" Width="60" />
                             <DataGridTextColumn Header="Score" Binding="{Binding ScorePercent, StringFormat=0.##}" IsReadOnly="True" Width="80" />
+                            <DataGridTextColumn Header="Critical" Binding="{Binding CriticalRecall, StringFormat=P1}" IsReadOnly="True" Width="80" />
+                            <DataGridTextColumn Header="Stability" Binding="{Binding Stability, StringFormat=P1}" IsReadOnly="True" Width="80" />
+                            <DataGridTextColumn Header="Run2 Δ" Binding="{Binding Run2Delta, StringFormat=0.##}" IsReadOnly="True" Width="80" />
                             <DataGridTextColumn Header="Median" Binding="{Binding ScoreMedian, StringFormat=0.##}" IsReadOnly="True" Width="80" />
                             <DataGridTextColumn Header="σ" Binding="{Binding ScoreStdDev, StringFormat=0.##}" IsReadOnly="True" Width="60" />
                             <DataGridTextColumn Header="Min" Binding="{Binding ScoreMin, StringFormat=0.##}" IsReadOnly="True" Width="60" />

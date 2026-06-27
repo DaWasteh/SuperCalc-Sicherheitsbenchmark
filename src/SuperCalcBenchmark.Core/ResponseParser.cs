@@ -17,6 +17,7 @@ public sealed partial class ResponseParser
                 AssistantContent = assistantContent,
                 Findings = Reindex(directFindings),
                 ParsedJson = true,
+                ParseMode = "json",
                 Warning = directWarning
             };
         }
@@ -28,6 +29,7 @@ public sealed partial class ResponseParser
                 AssistantContent = assistantContent,
                 Findings = [],
                 ParsedJson = true,
+                ParseMode = "json",
                 Warning = directJsonWarning
             };
         }
@@ -41,6 +43,7 @@ public sealed partial class ResponseParser
                 Findings = Reindex(fencedFindings),
                 ParsedJson = true,
                 UsedMarkdownJsonBlock = true,
+                ParseMode = "markdown_json",
                 Warning = fencedWarning
             };
         }
@@ -53,6 +56,7 @@ public sealed partial class ResponseParser
                 Findings = [],
                 ParsedJson = true,
                 UsedMarkdownJsonBlock = true,
+                ParseMode = "markdown_json",
                 Warning = fencedJsonWarning
             };
         }
@@ -66,6 +70,7 @@ public sealed partial class ResponseParser
                 Findings = Reindex(balancedFindings),
                 ParsedJson = true,
                 UsedMarkdownJsonBlock = trimmed.Contains("```", StringComparison.Ordinal),
+                ParseMode = "balanced_json",
                 Warning = balancedWarning
             };
         }
@@ -78,6 +83,7 @@ public sealed partial class ResponseParser
                 Findings = [],
                 ParsedJson = true,
                 UsedMarkdownJsonBlock = trimmed.Contains("```", StringComparison.Ordinal),
+                ParseMode = "balanced_json",
                 Warning = balancedJsonWarning
             };
         }
@@ -90,6 +96,7 @@ public sealed partial class ResponseParser
                 Findings = Reindex(partialFindings),
                 ParsedJson = true,
                 UsedMarkdownJsonBlock = trimmed.Contains("```", StringComparison.Ordinal),
+                ParseMode = "partial_json",
                 Warning = partialWarning
             };
         }
@@ -100,6 +107,7 @@ public sealed partial class ResponseParser
             AssistantContent = assistantContent,
             Findings = Reindex(fallbackFindings),
             UsedTextFallback = true,
+            ParseMode = fallbackFindings.Count == 0 ? "none" : "text_fallback",
             Warning = fallbackFindings.Count == 0
                 ? "Could not parse JSON and text fallback found no findings."
                 : "Could not parse JSON; used heuristic text fallback. Scores should be treated as low parse-confidence."

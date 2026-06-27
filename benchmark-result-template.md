@@ -24,6 +24,7 @@ assignees: ''
 **Run 2 Self-Validation Score:** [Traceable score according to docs/SCORING_METHODOLOGY.md]
 **Overall Score:** [Preferred final score and rationale]
 **Denken-vs-Sagen Diagnostic (optional):** [Thinking TPs → Output TPs, thinking-only TPs, coverage; diagnostic only, not part of score]
+**Comparison Diagnostics (optional):** [Critical recall, High+Critical recall, stability/IQR, parse success %, loop %, Run2 delta, FP reduction]
 
 ### 🐛 Detected Vulnerabilities
 
@@ -87,10 +88,12 @@ List any incorrectly reported security issues:
 
 ## 📊 Detailed Analysis
 
-### Time Breakdown (if tracked)
-- **Run 1 blind analysis:** [X] minutes
-- **Run 2 self-validation:** [X] minutes
+### Time / Health Breakdown (if tracked)
+- **Run 1 blind analysis:** [X] minutes, finish_reason=[...], parse_mode=[...]
+- **Run 2 self-validation:** [X] minutes, finish_reason=[...], parse_mode=[...]
 - **Offline scoring:** [X] seconds
+- **Loop / empty-output diagnostics:** [loop detected? empty final output with reasoning?]
+- **Output sizes:** [final response chars / reasoning chars]
 
 ### Model Behavior
 - [Did the model ask clarifying questions?]
@@ -119,7 +122,8 @@ List any incorrectly reported security issues:
 **Memory Usage:** [e.g., 24GB peak]
 **Token Count:** [Input/Output tokens if known]
 **Temperature/Settings:** [Model parameters used]
-**Multiple Runs:** [If you ran multiple times, note consistency]
+**Multiple Runs:** [If you ran multiple times, note consistency; include score stddev/IQR/stability if available]
+**Comparison HTML:** [Optional link/path to `archive/_reports/comparison.html`; for public sharing prefer `--public-labels`]
 
 ## 🎉 Community Impact
 

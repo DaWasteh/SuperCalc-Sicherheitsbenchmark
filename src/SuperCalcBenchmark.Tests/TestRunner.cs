@@ -44,6 +44,9 @@ internal static partial class TestRunner
         Run("archive round-trips and groups by model and quant", ArchiveRoundTripsAndGroups);
         Run("comparison aggregates and filters by family", ComparisonAggregatesAndFiltersByFamily);
         Run("comparison html embeds parseable payload", ComparisonHtmlEmbedsParseablePayload);
+        Run("archive loads v1 scorecards with v2 fallbacks", ArchiveLoadsV1ScorecardsWithV2Fallbacks);
+        Run("archive v2 stores completion and parse diagnostics", ArchiveV2StoresCompletionAndParseDiagnostics);
+        Run("comparison metadata delta and stability metrics work", ComparisonMetadataDeltaAndStabilityMetricsWork);
 
         if (_failures == 0)
         {

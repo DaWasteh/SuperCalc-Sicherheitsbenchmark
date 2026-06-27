@@ -98,11 +98,19 @@ Run 2 is not allowed to use hidden ground truth; it only receives the code and t
 
 Each completed run is archived as a compact scorecard (`archive/<benchmark>/<family>__<quant>/<timestamp>.json`) so multiple models — and multiple quantizations of the same model — can be compared later without re-running them. The archive groups runs by **model family + quant**, both parsed from the llama.cpp model id / GGUF name (overridable via `--quant` or the GUI **Quant** field). If a model alias hides this information, only the identity fields are editable after the fact: double-click **Modell** or **Quant** in the GUI comparison grid, or change `modelFamily`/`quant` in the JSON scorecard manually; `groupKey` and the physical folder name are derived again when the archive is loaded.
 
-For comparison, the **primary run** of each scorecard is used: Run 2 (self-validation) when present, otherwise Run 1. This matches the headline score a single benchmark reports.
+By default, the **primary run** of each scorecard is used: Run 2 (self-validation) when present, otherwise Run 1. The comparison builder can also use `--run-view run1`, `--run-view run2`, or `--run-view delta` (Run2−Run1). This changes only the comparison perspective; it does not change any individual run's score.
 
-The comparison view derives two series from the archived scorecards:
+Archive scorecards use schema v2. Older schema-v1 files still load: their `vulnerabilityCredit` map is converted in memory into v2 `vulnerabilityResults`. New scorecards add compact diagnostics from the run artifacts — finish reason, loop flag, parse mode/warning, prompt/request/response/reasoning character counts, per-run duration, duplicates, ignored-low-confidence counts, and per-vulnerability status — but still do **not** copy prompts or raw model responses into the archive.
 
-- **Total score (bar chart):** the primary run's `ScorePercent`. When several runs of the same model + quant exist, the group can be summarized as the **mean** (`average`), the **median** (`median`), or the single **best** primary-run score. The HTML bar chart also exposes the run distribution (`mean`, `median`, sample standard deviation, min, max) and draws min–max uncertainty bars for groups with more than one run.
-- **Per-vulnerability credit (radar / net chart):** for each ground-truth vulnerability, `1.0` if fully detected, `0.5` if partially detected, `0.0` if missed. All series share one vulnerability axis (the union of ids seen across the compared runs). With `average` and `median`, the per-vulnerability credits are aggregated across all runs in the group; with `best`, the best run's exact per-vulnerability vector is used.
+The comparison view derives several read-only series from the archived scorecards:
 
-These are read-only views over the existing scoring output; they do not change how any individual run is scored. Generated `comparison.html`/`comparison.csv` reports live under `archive/_reports/` and are regenerated on demand, so they are not committed; the underlying scorecards are.
+- **Total score / selected metric:** the selected run view's score. When several runs of the same model + quant exist, the group can be summarized as **mean** (`average`), **median** (`median`), or the single **best** selected run.
+- **Score distribution:** mean, median, sample standard deviation, IQR, optional 95% CI, min, and max.
+- **Per-vulnerability credit:** for each ground-truth vulnerability, `1.0` if fully detected, `0.5` if partially detected, `0.0` if missed. Delta view stores Run2−Run1 credit per vulnerability.
+- **Ground-truth metadata axes:** when local `ground_truth.json` is available, the report derives severity, CWE, category, and module labels for post-run filtering/aggregation. These labels are never included in model prompts. Use `--public-labels` when generating share-friendlier HTML to omit vulnerability titles/CWEs/modules.
+- **Severity/category metrics:** Critical/High/Medium/Low recall, High+Critical recall, category scores (Memory Safety, Injection, Concurrency, Auth/Crypto, Numeric/DoS, File I/O), and CWE coverage.
+- **Stability/reproducibility:** per-vulnerability stability across repeated runs, score IQR/CI, and run count filters.
+- **Completion/parsing health:** parse success rate, loop rate, empty-output-with-reasoning rate, FP-per-finding, duplicate rate, ignored-low-confidence rate, response/reasoning sizes, and duration.
+- **Run 1 vs Run 2:** score delta, FP reduction, TP retention, added TPs, and dropped TPs.
+
+Generated `comparison.html`/`comparison.csv` reports live under `archive/_reports/` and are regenerated on demand, so they are not committed; the underlying scorecards are.

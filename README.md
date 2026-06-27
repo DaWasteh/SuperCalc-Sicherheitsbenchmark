@@ -235,12 +235,18 @@ archive/
 
 The model family and quant are parsed automatically from the llama.cpp model id / GGUF name (`Q4_K_M`, `IQ3_XXS`, `Q8_0`, `F16`, …). When your server reports an alias that does not encode the quant, set it explicitly before the run — **Quant (optional)** in the GUI options, or `--quant Q4_K_M` on the CLI. If a run is already archived as `unknown-quant`, open the JSON scorecard under `archive/` and edit `modelFamily` and/or `quant` manually; `groupKey` and the folder name are recomputed/ignored on load, so you do not have to move files. Then click **Archiv neu laden** or rerun `archive-list`/`compare`. Because every quant of the same model shares a family, you can line up, for example, all `qwen3-coder-30b` quants against each other. The JSON scorecards are committed to the repo so run history travels with any clone; only the generated reports under `archive/_reports/` are git-ignored. Archiving is on by default and writes to `./archive`; pass `--no-archive` (or `--archive <dir>`) to change that.
 
-The **Vergleich** tab in the GUI shows one row per model + quant with score, median, standard deviation, min/max, precision, recall, F1, and TP/FP/Missed counts. The **Modell** and **Quant** cells are directly editable: double-click the cell, change the value, and the app updates the underlying archived scorecard JSONs. Pick a single model family to compare only its quants, switch between **Durchschnitt** (mean across all runs in a group), **Median**, and **Bester Run**, and click **Diagramme öffnen (HTML)** for a graphical view:
+The **Vergleich** tab in the GUI shows one row per model + quant with score, critical recall, stability, Run-2 delta, median, standard deviation, min/max, precision, recall, F1, and TP/FP/Missed counts. The **Modell** and **Quant** cells are directly editable: double-click the cell, change the value, and the app updates the underlying archived scorecard JSONs. Pick a single model family to compare only its quants, switch between **Durchschnitt** (mean across all runs in a group), **Median**, and **Bester Run**, choose **Primary / Run 1 / Run 2 / Delta**, and click **Diagramme öffnen (HTML)** for a graphical view.
 
-- a **bar chart** of total score per model + quant with min–max uncertainty bars when multiple runs exist, and
-- a **radar / net chart** of per-vulnerability credit (1.0 full, 0.5 partial, 0.0 missed) on a shared vulnerability axis,
+Archive scorecards now use schema v2 (v1 still loads) and keep compact diagnostics that were previously available only in `run.json`: finish reason, loop flag, parse mode/warnings, response/request/prompt/reasoning character counts, per-run durations, duplicates, ignored-low-confidence counts, and rich per-vulnerability status. They still do **not** copy prompts or raw model responses; those remain referenced only via `runDirectory`.
 
-plus a sortable summary table. The same report is available from the CLI and is written as a self-contained `comparison.html` (Chart.js from CDN) alongside a `comparison.csv` for spreadsheets:
+The generated HTML contains client-side filters/search (family, quant, severity, category, CWE, score/runs/stddev/FP thresholds, official/source-hash/loop/reasoning toggles) and multiple views:
+
+- **main metric bar chart** (score, critical recall, F1, FP-rate, stability, Run2-delta, thinking coverage, duration),
+- **severity recall chart** and **vulnerability heatmap** (1.0 full, 0.5 partial, 0.0 missed; delta view highlights improvements/regressions),
+- **Run 1 → Run 2 slope chart**, quality health chart, and optional Denken-vs-Sagen chart,
+- sortable/expandable table with per-run drilldown and CSV export of the currently filtered rows.
+
+The same report is available from the CLI and is written as a self-contained `comparison.html` (Chart.js from CDN, tables still work offline) alongside a `comparison.csv` for spreadsheets:
 
 ```powershell
 # List everything in the archive, grouped by model + quant
@@ -251,6 +257,12 @@ dotnet run --project src/SuperCalcBenchmark.Cli -- compare
 
 # Compare only the quants of one model, using each group's median run score
 dotnet run --project src/SuperCalcBenchmark.Cli -- compare --family qwen3-coder-30b-a3b-instruct --aggregate median
+
+# Start the HTML in a different perspective / default metric
+dotnet run --project src/SuperCalcBenchmark.Cli -- compare --run-view delta --metric run2-delta
+
+# Generate a share-friendlier HTML payload: keep IDs/categories, hide titles/CWEs/modules
+dotnet run --project src/SuperCalcBenchmark.Cli -- compare --public-labels
 ```
 
 ### Traceable Scoring Framework
@@ -360,6 +372,7 @@ This project is distributed under the [MIT License](LICENSE).
 | Version | Date       | Highlights                                                                                       |
 | :-----: | :--------: | ------------------------------------------------------------------------------------------------ |
 |  v3.2  | 2026-06-26 | More tolerant JSON parsing; archive comparison median mode plus min–max uncertainty bars and score distribution columns |
+|  v3.2  | 2026-06-27 | Archive schema v2; comparison filters by severity/CWE/category, heatmap, Run1/Run2/delta views, stability/quality/parse diagnostics, filtered CSV export |
 |  v3.1  | 2026-06-21 | Run archive per model + quant; multi-run comparison with bar (total score) and radar (per-vulnerability) charts, HTML/CSV export, CLI archive-list/compare |
 |  v3.0   | 2025-05-01 | Expanded to 20 vulnerabilities; added concurrency & memory-pool flaws; formalized scoring matrix |
 |  v2.0   | 2025-03-15 | Community-driven additions (#10–#15); refined severity classification                            |

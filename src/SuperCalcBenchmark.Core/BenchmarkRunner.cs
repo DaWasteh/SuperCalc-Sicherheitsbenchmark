@@ -50,10 +50,13 @@ public sealed class BenchmarkRunner
         {
             ToolVersion = ToolVersion,
             BenchmarkId = groundTruth.BenchmarkId,
+            BenchmarkProfile = options.BenchmarkProfile,
             StartedAt = startedAt,
             ServerUrl = options.ServerUrl,
             Model = options.Model,
             MaxTokens = options.MaxTokens,
+            Seed = options.Seed,
+            SkipResponseFormat = options.SkipResponseFormat,
             DisableThinking = options.DisableThinking,
             AbortOnLoop = options.AbortOnLoop,
             ServerContextSize = serverContextSize,
@@ -66,6 +69,7 @@ public sealed class BenchmarkRunner
 
         progress?.Invoke("Building Run 1 prompt...");
         var run1Prompt = _promptBuilder.BuildAnalysisPrompt(source, options.AnalysisPromptPath, options.SchemaPath);
+        var run1StartedAt = DateTimeOffset.UtcNow;
         progress?.Invoke("Sending Run 1 blind analysis to llama-server...");
         var run1Completion = await client.CreateChatCompletionAsync(
             options.ServerUrl,
@@ -86,9 +90,12 @@ public sealed class BenchmarkRunner
         var run1Parse = _responseParser.Parse(run1Content.OutputContent);
         var run1Score = _scoringEngine.Score("Run 1", run1Parse.Findings, groundTruth, source);
         var run1ReasoningDisclosure = BuildReasoningDisclosure("Run 1", run1Content.ReasoningContent, run1Score, groundTruth, source);
+        var run1CompletedAt = DateTimeOffset.UtcNow;
         result.Run1 = new BenchmarkRunArtifacts
         {
             RunName = "Run 1",
+            StartedAt = run1StartedAt,
+            CompletedAt = run1CompletedAt,
             Prompt = run1Prompt,
             Response = run1Content.OutputContent,
             ReasoningContent = run1Content.ReasoningContent,
@@ -112,6 +119,7 @@ public sealed class BenchmarkRunner
 
         progress?.Invoke("Building Run 2 self-validation prompt...");
         var run2Prompt = _promptBuilder.BuildSelfValidationPrompt(source, options.SelfValidatePromptPath, options.SchemaPath, run1Content.OutputContent);
+        var run2StartedAt = DateTimeOffset.UtcNow;
         progress?.Invoke("Sending Run 2 self-validation to llama-server...");
         var run2Completion = await client.CreateChatCompletionAsync(
             options.ServerUrl,
@@ -132,9 +140,12 @@ public sealed class BenchmarkRunner
         var run2Parse = _responseParser.Parse(run2Content.OutputContent);
         var run2Score = _scoringEngine.Score("Run 2", run2Parse.Findings, groundTruth, source);
         var run2ReasoningDisclosure = BuildReasoningDisclosure("Run 2", run2Content.ReasoningContent, run2Score, groundTruth, source);
+        var run2CompletedAt = DateTimeOffset.UtcNow;
         result.Run2 = new BenchmarkRunArtifacts
         {
             RunName = "Run 2",
+            StartedAt = run2StartedAt,
+            CompletedAt = run2CompletedAt,
             Prompt = run2Prompt,
             Response = run2Content.OutputContent,
             ReasoningContent = run2Content.ReasoningContent,
@@ -180,16 +191,20 @@ public sealed class BenchmarkRunner
         var score = _scoringEngine.Score(runName, parse.Findings, groundTruth, source);
         var reasoningDisclosure = BuildReasoningDisclosure(runName, content.ReasoningContent, score, groundTruth, source);
         var outputDirectory = _reportWriter.CreateRunDirectory(WithModelFallback(options, runName), startedAt);
+        var completedAt = DateTimeOffset.UtcNow;
 
         var result = new BenchmarkRunResult
         {
             ToolVersion = ToolVersion,
             BenchmarkId = groundTruth.BenchmarkId,
+            BenchmarkProfile = "fixture",
             StartedAt = startedAt,
-            CompletedAt = DateTimeOffset.UtcNow,
+            CompletedAt = completedAt,
             ServerUrl = "fixture",
             Model = string.IsNullOrWhiteSpace(options.Model) ? runName : options.Model,
             MaxTokens = options.MaxTokens,
+            Seed = options.Seed,
+            SkipResponseFormat = options.SkipResponseFormat,
             DisableThinking = options.DisableThinking,
             AbortOnLoop = options.AbortOnLoop,
             SourceFile = options.SourcePath,
@@ -200,6 +215,8 @@ public sealed class BenchmarkRunner
             Run1 = new BenchmarkRunArtifacts
             {
                 RunName = runName,
+                StartedAt = startedAt,
+                CompletedAt = completedAt,
                 Prompt = string.Empty,
                 Response = content.OutputContent,
                 ReasoningContent = content.ReasoningContent,
@@ -236,6 +253,7 @@ public sealed class BenchmarkRunner
                 AllowHashMismatch = original.AllowHashMismatch,
                 SkipResponseFormat = original.SkipResponseFormat,
                 DisableThinking = original.DisableThinking,
+                BenchmarkProfile = original.BenchmarkProfile,
                 AbortOnLoop = original.AbortOnLoop,
                 ArchiveDirectory = original.ArchiveDirectory,
                 QuantOverride = original.QuantOverride

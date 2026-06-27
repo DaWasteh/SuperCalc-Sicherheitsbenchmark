@@ -103,6 +103,7 @@ public sealed class ParseResult
     public bool ParsedJson { get; init; }
     public bool UsedMarkdownJsonBlock { get; init; }
     public bool UsedTextFallback { get; init; }
+    public string ParseMode { get; init; } = string.Empty;
     public string? Warning { get; init; }
 }
 
@@ -284,6 +285,11 @@ public sealed record ChatStreamDelta
 public sealed class BenchmarkRunArtifacts
 {
     public string RunName { get; init; } = string.Empty;
+    public DateTimeOffset StartedAt { get; init; }
+    public DateTimeOffset CompletedAt { get; init; }
+    public long DurationMs => StartedAt == default || CompletedAt == default
+        ? 0
+        : Math.Max(0, (long)(CompletedAt - StartedAt).TotalMilliseconds);
     public string Prompt { get; init; } = string.Empty;
     public string Response { get; init; } = string.Empty;
     public string ReasoningContent { get; init; } = string.Empty;
@@ -305,11 +311,17 @@ public sealed class BenchmarkRunResult
 {
     public string ToolVersion { get; init; } = "0.1.0";
     public string BenchmarkId { get; init; } = string.Empty;
+    public string BenchmarkProfile { get; init; } = "official";
     public DateTimeOffset StartedAt { get; init; }
     public DateTimeOffset CompletedAt { get; set; }
+    public long DurationMs => StartedAt == default || CompletedAt == default
+        ? 0
+        : Math.Max(0, (long)(CompletedAt - StartedAt).TotalMilliseconds);
     public string ServerUrl { get; init; } = string.Empty;
     public string Model { get; init; } = string.Empty;
     public int MaxTokens { get; init; }
+    public int Seed { get; init; }
+    public bool SkipResponseFormat { get; init; }
     public bool DisableThinking { get; init; }
     public bool AbortOnLoop { get; init; }
     public int? ServerContextSize { get; init; }
@@ -344,6 +356,7 @@ public sealed class BenchmarkOptions
     public bool AllowHashMismatch { get; init; }
     public bool SkipResponseFormat { get; init; }
     public bool DisableThinking { get; init; }
+    public string BenchmarkProfile { get; init; } = "official";
 
     /// <summary>
     /// Stream completions through a repetition guard and close the request early when

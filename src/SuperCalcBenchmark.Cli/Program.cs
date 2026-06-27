@@ -176,6 +176,11 @@ internal static class Program
         var benchmark = args.GetNullable("--benchmark");
         var family = args.GetNullable("--family");
         var aggregate = ParseAggregate(args.Get("--aggregate", "average"));
+        var runView = ParseRunView(args.Get("--run-view", "primary"));
+        var metric = ParseMetric(args.Get("--metric", "score"));
+        var publicLabels = args.Has("--public-labels");
+        var groundTruthPath = args.Get("--ground-truth", Path.Combine("benchmarks", "supercalc-v3", "ground_truth.json"));
+        var metadata = VulnerabilityMetadataIndex.Load(groundTruthPath, publicLabels);
 
         var store = new ArchiveStore(archiveDir);
         var groups = store.LoadGroups(benchmark);
@@ -185,7 +190,7 @@ internal static class Program
             return 0;
         }
 
-        var report = ComparisonReport.Build(groups, benchmark ?? groups[0].Records[0].BenchmarkId, aggregate, family);
+        var report = ComparisonReport.Build(groups, benchmark ?? groups[0].Records[0].BenchmarkId, aggregate, family, metadata, runView, metric);
         if (report.IsEmpty)
         {
             Console.WriteLine(family is null
@@ -197,7 +202,7 @@ internal static class Program
         var outputDir = args.GetNullable("--out") ?? Path.Combine(archiveDir, "_reports");
         var htmlPath = new ComparisonHtmlWriter().Write(report, Path.GetFullPath(outputDir));
 
-        Console.WriteLine($"Comparison ({aggregate}, {report.Series.Count} series, {report.VulnerabilityAxis.Count} vulns):");
+        Console.WriteLine($"Comparison ({aggregate}, {runView}, {metric}, {report.Series.Count} series, {report.VulnerabilityAxis.Count} vulns):");
         foreach (var series in report.Series)
         {
             Console.WriteLine($"  {series.ScorePercent,6:0.##}  {series.Label}  (runs={series.RunCount}, median={series.ScoreMedian:0.##}, avg={series.ScoreMean:0.##}, σ={series.ScoreStdDev:0.##}, range={series.ScoreMin:0.##}-{series.ScoreMax:0.##})");
@@ -232,6 +237,7 @@ internal static class Program
             AllowHashMismatch = args.Has("--allow-hash-mismatch"),
             SkipResponseFormat = args.Has("--skip-response-format"),
             DisableThinking = args.Has("--disable-thinking"),
+            BenchmarkProfile = args.Get("--profile", args.Get("--benchmark-profile", "official")),
             AbortOnLoop = !args.Has("--no-loop-abort"),
             ArchiveDirectory = ResolveArchiveDirectory(args),
             QuantOverride = args.GetNullable("--quant")
@@ -261,6 +267,35 @@ internal static class Program
             "median" => ComparisonAggregate.Median,
             "average" or "avg" or "mean" or "durchschnitt" => ComparisonAggregate.Average,
             _ => throw new ArgumentException("--aggregate must be one of: average, median, best.")
+        };
+    }
+
+    private static ComparisonRunView ParseRunView(string value)
+    {
+        return value.Trim().ToLowerInvariant() switch
+        {
+            "run1" or "run-1" or "1" => ComparisonRunView.Run1,
+            "run2" or "run-2" or "2" => ComparisonRunView.Run2,
+            "delta" or "run2-run1" or "run2-delta" => ComparisonRunView.Delta,
+            "primary" or "haupt" => ComparisonRunView.Primary,
+            _ => throw new ArgumentException("--run-view must be one of: primary, run1, run2, delta.")
+        };
+    }
+
+    private static ComparisonMetric ParseMetric(string value)
+    {
+        return value.Trim().ToLowerInvariant() switch
+        {
+            "critical-recall" or "critical" => ComparisonMetric.CriticalRecall,
+            "high-critical-recall" or "high+critical" or "high-critical" => ComparisonMetric.HighCriticalRecall,
+            "f1" => ComparisonMetric.F1,
+            "fp-rate" or "fpr" => ComparisonMetric.FpRate,
+            "stability" or "stable" => ComparisonMetric.Stability,
+            "run2-delta" or "delta" => ComparisonMetric.Run2Delta,
+            "thinking-coverage" or "thinking" => ComparisonMetric.ThinkingCoverage,
+            "duration" or "time" => ComparisonMetric.Duration,
+            "score" or "overall" => ComparisonMetric.Score,
+            _ => throw new ArgumentException("--metric must be one of: score, critical-recall, high-critical-recall, f1, fp-rate, stability, run2-delta, thinking-coverage, duration.")
         };
     }
 
@@ -317,6 +352,7 @@ internal static class Program
         Console.WriteLine("  --timeout-seconds <int>    Default: 1200");
         Console.WriteLine("  --skip-response-format     Do not send llama.cpp response_format");
         Console.WriteLine("  --disable-thinking         Send chat_template_kwargs.enable_thinking=false for Qwen/debug runs");
+        Console.WriteLine("  --profile <official|debug|fixture>  Label archived run context. Default: official");
         Console.WriteLine("  --no-loop-abort            Disable streaming repetition guard (not recommended)");
         Console.WriteLine("  --allow-hash-mismatch      Development escape hatch; do not use for official scoring");
         Console.WriteLine();
@@ -327,6 +363,9 @@ internal static class Program
         Console.WriteLine("  --benchmark <id>           Restrict archive-list/compare to one benchmark id");
         Console.WriteLine("  --family <name>            compare: only quants of this model family");
         Console.WriteLine("  --aggregate <average|median|best> compare: headline score per group. Default: average");
+        Console.WriteLine("  --run-view <primary|run1|run2|delta> compare: selected run perspective. Default: primary");
+        Console.WriteLine("  --metric <score|critical-recall|f1|fp-rate|stability|run2-delta|thinking-coverage|duration>");
+        Console.WriteLine("  --public-labels            compare: hide vulnerability titles/CWEs/modules in the HTML payload");
     }
 
     private sealed class ParsedArgs

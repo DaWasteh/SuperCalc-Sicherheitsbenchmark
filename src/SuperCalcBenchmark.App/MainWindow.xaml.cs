@@ -709,8 +709,8 @@ public partial class MainWindow : Window
             _ => "Durchschnitt"
         };
         ComparisonStatusTextBlock.Text =
-            $"{report.Series.Count} Modell/Quant-Gruppe(n), {report.VulnerabilityAxis.Count} Schwachstellen · Wertung: {aggregate}. " +
-            "Median/σ/Min/Max werden aus allen Runs der Gruppe berechnet; Diagramm-Fehlerbalken zeigen die Spanne. Modell/Quant per Doppelklick direkt bearbeiten.";
+            $"{report.Series.Count} Modell/Quant-Gruppe(n), {report.VulnerabilityAxis.Count} Schwachstellen · Wertung: {aggregate}, Run-Sicht: {SelectedRunView}, Metrik: {SelectedMetric}. " +
+            "HTML enthält clientseitige Filter, Heatmap, Severity-, Run1/Run2-, Stabilitäts- und Qualitätsdiagnosen. Modell/Quant per Doppelklick direkt bearbeiten.";
     }
 
     private ComparisonReport BuildCurrentComparison()
@@ -723,7 +723,8 @@ public partial class MainWindow : Window
         var family = FamilyFilterComboBox.SelectedItem as string;
         var familyFilter = string.Equals(family, AllFamiliesLabel, StringComparison.Ordinal) ? null : family;
 
-        return ComparisonReport.Build(_comparisonGroups, benchmarkId, SelectedAggregate, familyFilter);
+        var metadata = VulnerabilityMetadataIndex.Load(Path.Combine(_repositoryRoot, "benchmarks", "supercalc-v3", "ground_truth.json"));
+        return ComparisonReport.Build(_comparisonGroups, benchmarkId, SelectedAggregate, familyFilter, metadata, SelectedRunView, SelectedMetric);
     }
 
     private ComparisonAggregate SelectedAggregate =>
@@ -732,6 +733,25 @@ public partial class MainWindow : Window
             "Bester Run" => ComparisonAggregate.Best,
             "Median" => ComparisonAggregate.Median,
             _ => ComparisonAggregate.Average
+        };
+
+    private ComparisonRunView SelectedRunView =>
+        ((RunViewComboBox.SelectedItem as ComboBoxItem)?.Content as string) switch
+        {
+            "Run 1" => ComparisonRunView.Run1,
+            "Run 2" => ComparisonRunView.Run2,
+            "Delta" => ComparisonRunView.Delta,
+            _ => ComparisonRunView.Primary
+        };
+
+    private ComparisonMetric SelectedMetric =>
+        ((MetricComboBox.SelectedItem as ComboBoxItem)?.Content as string) switch
+        {
+            "Critical Recall" => ComparisonMetric.CriticalRecall,
+            "F1" => ComparisonMetric.F1,
+            "Stability" => ComparisonMetric.Stability,
+            "Run2-Delta" => ComparisonMetric.Run2Delta,
+            _ => ComparisonMetric.Score
         };
 
     private void OpenComparisonButton_Click(object sender, RoutedEventArgs e)
@@ -769,6 +789,9 @@ public partial class MainWindow : Window
         public string Quant { get; set; } = string.Empty;
         public int RunCount { get; init; }
         public double ScorePercent { get; init; }
+        public double CriticalRecall { get; init; }
+        public double Stability { get; init; }
+        public double Run2Delta { get; init; }
         public double ScoreMedian { get; init; }
         public double ScoreStdDev { get; init; }
         public double ScoreMin { get; init; }
@@ -788,6 +811,9 @@ public partial class MainWindow : Window
             Quant = series.Quant,
             RunCount = series.RunCount,
             ScorePercent = series.ScorePercent,
+            CriticalRecall = series.CriticalRecall,
+            Stability = series.VulnerabilityStability,
+            Run2Delta = series.Run2ScoreDelta,
             ScoreMedian = series.ScoreMedian,
             ScoreStdDev = series.ScoreStdDev,
             ScoreMin = series.ScoreMin,

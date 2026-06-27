@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 
@@ -98,19 +99,38 @@ public sealed class ArchiveStore
             SchemaVersion = ArchiveRecord.CurrentSchemaVersion,
             RecordId = Guid.NewGuid().ToString("N"),
             BenchmarkId = string.IsNullOrWhiteSpace(result.BenchmarkId) ? "unknown-benchmark" : result.BenchmarkId,
+            BenchmarkProfile = string.IsNullOrWhiteSpace(result.BenchmarkProfile) ? "official" : result.BenchmarkProfile,
             ToolVersion = result.ToolVersion,
             RawModelId = identity.RawModelId,
             ModelFamily = identity.Family,
             Quant = identity.Quant,
             QuantWasDetected = identity.QuantWasDetected,
             GroupKey = identity.GroupKey,
+            ServerUrlHash = HashServerUrl(result.ServerUrl),
+            ServerLabel = string.IsNullOrWhiteSpace(result.ServerUrl) ? string.Empty : "server-" + HashServerUrl(result.ServerUrl)[..8],
             ServerContextSize = result.ServerContextSize,
             MaxTokens = result.MaxTokens,
+            Seed = result.Seed,
+            SkipResponseFormat = result.SkipResponseFormat,
             DisableThinking = result.DisableThinking,
+            AbortOnLoop = result.AbortOnLoop,
+            SourceFile = result.SourceFile,
             SourceSha256 = result.SourceSha256,
+            ExpectedSourceSha256 = result.ExpectedSourceSha256,
             SourceHashMatches = result.SourceHashMatches,
             StartedAt = result.StartedAt,
             CompletedAt = result.CompletedAt,
+            DurationMs = result.DurationMs,
+            ModelMetadata = new ArchiveModelMetadata
+            {
+                Family = identity.Family,
+                Quant = identity.Quant,
+                QuantBits = EstimateQuantBits(identity.Quant)
+            },
+            ServerMetadata = new ArchiveServerMetadata
+            {
+                ServerContextSize = result.ServerContextSize
+            },
             RunDirectory = result.OutputDirectory,
             Runs = runs
         };
@@ -220,6 +240,10 @@ public sealed class ArchiveStore
             record.Quant = normalizedQuant;
             record.QuantWasDetected = false;
             record.GroupKey = ModelIdentity.GroupKey(record.ModelFamily, record.Quant);
+            record.ModelMetadata ??= new ArchiveModelMetadata();
+            record.ModelMetadata.Family = record.ModelFamily;
+            record.ModelMetadata.Quant = record.Quant;
+            record.ModelMetadata.QuantBits ??= EstimateQuantBits(record.Quant);
 
             var targetDirectory = Path.Combine(_archiveRoot, TextUtil.SafeFileNamePart(record.BenchmarkId), record.GroupKey);
             Directory.CreateDirectory(targetDirectory);
@@ -276,9 +300,17 @@ public sealed class ArchiveStore
         // "quant" in an archived scorecard without also moving folders or editing groupKey.
         var identity = ModelIdentity.Parse(record.RawModelId);
 
+        if (record.SchemaVersion <= 0)
+        {
+            record.SchemaVersion = 1;
+        }
+
         record.BenchmarkId = string.IsNullOrWhiteSpace(record.BenchmarkId)
             ? "unknown-benchmark"
             : record.BenchmarkId.Trim();
+        record.BenchmarkProfile = string.IsNullOrWhiteSpace(record.BenchmarkProfile)
+            ? "official"
+            : record.BenchmarkProfile.Trim();
         record.ModelFamily = string.IsNullOrWhiteSpace(record.ModelFamily)
             ? identity.Family
             : record.ModelFamily.Trim();
@@ -286,6 +318,67 @@ public sealed class ArchiveStore
             ? identity.Quant
             : record.Quant.Trim();
         record.GroupKey = ModelIdentity.GroupKey(record.ModelFamily, record.Quant);
+
+        if (string.IsNullOrWhiteSpace(record.ExpectedSourceSha256))
+        {
+            record.ExpectedSourceSha256 = record.SourceSha256;
+        }
+
+        if (record.DurationMs <= 0 && record.StartedAt != default && record.CompletedAt != default)
+        {
+            record.DurationMs = Math.Max(0, (long)(record.CompletedAt - record.StartedAt).TotalMilliseconds);
+        }
+
+        record.ModelMetadata ??= new ArchiveModelMetadata();
+        if (string.IsNullOrWhiteSpace(record.ModelMetadata.Family))
+        {
+            record.ModelMetadata.Family = record.ModelFamily;
+        }
+
+        if (string.IsNullOrWhiteSpace(record.ModelMetadata.Quant))
+        {
+            record.ModelMetadata.Quant = record.Quant;
+        }
+
+        record.ModelMetadata.QuantBits ??= EstimateQuantBits(record.Quant);
+        record.ServerMetadata ??= new ArchiveServerMetadata();
+        record.ServerMetadata.ServerContextSize ??= record.ServerContextSize;
+        record.ServerContextSize ??= record.ServerMetadata.ServerContextSize;
+
+        foreach (var run in record.Runs)
+        {
+            run.NormalizeAfterLoad();
+        }
+    }
+
+    private static string HashServerUrl(string serverUrl)
+    {
+        if (string.IsNullOrWhiteSpace(serverUrl))
+        {
+            return string.Empty;
+        }
+
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(serverUrl.Trim()));
+        return Convert.ToHexString(bytes).ToLowerInvariant();
+    }
+
+    private static double? EstimateQuantBits(string quant)
+    {
+        if (string.IsNullOrWhiteSpace(quant))
+        {
+            return null;
+        }
+
+        var upper = quant.ToUpperInvariant();
+        if (upper.Contains("IQ1", StringComparison.Ordinal) || upper.Contains("Q1", StringComparison.Ordinal)) return 1;
+        if (upper.Contains("IQ2", StringComparison.Ordinal) || upper.Contains("Q2", StringComparison.Ordinal)) return 2;
+        if (upper.Contains("IQ3", StringComparison.Ordinal) || upper.Contains("Q3", StringComparison.Ordinal)) return 3;
+        if (upper.Contains("IQ4", StringComparison.Ordinal) || upper.Contains("Q4", StringComparison.Ordinal)) return 4;
+        if (upper.Contains("IQ5", StringComparison.Ordinal) || upper.Contains("Q5", StringComparison.Ordinal)) return 5;
+        if (upper.Contains("IQ6", StringComparison.Ordinal) || upper.Contains("Q6", StringComparison.Ordinal)) return 6;
+        if (upper.Contains("Q8", StringComparison.Ordinal)) return 8;
+        if (upper.Contains("F16", StringComparison.Ordinal) || upper.Contains("FP16", StringComparison.Ordinal)) return 16;
+        return null;
     }
 
     private static void TryDeleteEmptyDirectory(string? directory)

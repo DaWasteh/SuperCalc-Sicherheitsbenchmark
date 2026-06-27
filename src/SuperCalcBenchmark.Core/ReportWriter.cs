@@ -80,6 +80,7 @@ public sealed class ReportWriter
         builder.AppendLine($"- Streaming loop guard enabled: `{result.AbortOnLoop}`");
         builder.AppendLine($"- Started: `{result.StartedAt:O}`");
         builder.AppendLine($"- Completed: `{result.CompletedAt:O}`");
+        builder.AppendLine($"- Total duration: `{FormatDuration(result.DurationMs)}`");
         builder.AppendLine($"- Source: `{result.SourceFile}`");
         builder.AppendLine($"- Source SHA-256: `{result.SourceSha256}`");
         builder.AppendLine($"- Expected SHA-256: `{result.ExpectedSourceSha256}`");
@@ -157,12 +158,15 @@ public sealed class ReportWriter
         {
             builder.AppendLine($"| Loop abort reason | {EscapePipe(artifacts.LoopDiagnosticsSummary)} |");
         }
+        builder.AppendLine($"| Duration | {FormatDuration(artifacts.DurationMs)} |");
+        builder.AppendLine($"| Prompt chars | {artifacts.Prompt.Length} |");
         builder.AppendLine($"| Assistant content chars | {artifacts.Response.Length} |");
         builder.AppendLine($"| Reasoning content chars | {artifacts.ReasoningContent.Length} |");
         builder.AppendLine($"| Used response_format | {artifacts.UsedResponseFormat} |");
         builder.AppendLine($"| Retried without response_format | {artifacts.RetriedWithoutResponseFormat} |");
         builder.AppendLine($"| Sent Qwen thinking disable hint | {artifacts.UsedThinkingControl} |");
         builder.AppendLine($"| Retried without thinking hint | {artifacts.RetriedWithoutThinkingControl} |");
+        builder.AppendLine($"| Parse mode | `{EscapePipe(string.IsNullOrWhiteSpace(artifacts.Parse.ParseMode) ? "unknown" : artifacts.Parse.ParseMode)}` |");
         builder.AppendLine($"| Parsed JSON | {artifacts.Parse.ParsedJson} |");
         builder.AppendLine($"| Used text fallback | {artifacts.Parse.UsedTextFallback} |");
         AppendReasoningDisclosureRows(builder, artifacts.ReasoningDisclosure);
@@ -302,6 +306,19 @@ public sealed class ReportWriter
     }
 
     private static string FormatMaxTokens(int maxTokens) => maxTokens < 0 ? "-1 (server max/unbounded)" : maxTokens.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+    private static string FormatDuration(long durationMs)
+    {
+        if (durationMs <= 0)
+        {
+            return "n/a";
+        }
+
+        var span = TimeSpan.FromMilliseconds(durationMs);
+        return span.TotalMinutes >= 1
+            ? $"{span.TotalMinutes:0.0} min"
+            : $"{span.TotalSeconds:0.0} s";
+    }
 
     private static string FormatNullablePercent(double? value) => value is null ? "n/a" : value.Value.ToString("P1", System.Globalization.CultureInfo.InvariantCulture);
 
