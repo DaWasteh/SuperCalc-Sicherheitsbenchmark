@@ -674,13 +674,19 @@ public sealed class LlamaCppClient : IDisposable
                     : 1;
                 _lastSignature = signature;
 
-                if (_consecutiveSuspicions < LoopConfirmationChecksRequired)
+                var requiredChecks = diagnostics.Repetitions.Any(candidate => candidate.Kind == "runaway enumerated topic cycle")
+                    ? 1
+                    : LoopConfirmationChecksRequired;
+                if (_consecutiveSuspicions < requiredChecks)
                 {
                     diagnosticsSummary = string.Empty;
                     return false;
                 }
 
-                diagnosticsSummary = $"{label}: {diagnostics.Summary} (confirmed over {_consecutiveSuspicions} checks)";
+                var confirmation = requiredChecks == 1
+                    ? "matched conservative runaway-list threshold"
+                    : $"confirmed over {_consecutiveSuspicions} checks";
+                diagnosticsSummary = $"{label}: {diagnostics.Summary} ({confirmation})";
                 return true;
             }
 

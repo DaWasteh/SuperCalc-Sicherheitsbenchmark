@@ -34,7 +34,23 @@ public partial class MainWindow : Window
         ShowRawOutputPlaceholder(Run1RawPanel, "Noch kein Run-1-Output. Nach dem Benchmark siehst du hier Prompt, Thinking, Output und Raw API Response.");
         ShowRawOutputPlaceholder(Run2RawPanel, "Noch kein Run-2-Output. Nach dem Benchmark siehst du hier Prompt, Thinking, Output und Raw API Response.");
         AppendLog("Bereit. Wenn du ein neues Modell in llama-server geladen hast: Refresh Models klicken, Modell wählen, Benchmark starten.");
-        RefreshComparison(preserveSelection: false);
+        InitializeComparisonPlaceholder();
+        Loaded += MainWindow_Loaded;
+    }
+
+    private void InitializeComparisonPlaceholder()
+    {
+        FamilyFilterComboBox.ItemsSource = new List<string> { AllFamiliesLabel };
+        FamilyFilterComboBox.SelectedItem = AllFamiliesLabel;
+        ComparisonGrid.ItemsSource = Array.Empty<ComparisonGridRow>();
+        OpenComparisonButton.IsEnabled = false;
+        ComparisonStatusTextBlock.Text = "Archiv wird nach dem Start im Hintergrund geladen...";
+    }
+
+    private async void MainWindow_Loaded(object sender, RoutedEventArgs e)
+    {
+        Loaded -= MainWindow_Loaded;
+        await RefreshComparisonAsync(preserveSelection: false);
     }
 
     private async void RefreshModelsButton_Click(object sender, RoutedEventArgs e)
@@ -432,7 +448,7 @@ public partial class MainWindow : Window
 
         // A new run just landed in the archive → refresh the comparison tab so it shows up
         // without the user having to click "Archiv neu laden".
-        RefreshComparison(preserveSelection: true);
+        QueueComparisonRefresh(preserveSelection: true);
     }
 
     // ---- Comparison tab ------------------------------------------------------
@@ -442,12 +458,15 @@ public partial class MainWindow : Window
     private string ArchiveRoot => Path.Combine(_repositoryRoot, ArchiveStore.DefaultArchiveFolderName);
 
     private IReadOnlyList<ArchiveGroup> _comparisonGroups = [];
+    private int _comparisonLoadVersion;
     private string? _editingComparisonGroupKey;
     private string? _editingComparisonOriginalModelFamily;
     private string? _editingComparisonOriginalQuant;
 
-    private void RefreshComparisonButton_Click(object sender, RoutedEventArgs e)
-        => RefreshComparison(preserveSelection: true);
+    private async void RefreshComparisonButton_Click(object sender, RoutedEventArgs e)
+    {
+        await RefreshComparisonAsync(preserveSelection: true);
+    }
 
     private void ComparisonFilter_Changed(object sender, SelectionChangedEventArgs e)
     {
@@ -568,14 +587,14 @@ public partial class MainWindow : Window
                 "Archiv-Bearbeitung",
                 MessageBoxButton.OK,
                 MessageBoxImage.Warning);
-            RefreshComparison(preserveSelection: true);
+            QueueComparisonRefresh(preserveSelection: true);
             return;
         }
 
         if (string.Equals(newModelFamily, originalModelFamily, StringComparison.Ordinal)
             && string.Equals(newQuant, originalQuant, StringComparison.Ordinal))
         {
-            RefreshComparison(preserveSelection: true);
+            QueueComparisonRefresh(preserveSelection: true);
             return;
         }
 
@@ -590,7 +609,7 @@ public partial class MainWindow : Window
 
             var updatedPaths = new ArchiveStore(ArchiveRoot).UpdateIdentity(group.Records, newModelFamily, newQuant);
             AppendLog($"Archiv bearbeitet: {originalModelFamily} · {originalQuant} → {newModelFamily} · {newQuant} ({updatedPaths.Count} Scorecard(s)).");
-            RefreshComparison(preserveSelection: true);
+            QueueComparisonRefresh(preserveSelection: true);
         }
         catch (Exception ex)
         {
@@ -600,7 +619,7 @@ public partial class MainWindow : Window
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
             AppendLog("FEHLER beim Bearbeiten des Archivs: " + ex.Message);
-            RefreshComparison(preserveSelection: true);
+            QueueComparisonRefresh(preserveSelection: true);
         }
     }
 
@@ -611,14 +630,30 @@ public partial class MainWindow : Window
         _editingComparisonOriginalQuant = null;
     }
 
-    private void RefreshComparison(bool preserveSelection)
+    private void QueueComparisonRefresh(bool preserveSelection)
     {
+        _ = RefreshComparisonAsync(preserveSelection);
+    }
+
+    private async Task RefreshComparisonAsync(bool preserveSelection)
+    {
+        var loadVersion = Interlocked.Increment(ref _comparisonLoadVersion);
+        var previous = preserveSelection ? (FamilyFilterComboBox.SelectedItem as string) : null;
+        var archiveRoot = ArchiveRoot;
+        var stopwatch = Stopwatch.StartNew();
+
         try
         {
-            var store = new ArchiveStore(ArchiveRoot);
-            _comparisonGroups = store.LoadGroups();
+            RefreshComparisonButton.IsEnabled = false;
+            ComparisonStatusTextBlock.Text = "Archiv wird im Hintergrund geladen...";
 
-            var previous = preserveSelection ? (FamilyFilterComboBox.SelectedItem as string) : null;
+            var groups = await Task.Run(() => new ArchiveStore(archiveRoot).LoadGroups());
+            if (loadVersion != _comparisonLoadVersion)
+            {
+                return;
+            }
+
+            _comparisonGroups = groups;
 
             var families = new List<string> { AllFamiliesLabel };
             families.AddRange(_comparisonGroups
@@ -627,16 +662,29 @@ public partial class MainWindow : Window
                 .OrderBy(f => f, StringComparer.OrdinalIgnoreCase));
 
             FamilyFilterComboBox.ItemsSource = families;
-            FamilyFilterComboBox.SelectedItem = previous is not null && families.Contains(previous)
+            FamilyFilterComboBox.SelectedItem = previous is not null && families.Contains(previous, StringComparer.OrdinalIgnoreCase)
                 ? previous
                 : AllFamiliesLabel;
 
             RebuildComparisonGrid();
+            AppendLog($"Archiv geladen: {_comparisonGroups.Sum(g => g.Records.Count)} Scorecard(s) in {_comparisonGroups.Count} Gruppe(n) ({stopwatch.ElapsedMilliseconds} ms).");
         }
         catch (Exception ex)
         {
+            if (loadVersion != _comparisonLoadVersion)
+            {
+                return;
+            }
+
             ComparisonStatusTextBlock.Text = "Archiv konnte nicht geladen werden: " + ex.Message;
             AppendLog("FEHLER beim Laden des Archivs: " + ex.Message);
+        }
+        finally
+        {
+            if (loadVersion == _comparisonLoadVersion)
+            {
+                RefreshComparisonButton.IsEnabled = true;
+            }
         }
     }
 

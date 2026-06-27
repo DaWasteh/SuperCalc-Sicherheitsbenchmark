@@ -25,6 +25,8 @@ internal static partial class TestRunner
         Run("llama client leaves thinking enabled by default", LlamaClientLeavesThinkingEnabledByDefault);
         Run("llama client disables Qwen thinking when requested", LlamaClientDisablesQwenThinkingWhenRequested);
         Run("loop detector flags repeated reasoning", LoopDetectorFlagsRepeatedReasoning);
+        Run("loop detector flags runaway security bullet cycle", LoopDetectorFlagsRunawaySecurityBulletCycle);
+        Run("loop detector ignores bounded finding list", LoopDetectorIgnoresBoundedFindingList);
         Run("loop detector ignores normal output", LoopDetectorIgnoresNormalOutput);
         Run("loop detector ignores perfect fixture repetition", LoopDetectorIgnoresPerfectFixtureRepetition);
         Run("llama streaming loop guard aborts repeated reasoning", LlamaStreamingLoopGuardAbortsRepeatedReasoning);
@@ -304,6 +306,128 @@ internal static partial class TestRunner
         var diagnostics = OutputLoopDetector.Analyze(repeated);
         Assert(diagnostics.HasSuspectedLoop, "repeated reasoning should be flagged as a likely loop");
         Assert(diagnostics.Repetitions.Count > 0, "loop diagnostics should include repeated segments");
+    }
+
+    private static void LoopDetectorFlagsRunawaySecurityBulletCycle()
+    {
+        var repeated = """
+        43. **Thread synchronization challenges**
+        Race condition potential in shared resource access demands more robust synchronization mechanisms.
+
+        44. **Systemic security improvements**
+        Comprehensive input validation, secure memory allocation, and enhanced error handling are critical next steps for system hardening.
+
+        45. **Detailed vulnerability mapping**
+        Precise line-level documentation enables targeted remediation strategies, ensuring comprehensive security coverage across critical code segments.
+
+        46. **Authentication bypass potential**
+        Emergency override mechanisms and predictable token generation provide multiple potential entry points for unauthorized system access.
+
+        47. **Buffer overflow risks**
+        String manipulation routines lack robust length validation, creating potential memory corruption opportunities.
+
+        48. **Command injection vulnerabilities**
+        System command execution pathways demonstrate insufficient input sanitization, enabling potential remote code execution.
+
+        49. **Thread safety concerns**
+        Shared resource access without proper locking mechanisms introduces race condition risks.
+
+        50. **Memory management issues**
+        Persistent memory leaks and improper resource cleanup undermine system stability.
+
+        51. **Input validation gaps**
+        Insufficient boundary checks and length verification create potential attack vectors for malicious exploitation.
+
+        52. **Comprehensive security assessment**
+        Methodical evaluation reveals interconnected vulnerabilities requiring holistic security redesign and immediate technical intervention.
+
+        53. **Remediation prioritization**
+        Critical vulnerabilities will be systematically addressed through targeted code modifications, focusing on input sanitization, authentication hardening, and memory management improvements.
+
+        54. **Security architecture evolution**
+        Implementing robust protective mechanisms across multiple code layers will significantly enhance system resilience against potential threats.
+
+        55. **Vulnerability classification strategy**
+        Categorizing risks by severity and potential impact guides targeted remediation efforts, ensuring most critical issues receive immediate attention.
+
+        57. **Authentication mechanism refinement**
+        Strengthening token generation, implementing robust session management, and eliminating emergency override capabilities will reduce unauthorized access potential.
+
+        58. **Thread synchronization enhancement**
+        Introducing atomic operations and comprehensive locking mechanisms will mitigate race condition risks in shared resource access.
+
+        59. **Memory management optimization**
+        Systematic memory leak detection and proper resource cleanup strategies will improve system stability and performance.
+
+        60. **Input validation framework**
+        Implementing strict boundary checks, length verification, and comprehensive sanitization will create robust defense against malicious input exploitation.
+
+        61. **Command injection prevention**
+        Developing secure command execution pathways with rigorous input preprocessing will neutralize potential remote code execution threats.
+
+        67. **Authentication hardening**
+        Strengthening access control mechanisms reduces potential unauthorized system entry points.
+
+        68. **Buffer overflow mitigation**
+        Robust string handling and memory allocation techniques prevent potential memory corruption.
+
+        69. **Command injection neutralization**
+        Rigorous input sanitization minimizes remote code execution risks.
+
+        70. **Thread safety optimization**
+        """;
+
+        var diagnostics = OutputLoopDetector.Analyze(repeated);
+        Assert(diagnostics.HasSuspectedLoop, "runaway numbered security theme cycle should be flagged as a likely loop");
+        Assert(diagnostics.Repetitions.Any(candidate => candidate.Kind == "runaway enumerated topic cycle"), "loop diagnostics should include the enumerated topic cycle");
+    }
+
+    private static void LoopDetectorIgnoresBoundedFindingList()
+    {
+        var diagnostics = OutputLoopDetector.Analyze("""
+        1. **Format string logging**
+        Untrusted log format reaches printf.
+        2. **Hardcoded admin credential**
+        Static secret grants administrative access.
+        3. **SQL query concatenation**
+        Input reaches query construction without parameters.
+        4. **Path traversal read**
+        User-controlled path escapes the intended directory.
+        5. **Integer overflow factorial**
+        Large factorial inputs overflow the result accumulator.
+        6. **Weak random token**
+        Predictable pseudo-random values seed session tokens.
+        7. **TOCTOU file check**
+        File authorization check and open are separated.
+        8. **World-writable temp file**
+        Temporary output is created with unsafe permissions.
+        9. **Unsafe deserialization**
+        Trusted object construction accepts attacker-controlled data.
+        10. **Missing rate limit**
+        Authentication endpoint lacks throttling.
+        11. **Sensitive error disclosure**
+        Stack traces reveal implementation details.
+        12. **Insecure default configuration**
+        Debug mode remains enabled by default.
+        13. **Null pointer dereference**
+        Optional lookup result is dereferenced unchecked.
+        14. **Log injection**
+        Newline characters are written into audit records.
+        15. **Permission confusion**
+        User role and effective role are mixed.
+        16. **Recursive expression blowup**
+        Nested expressions exhaust parser resources.
+        17. **Unbounded history growth**
+        Calculation history grows without eviction.
+        18. **Missing TLS verification**
+        Remote update checks do not validate certificates.
+        19. **Debug command exposure**
+        Developer-only command remains available.
+        20. **Unsafe plugin loading**
+        Plugin path accepts untrusted directories.
+        """);
+
+        Assert(!diagnostics.HasSuspectedLoop, "bounded 20-item finding list should not be flagged as a loop");
     }
 
     private static void LoopDetectorIgnoresNormalOutput()

@@ -50,8 +50,10 @@ echo.
 echo Fertig. Die App wurde gebaut:
 echo   %APP_EXE%
 echo.
-echo Starten mit:
-echo   start.bat
+echo Starten ohne Terminal-Fenster:
+echo   start.vbs
+echo.
+echo start.bat bleibt als Kompatibilitaets-Wrapper erhalten, kann unter Windows Terminal aber kurz sichtbar bleiben.
 
 popd >nul
 exit /b 0
