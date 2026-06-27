@@ -34,6 +34,7 @@ internal static partial class TestRunner
         Run("loop detector ignores perfect fixture repetition", LoopDetectorIgnoresPerfectFixtureRepetition);
         Run("llama streaming loop guard ignores repeated reasoning", LlamaStreamingLoopGuardIgnoresRepeatedReasoning);
         Run("llama streaming loop guard aborts repeated content", LlamaStreamingLoopGuardAbortsRepeatedContent);
+        Run("llama manual run abort returns partial stream", LlamaManualRunAbortReturnsPartialStream);
         Run("perfect synthetic fixture scores 100", PerfectSyntheticFixtureScoresHigh);
         Run("duplicate finding is penalized", DuplicateFindingIsPenalized);
         Run("reasoning disclosure compares thinking and output true positives", ReasoningDisclosureComparesThinkingAndOutputTruePositives);
@@ -657,6 +658,28 @@ internal static partial class TestRunner
         Assert(result.AssistantContent.Length < handler.FullStreamedTextLength, "guard should stop reading before the full synthetic content loop is consumed");
     }
 
+    private static void LlamaManualRunAbortReturnsPartialStream()
+    {
+        using var manualAbort = new CancellationTokenSource();
+        var handler = new ManualAbortStreamHandler(manualAbort);
+        using var client = new LlamaCppClient(TimeSpan.FromSeconds(5), handler);
+        var result = client.CreateChatCompletionAsync(
+            "http://unit.test",
+            "manual-model",
+            "system",
+            "user",
+            new BenchmarkOptions { Model = "manual-model" },
+            cancellationToken: CancellationToken.None,
+            manualAbortToken: manualAbort.Token).GetAwaiter().GetResult();
+
+        Assert(handler.RequestBody.Contains("\"stream\": true", StringComparison.Ordinal), "manual abort needs the streaming path so partial tokens can be preserved");
+        Assert(result.ManuallyStopped, "manual abort should be represented as a successful partial result");
+        Assert(result.FinishReason == "manual_abort", $"finish reason should be manual_abort, got {result.FinishReason}");
+        Assert(result.ReasoningContent.Contains("partial reasoning before stop", StringComparison.Ordinal), "reasoning accumulated before the stop should be preserved");
+        Assert(string.IsNullOrEmpty(result.AssistantContent), "no final assistant content was streamed in this fixture");
+        Assert(result.RawResponse.Contains("partial reasoning before stop", StringComparison.Ordinal), "raw SSE payload should keep the partial chunk");
+    }
+
     private static void PerfectSyntheticFixtureScoresHigh()
     {
         var (groundTruth, source) = LoadGroundTruthAndSource();
@@ -897,6 +920,88 @@ internal static partial class TestRunner
                 }
             });
         }
+    }
+
+    private sealed class ManualAbortStreamHandler(CancellationTokenSource manualAbort) : HttpMessageHandler
+    {
+        public string RequestBody { get; private set; } = string.Empty;
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            RequestBody = request.Content is null
+                ? string.Empty
+                : await request.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+
+            var sseChunk = "data: " + JsonSerializer.Serialize(new Dictionary<string, object?>
+            {
+                ["choices"] = new object[]
+                {
+                    new Dictionary<string, object?>
+                    {
+                        ["finish_reason"] = null,
+                        ["delta"] = new Dictionary<string, object?>
+                        {
+                            ["reasoning_content"] = "partial reasoning before stop"
+                        }
+                    }
+                }
+            }) + "\n\n";
+
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StreamContent(new AbortAfterChunkStream(Encoding.UTF8.GetBytes(sseChunk), manualAbort))
+            };
+        }
+    }
+
+    private sealed class AbortAfterChunkStream(byte[] chunk, CancellationTokenSource manualAbort) : Stream
+    {
+        private int _position;
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => chunk.Length;
+        public override long Position
+        {
+            get => _position;
+            set => throw new NotSupportedException();
+        }
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            return ReadCore(buffer.AsSpan(offset, count));
+        }
+
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return ValueTask.FromResult(ReadCore(buffer.Span));
+        }
+
+        private int ReadCore(Span<byte> buffer)
+        {
+            if (_position >= chunk.Length)
+            {
+                manualAbort.Cancel();
+                throw new OperationCanceledException(manualAbort.Token);
+            }
+
+            var bytesToCopy = Math.Min(buffer.Length, chunk.Length - _position);
+            chunk.AsSpan(_position, bytesToCopy).CopyTo(buffer);
+            _position += bytesToCopy;
+            return bytesToCopy;
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 
     private static void Assert(bool condition, string message)

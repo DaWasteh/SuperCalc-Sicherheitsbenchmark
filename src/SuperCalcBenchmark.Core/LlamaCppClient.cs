@@ -10,6 +10,7 @@ public sealed class LlamaCppClient : IDisposable
     private const int LoopCheckIntervalChars = 750;
     private const int LoopConfirmationChecksRequired = 4;
     private const string LoopDetectedFinishReason = "loop_detected";
+    private const string ManualAbortFinishReason = "manual_abort";
 
     private readonly HttpClient _httpClient;
     private readonly bool _ownsClient;
@@ -128,7 +129,8 @@ public sealed class LlamaCppClient : IDisposable
         string userPrompt,
         BenchmarkOptions options,
         IProgress<ChatStreamDelta>? streamProgress = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        CancellationToken manualAbortToken = default)
     {
         if (string.IsNullOrWhiteSpace(model))
         {
@@ -151,8 +153,8 @@ public sealed class LlamaCppClient : IDisposable
             var request = BuildChatRequest(model, systemPrompt, userPrompt, options, attempt.IncludeResponseFormat, attempt.IncludeThinkingControl, stream: useStreaming);
 
             var completion = useStreaming
-                ? await PostChatCompletionStreamingAsync(serverUrl, request, streamProgress, options.AbortOnLoop, cancellationToken).ConfigureAwait(false)
-                : await PostChatCompletionAsync(serverUrl, request, cancellationToken).ConfigureAwait(false);
+                ? await PostChatCompletionStreamingAsync(serverUrl, request, streamProgress, options.AbortOnLoop, cancellationToken, manualAbortToken).ConfigureAwait(false)
+                : await PostChatCompletionAsync(serverUrl, request, cancellationToken, manualAbortToken).ConfigureAwait(false);
 
             if (!completion.Success)
             {
@@ -169,7 +171,7 @@ public sealed class LlamaCppClient : IDisposable
             };
 
             firstSuccessful ??= result;
-            if (result.LoopDetected)
+            if (result.LoopDetected || result.ManuallyStopped)
             {
                 return result;
             }
@@ -308,37 +310,48 @@ public sealed class LlamaCppClient : IDisposable
     private async Task<(bool Success, ChatCompletionResult? Result, string Error)> PostChatCompletionAsync(
         string serverUrl,
         object request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        CancellationToken manualAbortToken)
     {
         var requestJson = JsonSerializer.Serialize(request, JsonOptions);
-        using var content = new StringContent(requestJson, Encoding.UTF8, "application/json");
-        using var response = await _httpClient.PostAsync(BuildUri(serverUrl, "/v1/chat/completions"), content, cancellationToken).ConfigureAwait(false);
-        var responseText = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-
-        if (!response.IsSuccessStatusCode)
-        {
-            return (false, null, $"HTTP {(int)response.StatusCode} {response.ReasonPhrase}: {TrimForError(responseText)}");
-        }
+        using var linkedCancellation = CreateLinkedCancellation(cancellationToken, manualAbortToken);
+        var operationToken = linkedCancellation?.Token ?? cancellationToken;
 
         try
         {
-            var extracted = ExtractChatMessageContent(responseText);
-            return (true, new ChatCompletionResult
+            using var content = new StringContent(requestJson, Encoding.UTF8, "application/json");
+            using var response = await _httpClient.PostAsync(BuildUri(serverUrl, "/v1/chat/completions"), content, operationToken).ConfigureAwait(false);
+            var responseText = await response.Content.ReadAsStringAsync(operationToken).ConfigureAwait(false);
+
+            if (!response.IsSuccessStatusCode)
             {
-                AssistantContent = extracted.AssistantContent,
-                ReasoningContent = extracted.ReasoningContent,
-                FinishReason = extracted.FinishReason,
-                RawResponse = responseText,
-                RequestJson = requestJson,
-                UsedResponseFormat = requestJson.Contains("response_format", StringComparison.Ordinal),
-                UsedThinkingControl = requestJson.Contains("chat_template_kwargs", StringComparison.Ordinal),
-                RetriedWithoutResponseFormat = false,
-                RetriedWithoutThinkingControl = false
-            }, string.Empty);
+                return (false, null, $"HTTP {(int)response.StatusCode} {response.ReasonPhrase}: {TrimForError(responseText)}");
+            }
+
+            try
+            {
+                var extracted = ExtractChatMessageContent(responseText);
+                return (true, new ChatCompletionResult
+                {
+                    AssistantContent = extracted.AssistantContent,
+                    ReasoningContent = extracted.ReasoningContent,
+                    FinishReason = extracted.FinishReason,
+                    RawResponse = responseText,
+                    RequestJson = requestJson,
+                    UsedResponseFormat = requestJson.Contains("response_format", StringComparison.Ordinal),
+                    UsedThinkingControl = requestJson.Contains("chat_template_kwargs", StringComparison.Ordinal),
+                    RetriedWithoutResponseFormat = false,
+                    RetriedWithoutThinkingControl = false
+                }, string.Empty);
+            }
+            catch (Exception ex) when (ex is JsonException or InvalidOperationException)
+            {
+                return (false, null, $"Could not parse chat response: {ex.Message}. Raw: {TrimForError(responseText)}");
+            }
         }
-        catch (Exception ex) when (ex is JsonException or InvalidOperationException)
+        catch (OperationCanceledException) when (IsManualAbort(manualAbortToken, cancellationToken))
         {
-            return (false, null, $"Could not parse chat response: {ex.Message}. Raw: {TrimForError(responseText)}");
+            return (true, CreateManualAbortResult(requestJson, assistantContent: string.Empty, reasoningContent: string.Empty, rawResponse: string.Empty), string.Empty);
         }
     }
 
@@ -347,26 +360,10 @@ public sealed class LlamaCppClient : IDisposable
         object request,
         IProgress<ChatStreamDelta>? streamProgress,
         bool abortOnLoop,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        CancellationToken manualAbortToken)
     {
         var requestJson = JsonSerializer.Serialize(request, JsonOptions);
-        using var content = new StringContent(requestJson, Encoding.UTF8, "application/json");
-        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, BuildUri(serverUrl, "/v1/chat/completions"))
-        {
-            Content = content
-        };
-        httpRequest.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
-
-        using var response = await _httpClient
-            .SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
-            .ConfigureAwait(false);
-
-        if (!response.IsSuccessStatusCode)
-        {
-            var errorBody = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-            return (false, null, $"HTTP {(int)response.StatusCode} {response.ReasonPhrase}: {TrimForError(errorBody)}");
-        }
-
         var contentBuilder = new StringBuilder();
         var reasoningBuilder = new StringBuilder();
         var rawBuilder = new StringBuilder();
@@ -375,16 +372,35 @@ public sealed class LlamaCppClient : IDisposable
         var loopDetected = false;
         var loopDiagnosticsSummary = string.Empty;
         var loopState = new StreamLoopState();
+        using var linkedCancellation = CreateLinkedCancellation(cancellationToken, manualAbortToken);
+        var operationToken = linkedCancellation?.Token ?? cancellationToken;
 
         try
         {
-            await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+            using var content = new StringContent(requestJson, Encoding.UTF8, "application/json");
+            using var httpRequest = new HttpRequestMessage(HttpMethod.Post, BuildUri(serverUrl, "/v1/chat/completions"))
+            {
+                Content = content
+            };
+            httpRequest.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
+
+            using var response = await _httpClient
+                .SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead, operationToken)
+                .ConfigureAwait(false);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                var errorBody = await response.Content.ReadAsStringAsync(operationToken).ConfigureAwait(false);
+                return (false, null, $"HTTP {(int)response.StatusCode} {response.ReasonPhrase}: {TrimForError(errorBody)}");
+            }
+
+            await using var stream = await response.Content.ReadAsStreamAsync(operationToken).ConfigureAwait(false);
             using var reader = new StreamReader(stream, Encoding.UTF8);
 
             string? line;
-            while ((line = await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false)) is not null)
+            while ((line = await reader.ReadLineAsync(operationToken).ConfigureAwait(false)) is not null)
             {
-                cancellationToken.ThrowIfCancellationRequested();
+                operationToken.ThrowIfCancellationRequested();
 
                 if (line.Length == 0)
                 {
@@ -433,9 +449,17 @@ public sealed class LlamaCppClient : IDisposable
                 }
             }
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (IsManualAbort(manualAbortToken, cancellationToken))
         {
-            throw;
+            return (true, BuildStreamingResult(
+                requestJson,
+                contentBuilder,
+                reasoningBuilder,
+                rawBuilder,
+                finishReason,
+                loopDetected,
+                loopDiagnosticsSummary,
+                manuallyStopped: true), string.Empty);
         }
         catch (Exception ex) when (ex is IOException or HttpRequestException or JsonException)
         {
@@ -472,23 +496,75 @@ public sealed class LlamaCppClient : IDisposable
             }
         }
 
-        var assistantContent = contentBuilder.ToString();
-        var reasoningContent = reasoningBuilder.ToString();
+        return (true, BuildStreamingResult(
+            requestJson,
+            contentBuilder,
+            reasoningBuilder,
+            rawBuilder,
+            finishReason,
+            loopDetected,
+            loopDiagnosticsSummary,
+            manuallyStopped: false), string.Empty);
+    }
 
-        return (true, new ChatCompletionResult
+    private static ChatCompletionResult BuildStreamingResult(
+        string requestJson,
+        StringBuilder contentBuilder,
+        StringBuilder reasoningBuilder,
+        StringBuilder rawBuilder,
+        string finishReason,
+        bool loopDetected,
+        string loopDiagnosticsSummary,
+        bool manuallyStopped)
+    {
+        return new ChatCompletionResult
         {
-            AssistantContent = assistantContent,
-            ReasoningContent = reasoningContent,
-            FinishReason = finishReason,
+            AssistantContent = contentBuilder.ToString(),
+            ReasoningContent = reasoningBuilder.ToString(),
+            FinishReason = manuallyStopped ? ManualAbortFinishReason : finishReason,
             LoopDetected = loopDetected,
             LoopDiagnosticsSummary = loopDiagnosticsSummary,
+            ManuallyStopped = manuallyStopped,
             RawResponse = rawBuilder.ToString().TrimEnd(),
             RequestJson = requestJson,
             UsedResponseFormat = requestJson.Contains("response_format", StringComparison.Ordinal),
             UsedThinkingControl = requestJson.Contains("chat_template_kwargs", StringComparison.Ordinal),
             RetriedWithoutResponseFormat = false,
             RetriedWithoutThinkingControl = false
-        }, string.Empty);
+        };
+    }
+
+    private static ChatCompletionResult CreateManualAbortResult(
+        string requestJson,
+        string assistantContent,
+        string reasoningContent,
+        string rawResponse)
+    {
+        return new ChatCompletionResult
+        {
+            AssistantContent = assistantContent,
+            ReasoningContent = reasoningContent,
+            FinishReason = ManualAbortFinishReason,
+            ManuallyStopped = true,
+            RawResponse = rawResponse,
+            RequestJson = requestJson,
+            UsedResponseFormat = requestJson.Contains("response_format", StringComparison.Ordinal),
+            UsedThinkingControl = requestJson.Contains("chat_template_kwargs", StringComparison.Ordinal),
+            RetriedWithoutResponseFormat = false,
+            RetriedWithoutThinkingControl = false
+        };
+    }
+
+    private static CancellationTokenSource? CreateLinkedCancellation(CancellationToken cancellationToken, CancellationToken manualAbortToken)
+    {
+        return manualAbortToken.CanBeCanceled
+            ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, manualAbortToken)
+            : null;
+    }
+
+    private static bool IsManualAbort(CancellationToken manualAbortToken, CancellationToken globalCancellationToken)
+    {
+        return manualAbortToken.IsCancellationRequested && !globalCancellationToken.IsCancellationRequested;
     }
 
     private static string ConsumeStreamChunk(

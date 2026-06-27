@@ -14,6 +14,9 @@ public partial class MainWindow : Window
 {
     private readonly string _repositoryRoot;
     private CancellationTokenSource? _benchmarkCancellation;
+    private CancellationTokenSource? _run1ManualStop;
+    private CancellationTokenSource? _run2ManualStop;
+    private int _activeRunNumber;
     private BenchmarkRunResult? _lastResult;
 
     // Live-streaming UI state. Tokens arrive via IProgress and are appended to these
@@ -123,6 +126,8 @@ public partial class MainWindow : Window
 
         ResetResultUi();
         _benchmarkCancellation = new CancellationTokenSource();
+        _run1ManualStop = new CancellationTokenSource();
+        _run2ManualStop = new CancellationTokenSource();
         SetBusy(true, benchmarkRunning: true);
         StatusTextBlock.Text = "Benchmark läuft... Run 1 + Run 2 können je nach Modell einige Minuten dauern.";
         AppendLog($"Benchmark startet für Modell: {model}");
@@ -138,14 +143,16 @@ public partial class MainWindow : Window
             var streamProgress = new Progress<ChatStreamDelta>(OnStreamDelta);
 
             // Prepare the live view for Run 1 before the first token arrives.
-            BeginLiveRun(Run1RawPanel, "Run 1 — Blind Analysis");
+            BeginLiveRun(Run1RawPanel, "Run 1 — Blind Analysis", runNumber: 1);
 
             var result = await runner.RunAsync(
                 options,
                 Progress,
                 _benchmarkCancellation.Token,
                 onRunCompleted: OnRunCompleted,
-                streamProgress: streamProgress);
+                streamProgress: streamProgress,
+                run1ManualAbortToken: _run1ManualStop.Token,
+                run2ManualAbortToken: _run2ManualStop.Token);
 
             _lastResult = result;
 
@@ -173,6 +180,11 @@ public partial class MainWindow : Window
         {
             _benchmarkCancellation?.Dispose();
             _benchmarkCancellation = null;
+            _run1ManualStop?.Dispose();
+            _run1ManualStop = null;
+            _run2ManualStop?.Dispose();
+            _run2ManualStop = null;
+            _activeRunNumber = 0;
             SetBusy(false, benchmarkRunning: false);
         }
     }
@@ -181,8 +193,48 @@ public partial class MainWindow : Window
     {
         _benchmarkCancellation?.Cancel();
         CancelBenchmarkButton.IsEnabled = false;
+        SetManualAbortButtons(run1Enabled: false, run2Enabled: false);
         StatusTextBlock.Text = "Abbruch angefordert...";
         AppendLog("Abbruch angefordert...");
+    }
+
+    private void AbortRun1Button_Click(object sender, RoutedEventArgs e)
+    {
+        RequestManualRunStop(runNumber: 1);
+    }
+
+    private void AbortRun2Button_Click(object sender, RoutedEventArgs e)
+    {
+        RequestManualRunStop(runNumber: 2);
+    }
+
+    private void RequestManualRunStop(int runNumber)
+    {
+        var cts = runNumber == 1 ? _run1ManualStop : _run2ManualStop;
+        if (cts is null || cts.IsCancellationRequested)
+        {
+            return;
+        }
+
+        cts.Cancel();
+        if (runNumber == 1)
+        {
+            AbortRun1Button.IsEnabled = false;
+        }
+        else
+        {
+            AbortRun2Button.IsEnabled = false;
+        }
+
+        var message = $"Run {runNumber} manuell gestoppt: aktueller Stream wird geschlossen, bisherige Tokens/Thinking werden analysiert.";
+        StatusTextBlock.Text = message;
+        AppendLog(message);
+
+        if (_activeRunNumber == runNumber && _liveStatusBlock is not null)
+        {
+            _liveStatusBlock.Text = message;
+            _liveStatusBlock.Foreground = Brushes.DarkOrange;
+        }
     }
 
     private void PreviewPromptButton_Click(object sender, RoutedEventArgs e)
@@ -280,11 +332,13 @@ public partial class MainWindow : Window
 
     // ---- Live streaming + per-run rendering ---------------------------------
 
-    private void BeginLiveRun(StackPanel panel, string runLabel)
+    private void BeginLiveRun(StackPanel panel, string runLabel, int runNumber)
     {
         _activeLivePanel = panel;
+        _activeRunNumber = runNumber;
         _liveReasoningChars = 0;
         _liveContentChars = 0;
+        SetManualAbortButtons(run1Enabled: runNumber == 1, run2Enabled: runNumber == 2);
 
         panel.Children.Clear();
 
@@ -415,8 +469,9 @@ public partial class MainWindow : Window
                 AppendLoopWarnings(artifacts);
 
                 // Run 1 done → spin up the live view for Run 2.
+                AbortRun1Button.IsEnabled = false;
                 Run2ScoreTextBlock.Text = "Läuft...";
-                BeginLiveRun(Run2RawPanel, "Run 2 — Self-Validation");
+                BeginLiveRun(Run2RawPanel, "Run 2 — Self-Validation", runNumber: 2);
             }
             else
             {
@@ -425,6 +480,8 @@ public partial class MainWindow : Window
                 Run2MatrixGrid.ItemsSource = artifacts.Score.Vulnerabilities;
                 Run2FindingsGrid.ItemsSource = artifacts.Score.Findings;
                 PopulateRawOutputPanel(Run2RawPanel, artifacts);
+                AbortRun2Button.IsEnabled = false;
+                _activeRunNumber = 0;
                 AppendLoopWarnings(artifacts);
             }
         });
@@ -837,6 +894,8 @@ public partial class MainWindow : Window
         _liveStatusBlock = null;
         _liveReasoningChars = 0;
         _liveContentChars = 0;
+        _activeRunNumber = 0;
+        SetManualAbortButtons(run1Enabled: false, run2Enabled: false);
         Run1ScoreTextBlock.Text = "Läuft...";
         Run1DetailsTextBlock.Text = string.Empty;
         Run2ScoreTextBlock.Text = "Wartet auf Run 1";
@@ -862,6 +921,11 @@ public partial class MainWindow : Window
                       $"Precision: {score.Precision:P1} | Recall: {score.Recall:P1} | F1: {score.F1:P1}\n" +
                       $"Finish: {artifacts.FinishReason} | Content: {artifacts.Response.Length} chars | Reasoning: {artifacts.ReasoningContent.Length} chars\n" +
                       $"Denken-vs-Sagen: {FormatReasoningDisclosure(artifacts.ReasoningDisclosure)}";
+
+        if (artifacts.ManuallyStopped)
+        {
+            details += "\nManuell gestoppt: bisheriger Output/Thinking wurde analysiert und gespeichert.";
+        }
 
         if (!string.IsNullOrWhiteSpace(artifacts.Parse.Warning))
         {
@@ -984,13 +1048,15 @@ public partial class MainWindow : Window
     {
         var responseLoop = OutputLoopDetector.Analyze(artifacts.Response);
         var reasoningLoop = OutputLoopDetector.Analyze(artifacts.ReasoningContent);
-        var hasWarning = artifacts.LoopDetected
+        var hasWarning = artifacts.ManuallyStopped
+            || artifacts.LoopDetected
             || responseLoop.HasSuspectedLoop
             || reasoningLoop.HasSuspectedLoop
             || (string.IsNullOrWhiteSpace(artifacts.Response) && !string.IsNullOrWhiteSpace(artifacts.ReasoningContent));
 
         var builder = new StringBuilder();
         builder.AppendLine($"Finish: {EmptyFallback(artifacts.FinishReason)} | Output: {artifacts.Response.Length:N0} chars | Thinking: {artifacts.ReasoningContent.Length:N0} chars");
+        builder.AppendLine($"Manueller Stop: {artifacts.ManuallyStopped}");
         builder.AppendLine($"Loop-Abbruch: {artifacts.LoopDetected} {artifacts.LoopDiagnosticsSummary}");
         builder.AppendLine($"response_format: {artifacts.UsedResponseFormat} | retry ohne response_format: {artifacts.RetriedWithoutResponseFormat} | thinking-disable hint: {artifacts.UsedThinkingControl}");
         builder.AppendLine($"Denken-vs-Sagen: {FormatReasoningDisclosure(artifacts.ReasoningDisclosure)}");
@@ -1000,6 +1066,11 @@ public partial class MainWindow : Window
         if (artifacts.LoopDetected)
         {
             builder.AppendLine("WARNUNG: Die Streaming-Anfrage wurde wegen eines wahrscheinlichen Loops in der finalen Antwort vorzeitig geschlossen. Thinking wird nur diagnostiziert, nicht live abgebrochen.");
+        }
+
+        if (artifacts.ManuallyStopped)
+        {
+            builder.AppendLine("HINWEIS: Dieser Run wurde manuell gestoppt; die bis dahin empfangenen Tokens wurden trotzdem geparst, gescored und gespeichert.");
         }
 
         if (string.IsNullOrWhiteSpace(artifacts.Response) && !string.IsNullOrWhiteSpace(artifacts.ReasoningContent))
@@ -1133,6 +1204,16 @@ public partial class MainWindow : Window
         DisableThinkingCheckBox.IsEnabled = !busy;
         PreviewPromptButton.IsEnabled = !busy;
         CancelBenchmarkButton.IsEnabled = benchmarkRunning;
+        if (!benchmarkRunning)
+        {
+            SetManualAbortButtons(run1Enabled: false, run2Enabled: false);
+        }
+    }
+
+    private void SetManualAbortButtons(bool run1Enabled, bool run2Enabled)
+    {
+        AbortRun1Button.IsEnabled = run1Enabled && _run1ManualStop is { IsCancellationRequested: false };
+        AbortRun2Button.IsEnabled = run2Enabled && _run2ManualStop is { IsCancellationRequested: false };
     }
 
     private static int ParseInt(string value, string label, int defaultValue, int min)

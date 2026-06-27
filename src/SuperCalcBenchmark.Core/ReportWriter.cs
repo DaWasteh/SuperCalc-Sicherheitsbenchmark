@@ -154,6 +154,7 @@ public sealed class ReportWriter
         builder.AppendLine("| Field | Value |");
         builder.AppendLine("| ----- | ----- |");
         builder.AppendLine($"| Finish reason | `{EscapePipe(artifacts.FinishReason)}` |");
+        builder.AppendLine($"| Manually stopped by user | {artifacts.ManuallyStopped} |");
         builder.AppendLine($"| Loop aborted by client | {artifacts.LoopDetected} |");
         if (!string.IsNullOrWhiteSpace(artifacts.LoopDiagnosticsSummary))
         {
@@ -190,6 +191,12 @@ public sealed class ReportWriter
         if (artifacts.LoopDetected)
         {
             builder.AppendLine("> Warning: the client closed the streaming request early because final assistant content matched the loop/repetition guard. Visible reasoning_content is not live-aborted; the saved final output is intentionally partial so the benchmark does not hang or exhaust memory.");
+            builder.AppendLine();
+        }
+
+        if (artifacts.ManuallyStopped)
+        {
+            builder.AppendLine("> Note: this run was manually stopped from the Raw Outputs tab. The partial assistant content and visible reasoning up to that point were still parsed, scored and saved.");
             builder.AppendLine();
         }
 

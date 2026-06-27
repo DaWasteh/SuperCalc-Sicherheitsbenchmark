@@ -228,6 +228,7 @@ public sealed record ChatCompletionResult
     public string FinishReason { get; init; } = string.Empty;
     public bool LoopDetected { get; init; }
     public string LoopDiagnosticsSummary { get; init; } = string.Empty;
+    public bool ManuallyStopped { get; init; }
     public bool UsedResponseFormat { get; init; }
     public bool RetriedWithoutResponseFormat { get; init; }
     public bool UsedThinkingControl { get; init; }
@@ -298,6 +299,7 @@ public sealed class BenchmarkRunArtifacts
     public string FinishReason { get; init; } = string.Empty;
     public bool LoopDetected { get; init; }
     public string LoopDiagnosticsSummary { get; init; } = string.Empty;
+    public bool ManuallyStopped { get; init; }
     public bool UsedResponseFormat { get; init; }
     public bool RetriedWithoutResponseFormat { get; init; }
     public bool UsedThinkingControl { get; init; }

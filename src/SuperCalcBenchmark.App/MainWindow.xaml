@@ -174,14 +174,32 @@
                         <ColumnDefinition Width="*" />
                     </Grid.ColumnDefinitions>
                     <GroupBox Header="Run 1 — Prompt / Thinking / Output / Raw" Grid.Column="0" Margin="0,0,4,0">
-                        <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                            <StackPanel x:Name="Run1RawPanel" Margin="8" />
-                        </ScrollViewer>
+                        <DockPanel>
+                            <Button x:Name="AbortRun1Button"
+                                    DockPanel.Dock="Top"
+                                    Content="Run 1 manuell stoppen"
+                                    IsEnabled="False"
+                                    Margin="8,8,8,4"
+                                    Click="AbortRun1Button_Click"
+                                    ToolTip="Stoppt nur Run 1: bisherige Tokens/Thinking werden analysiert und danach läuft Run 2 weiter." />
+                            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                                <StackPanel x:Name="Run1RawPanel" Margin="8" />
+                            </ScrollViewer>
+                        </DockPanel>
                     </GroupBox>
                     <GroupBox Header="Run 2 — Prompt / Thinking / Output / Raw" Grid.Column="1" Margin="4,0,0,0">
-                        <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                            <StackPanel x:Name="Run2RawPanel" Margin="8" />
-                        </ScrollViewer>
+                        <DockPanel>
+                            <Button x:Name="AbortRun2Button"
+                                    DockPanel.Dock="Top"
+                                    Content="Run 2 manuell stoppen"
+                                    IsEnabled="False"
+                                    Margin="8,8,8,4"
+                                    Click="AbortRun2Button_Click"
+                                    ToolTip="Stoppt nur Run 2: bisherige Tokens/Thinking werden analysiert und der Benchmark wird ausgewertet/gespeichert." />
+                            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                                <StackPanel x:Name="Run2RawPanel" Margin="8" />
+                            </ScrollViewer>
+                        </DockPanel>
                     </GroupBox>
                 </Grid>
             </TabItem>

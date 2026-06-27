@@ -29,7 +29,9 @@ public sealed class BenchmarkRunner
         Action<string>? progress = null,
         CancellationToken cancellationToken = default,
         Action<BenchmarkRunArtifacts>? onRunCompleted = null,
-        IProgress<ChatStreamDelta>? streamProgress = null)
+        IProgress<ChatStreamDelta>? streamProgress = null,
+        CancellationToken run1ManualAbortToken = default,
+        CancellationToken run2ManualAbortToken = default)
     {
         if (string.IsNullOrWhiteSpace(options.Model))
         {
@@ -79,7 +81,13 @@ public sealed class BenchmarkRunner
             run1Prompt,
             options,
             streamProgress,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken,
+            run1ManualAbortToken).ConfigureAwait(false);
+
+        if (run1Completion.ManuallyStopped)
+        {
+            progress?.Invoke("Run 1 manually stopped by user; parsing/scoring partial output and visible thinking...");
+        }
 
         if (run1Completion.LoopDetected)
         {
@@ -105,6 +113,7 @@ public sealed class BenchmarkRunner
             FinishReason = run1Completion.FinishReason,
             LoopDetected = run1Completion.LoopDetected,
             LoopDiagnosticsSummary = run1Completion.LoopDiagnosticsSummary,
+            ManuallyStopped = run1Completion.ManuallyStopped,
             UsedResponseFormat = run1Completion.UsedResponseFormat,
             RetriedWithoutResponseFormat = run1Completion.RetriedWithoutResponseFormat,
             UsedThinkingControl = run1Completion.UsedThinkingControl,
@@ -129,7 +138,13 @@ public sealed class BenchmarkRunner
             run2Prompt,
             options,
             streamProgress,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken,
+            run2ManualAbortToken).ConfigureAwait(false);
+
+        if (run2Completion.ManuallyStopped)
+        {
+            progress?.Invoke("Run 2 manually stopped by user; parsing/scoring partial output and visible thinking...");
+        }
 
         if (run2Completion.LoopDetected)
         {
@@ -155,6 +170,7 @@ public sealed class BenchmarkRunner
             FinishReason = run2Completion.FinishReason,
             LoopDetected = run2Completion.LoopDetected,
             LoopDiagnosticsSummary = run2Completion.LoopDiagnosticsSummary,
+            ManuallyStopped = run2Completion.ManuallyStopped,
             UsedResponseFormat = run2Completion.UsedResponseFormat,
             RetriedWithoutResponseFormat = run2Completion.RetriedWithoutResponseFormat,
             UsedThinkingControl = run2Completion.UsedThinkingControl,

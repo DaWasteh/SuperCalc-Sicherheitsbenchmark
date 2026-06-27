@@ -224,6 +224,9 @@ public sealed class ArchiveRunScore
     [JsonPropertyName("loopDiagnosticsSummary")]
     public string LoopDiagnosticsSummary { get; set; } = string.Empty;
 
+    [JsonPropertyName("manuallyStopped")]
+    public bool ManuallyStopped { get; set; }
+
     [JsonPropertyName("responseChars")]
     public int ResponseChars { get; set; }
 
@@ -300,6 +303,7 @@ public sealed class ArchiveRunScore
         run.FinishReason = artifacts.FinishReason ?? string.Empty;
         run.LoopDetected = artifacts.LoopDetected;
         run.LoopDiagnosticsSummary = artifacts.LoopDiagnosticsSummary ?? string.Empty;
+        run.ManuallyStopped = artifacts.ManuallyStopped;
         run.ResponseChars = artifacts.Response?.Length ?? 0;
         run.ReasoningChars = artifacts.ReasoningContent?.Length ?? 0;
         run.RawResponseChars = artifacts.RawResponse?.Length ?? 0;
