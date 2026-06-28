@@ -1,0 +1,59 @@
+name: Deploy Comparison Page
+
+on:
+  push:
+    branches: [main]
+  # Allow manual trigger for testing
+  workflow_dispatch:
+
+# Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Allow only one concurrent deployment
+concurrency:
+  group: "pages"
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Generate Comparison HTML
+        # We use --public-labels to hide internal vulnerability details (CWE/titles) from the public page.
+        # We output to a 'public' folder to isolate the Pages artifact.
+        run: |
+          dotnet run --project src/SuperCalcBenchmark.Cli -c Release -- compare --public-labels --out public
+
+      - name: Prepare index.html
+        # GitHub Pages expects index.html as the entry point.
+        run: |
+          if [ -f public/comparison.html ]; then
+            cp public/comparison.html public/index.html
+            echo "Successfully created index.html from comparison.html"
+          else
+            echo "Error: comparison.html was not generated"
+            exit 1
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
