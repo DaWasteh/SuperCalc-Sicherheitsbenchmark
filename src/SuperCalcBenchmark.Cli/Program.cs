@@ -317,7 +317,8 @@ internal static class Program
         Console.WriteLine($"Comparison ({aggregate}, {runView}, {metric}, profile={report.ScoringProfile ?? "all"}, {report.Series.Count} series, {report.VulnerabilityAxis.Count} vulns):");
         foreach (var series in report.Series)
         {
-            Console.WriteLine($"  {series.ScorePercent,6:0.##}  {series.Label}  (runs={series.RunCount}, median={series.ScoreMedian:0.##}, avg={series.ScoreMean:0.##}, σ={series.ScoreStdDev:0.##}, range={series.ScoreMin:0.##}-{series.ScoreMax:0.##})");
+            var selectedMetric = DisplayMetricValue(series, metric);
+            Console.WriteLine($"  {selectedMetric,6:0.##}  {series.Label}  (metric={metric}, score={series.ScorePercent:0.##}, runs={series.RunCount}, median={series.ScoreMedian:0.##}, avg={series.ScoreMean:0.##}, σ={series.ScoreStdDev:0.##}, range={series.ScoreMin:0.##}-{series.ScoreMax:0.##})");
         }
 
         Console.WriteLine();
@@ -498,6 +499,25 @@ internal static class Program
             _ => throw new ArgumentException("--run-view must be one of: primary, run1, run2, delta.")
         };
     }
+
+    private static double DisplayMetricValue(ComparisonSeries series, ComparisonMetric metric) => metric switch
+    {
+        ComparisonMetric.CriticalRecall => series.CriticalRecall * 100,
+        ComparisonMetric.HighCriticalRecall => series.HighCriticalRecall * 100,
+        ComparisonMetric.F1 => series.F1 * 100,
+        ComparisonMetric.FpRate => series.FpPerFinding * 100,
+        ComparisonMetric.Stability => series.VulnerabilityStability * 100,
+        ComparisonMetric.Run2Delta => series.Run2ScoreDelta,
+        ComparisonMetric.ThinkingCoverage => (series.ReasoningToOutputCoverage ?? 0) * 100,
+        ComparisonMetric.EvidenceFidelity => series.EvidenceFidelity * 100,
+        ComparisonMetric.LocationAccuracy => series.LocationAccuracy * 100,
+        ComparisonMetric.HallucinationRate => series.HallucinationRate * 100,
+        ComparisonMetric.EvaluationConfidence => series.EvaluationConfidence * 100,
+        ComparisonMetric.Accountability => series.AccountabilityScore,
+        ComparisonMetric.OverclaimRate => series.OverclaimRate * 100,
+        ComparisonMetric.Duration => (series.DurationMedianMs ?? series.DurationMeanMs ?? 0) / 1000.0,
+        _ => series.ScorePercent
+    };
 
     private static ComparisonMetric ParseMetric(string value)
     {

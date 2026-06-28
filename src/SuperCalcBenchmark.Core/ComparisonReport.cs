@@ -195,11 +195,30 @@ public sealed class ComparisonReport
             VulnerabilityAxis = axis,
             VulnerabilityMetadata = axisMetadata,
             Series = series
-                .OrderByDescending(s => s.ScorePercent)
+                .OrderByDescending(s => SortMetricValue(s, metric))
                 .ThenBy(s => s.Label, StringComparer.OrdinalIgnoreCase)
                 .ToList()
         };
     }
+
+    private static double SortMetricValue(ComparisonSeries series, ComparisonMetric metric) => metric switch
+    {
+        ComparisonMetric.CriticalRecall => series.CriticalRecall,
+        ComparisonMetric.HighCriticalRecall => series.HighCriticalRecall,
+        ComparisonMetric.F1 => series.F1,
+        ComparisonMetric.FpRate => series.FpPerFinding,
+        ComparisonMetric.Stability => series.VulnerabilityStability,
+        ComparisonMetric.Run2Delta => series.Run2ScoreDelta,
+        ComparisonMetric.ThinkingCoverage => series.ReasoningToOutputCoverage ?? 0,
+        ComparisonMetric.EvidenceFidelity => series.EvidenceFidelity,
+        ComparisonMetric.LocationAccuracy => series.LocationAccuracy,
+        ComparisonMetric.HallucinationRate => series.HallucinationRate,
+        ComparisonMetric.EvaluationConfidence => series.EvaluationConfidence,
+        ComparisonMetric.Accountability => series.AccountabilityScore,
+        ComparisonMetric.OverclaimRate => series.OverclaimRate,
+        ComparisonMetric.Duration => series.DurationMedianMs ?? series.DurationMeanMs ?? 0,
+        _ => series.ScorePercent
+    };
 
     private static double AggregateCredit(
         IReadOnlyList<ComparisonSample> samples,
@@ -805,6 +824,8 @@ public sealed class ComparisonRunDetail
     public string BenchmarkProfile { get; init; } = string.Empty;
     public string ScoringProfile { get; init; } = string.Empty;
     public int ScoringProfileVersion { get; init; }
+    public bool IsLegacyMigrated { get; init; }
+    public bool IsRescored { get; init; }
     public bool OfficialComparable { get; init; }
     public bool SourceHashMatches { get; init; }
     public string RunDirectory { get; init; } = string.Empty;
@@ -843,6 +864,8 @@ public sealed class ComparisonRunDetail
             BenchmarkProfile = sample.Record.BenchmarkProfile,
             ScoringProfile = sample.Run.ScoringProfile,
             ScoringProfileVersion = sample.Run.ScoringProfileVersion,
+            IsLegacyMigrated = sample.Run.IsLegacyMigrated,
+            IsRescored = sample.Run.IsRescored,
             OfficialComparable = sample.Run.OfficialComparable,
             SourceHashMatches = sample.Record.SourceHashMatches,
             RunDirectory = sample.Record.RunDirectory,

@@ -1572,6 +1572,7 @@ public partial class MainWindow : Window
 
     private static string FindRepositoryRoot()
     {
+        var candidates = new List<DirectoryInfo>();
         foreach (var start in new[] { Environment.CurrentDirectory, AppContext.BaseDirectory })
         {
             var directory = new DirectoryInfo(start);
@@ -1580,13 +1581,21 @@ public partial class MainWindow : Window
                 if (File.Exists(Path.Combine(directory.FullName, "enhanced_calc.cpp")) &&
                     File.Exists(Path.Combine(directory.FullName, "benchmarks", "supercalc-v3", "ground_truth.json")))
                 {
-                    return directory.FullName;
+                    candidates.Add(directory);
                 }
 
                 directory = directory.Parent;
             }
         }
 
-        return Environment.CurrentDirectory;
+        var repositoryRoot = candidates.FirstOrDefault(directory =>
+            File.Exists(Path.Combine(directory.FullName, "SuperCalcBenchmark.slnx")) ||
+            Directory.Exists(Path.Combine(directory.FullName, ".git")));
+        if (repositoryRoot is not null)
+        {
+            return repositoryRoot.FullName;
+        }
+
+        return candidates.FirstOrDefault()?.FullName ?? Environment.CurrentDirectory;
     }
 }

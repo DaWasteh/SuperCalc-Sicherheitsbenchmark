@@ -20,6 +20,8 @@ Else
 End If
 
 appDir = fso.GetParentFolderName(appExe)
-shell.CurrentDirectory = appDir
+' Keep the repository root as working directory so the GUI writes ./archive next to the repo,
+' not into src\SuperCalcBenchmark.App\bin\Release\... where copied benchmark assets also exist.
+shell.CurrentDirectory = root
 shell.Run """" & appExe & """", 1, False
 WScript.Quit 0
