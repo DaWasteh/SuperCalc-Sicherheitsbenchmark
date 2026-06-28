@@ -138,11 +138,25 @@ public sealed class ArchiveRecord
     public ArchiveLegacyMigration? LegacyMigration { get; set; }
 
     /// <summary>
-    /// The run used as the headline result in comparisons. Run 2 (self-validation) when it
-    /// exists, otherwise Run 1.
+    /// The run used as the headline result in comparisons. Prefers Run 2 (self-validation) when
+    /// it produced a usable result; otherwise falls back to Run 1 (blind analysis). Runs flagged
+    /// <see cref="ArchiveRunScore.IsDegenerate"/> (manually aborted, looped, or with no final
+    /// assistant output) are skipped so an aborted run is never reported as a 0% detection score.
+    /// Truth-audit runs (Run 3) never headline because they are non-blind and must not affect
+    /// detection scores. If every detection run is degenerate the most recent detection run is
+    /// still returned rather than silently dropping the record.
     /// </summary>
     [JsonIgnore]
-    public ArchiveRunScore? PrimaryRun => Runs.LastOrDefault(run => !string.Equals(run.RunKind, "truth_audit", StringComparison.OrdinalIgnoreCase)) ?? Runs.LastOrDefault();
+    public ArchiveRunScore? PrimaryRun =>
+        Runs.LastOrDefault(IsHeadlineEligible)
+        ?? Runs.LastOrDefault(IsDetectionRun)
+        ?? Runs.LastOrDefault();
+
+    private static bool IsDetectionRun(ArchiveRunScore run) =>
+        !string.Equals(run.RunKind, "truth_audit", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsHeadlineEligible(ArchiveRunScore run) =>
+        IsDetectionRun(run) && !run.IsDegenerate;
 }
 
 public sealed class ArchiveModelMetadata
@@ -465,6 +479,23 @@ public sealed class ArchiveRunScore
     /// </summary>
     [JsonPropertyName("vulnerabilityResults")]
     public List<ArchiveVulnerabilityResult> VulnerabilityResults { get; set; } = [];
+
+    /// <summary>
+    /// True when this run did not produce a usable, model-authored detection result: it was
+    /// manually aborted, hit an output loop, or never emitted a final assistant answer. Such
+    /// runs stay in the archive for transparency/diagnostics but are skipped by
+    /// <see cref="ArchiveRecord.PrimaryRun"/> so an aborted run cannot be reported as a 0% result.
+    /// A genuinely poor but complete run (e.g. the model returned valid JSON yet found nothing)
+    /// is <em>not</em> degenerate because it still produced a real model-authored answer.
+    /// </summary>
+    [JsonIgnore]
+    public bool IsDegenerate =>
+        ManuallyStopped
+        || LoopDetected
+        || string.Equals(FinishReason, "manual_abort", StringComparison.OrdinalIgnoreCase)
+        || (ResponseChars <= 0
+            && ScorePercent <= 0
+            && !string.Equals(RunKind, "truth_audit", StringComparison.OrdinalIgnoreCase));
 
     public static ArchiveRunScore FromArtifacts(BenchmarkRunArtifacts artifacts)
     {

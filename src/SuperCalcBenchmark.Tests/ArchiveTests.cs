@@ -336,6 +336,75 @@ internal static partial class TestRunner
         }
     }
 
+    private static void ArchiveAbortedRun2FallsBackToRun1AsHeadline()
+    {
+        // Mirrors a real ornith-1-0-9b__bf16 session: Run 1 (blind) scored 29, Run 2
+        // (self-validation) was manually aborted mid-loop and scored 0, Run 3 is the
+        // non-blind truth audit. The headline must be Run 1 (29), never the aborted 0.
+        var tempRoot = Path.Combine(Path.GetTempPath(), "supercalc-aborted-run2-test-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var store = new ArchiveStore(tempRoot);
+            var result = FakeResult("Ornith-1.0-9B-BF16.gguf", 29, 6, 0, 1, 12);
+            var now = DateTimeOffset.UtcNow;
+
+            result.Run2 = new BenchmarkRunArtifacts
+            {
+                RunName = "Run 2",
+                PromptVersion = PromptVersions.SelfValidateV1,
+                Score = FakeScore("Run 2", 0, 0, 0, 0, 20),
+                FinishReason = "manual_abort",
+                ManuallyStopped = true,
+                Response = string.Empty,
+                ReasoningContent = "repeating reasoning that was manually aborted",
+                StartedAt = now,
+                CompletedAt = now
+            };
+
+            result.Run3 = new BenchmarkRunArtifacts
+            {
+                RunName = "Run 3",
+                RunKind = "truth_audit",
+                GroundTruthVisibleToModel = true,
+                PromptVersion = PromptVersions.TruthAuditV1,
+                StartedAt = now,
+                CompletedAt = now,
+                Response = "{\"summary\":\"ok\"}",
+                TruthAudit = new TruthAuditResult
+                {
+                    AuditedRunName = "Run 1",
+                    AuditedRunScoreProfile = ScoringProfiles.OfficialV1Name,
+                    AuditedRunScorePercent = 29,
+                    AccountabilityScore = 52.38,
+                    TruthAuditAccuracy = 0.52
+                },
+                Score = new ScoringResult { RunName = "Run 3", PromptVersion = PromptVersions.TruthAuditV1, ScorePercent = 52.38, RawPoints = 52.38 }
+            };
+
+            store.Save(result);
+            var record = store.LoadAll().Single();
+
+            var run1 = record.Runs.Single(r => r.RunName == "Run 1");
+            var run2 = record.Runs.Single(r => r.RunName == "Run 2");
+            Assert(run2.ManuallyStopped && run2.IsDegenerate, "aborted Run 2 must be flagged degenerate");
+            Assert(!run1.IsDegenerate, "complete Run 1 must not be degenerate");
+
+            Assert(record.PrimaryRun?.RunName == "Run 1", $"aborted Run 2 must not headline; got {record.PrimaryRun?.RunName}");
+            Assert(Math.Abs((record.PrimaryRun?.ScorePercent ?? -1) - 29) < 0.001, $"headline must be Run 1's 29, got {record.PrimaryRun?.ScorePercent}");
+
+            var group = store.LoadGroups().Single();
+            Assert(Math.Abs(group.AverageScorePercent - 29) < 0.001, $"group average must reflect Run 1's 29, got {group.AverageScorePercent}");
+
+            var report = ComparisonReport.Build(store.LoadGroups(), "supercalc-v3");
+            var series = report.Series.Single();
+            Assert(Math.Abs(series.ScorePercent - 29) < 0.001, $"default comparison view must show 29, not the aborted 0; got {series.ScorePercent}");
+        }
+        finally
+        {
+            TryDeleteDirectory(tempRoot);
+        }
+    }
+
     private static void ArchiveLoadsV1ScorecardsWithV2Fallbacks()
     {
         var tempRoot = Path.Combine(Path.GetTempPath(), "supercalc-v1-load-test-" + Guid.NewGuid().ToString("N"));

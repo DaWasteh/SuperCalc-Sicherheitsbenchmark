@@ -57,6 +57,7 @@ internal static partial class TestRunner
         Run("comparison aggregates and filters by family", ComparisonAggregatesAndFiltersByFamily);
         Run("comparison html embeds parseable payload", ComparisonHtmlEmbedsParseablePayload);
         Run("archive and comparison expose truth audit metrics", ArchiveAndComparisonExposeTruthAuditMetrics);
+        Run("archive aborted run 2 falls back to run 1 headline", ArchiveAbortedRun2FallsBackToRun1AsHeadline);
         Run("archive loads v1 scorecards with v2 fallbacks", ArchiveLoadsV1ScorecardsWithV2Fallbacks);
         Run("archive v2 stores completion and parse diagnostics", ArchiveV2StoresCompletionAndParseDiagnostics);
         Run("archive stores official v1 score metadata", ArchiveStoresOfficialV1ScoreMetadata);
