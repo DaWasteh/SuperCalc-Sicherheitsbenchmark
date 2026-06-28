@@ -5,6 +5,8 @@ namespace SuperCalcBenchmark.Core;
 
 public sealed partial class ResponseParser
 {
+    public const string CurrentParserVersion = "parser-v1";
+
     public ParseResult Parse(string assistantContent)
     {
         assistantContent ??= string.Empty;

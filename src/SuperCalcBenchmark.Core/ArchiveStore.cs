@@ -94,6 +94,44 @@ public sealed class ArchiveStore
             runs.Add(ArchiveRunScore.FromArtifacts(result.Run2));
         }
 
+        if (result.Run3?.TruthAudit is not null)
+        {
+            runs.Add(ArchiveRunScore.FromArtifacts(result.Run3));
+        }
+
+        foreach (var run in runs)
+        {
+            run.SourceSha256 = string.IsNullOrWhiteSpace(run.SourceSha256) ? result.SourceSha256 : run.SourceSha256;
+            run.OfficialComparable = run.OfficialComparable
+                                     && result.SourceHashMatches
+                                     && string.Equals(result.BenchmarkProfile, "official", StringComparison.OrdinalIgnoreCase)
+                                     && !run.ManuallyStopped
+                                     && !run.LoopDetected
+                                     && !run.GroundTruthVisibleToModel
+                                     && !string.Equals(run.RunKind, "truth_audit", StringComparison.OrdinalIgnoreCase);
+        }
+
+        if (result.Comparison is not null)
+        {
+            var run2 = runs.FirstOrDefault(run => string.Equals(run.RunName, "Run 2", StringComparison.OrdinalIgnoreCase));
+            if (run2 is not null)
+            {
+                run2.SelfValidation = result.Comparison;
+            }
+        }
+
+        var scoreVersions = runs.Select(run => ArchiveScoreVersion.FromRun(run, "native")).ToList();
+        var availableProfiles = runs
+            .Select(run => run.ScoringProfile)
+            .Where(profile => !string.IsNullOrWhiteSpace(profile))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(profile => profile, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (availableProfiles.Count == 0)
+        {
+            availableProfiles.Add(ScoringProfiles.OfficialV1Name);
+        }
+
         return new ArchiveRecord
         {
             SchemaVersion = ArchiveRecord.CurrentSchemaVersion,
@@ -112,6 +150,9 @@ public sealed class ArchiveStore
             MaxTokens = result.MaxTokens,
             TimeoutSeconds = result.TimeoutSeconds,
             Seed = result.Seed,
+            RepeatGroupId = result.RepeatGroupId,
+            RepeatIndex = Math.Max(1, result.RepeatIndex),
+            RepeatCount = Math.Max(1, result.RepeatCount),
             SkipResponseFormat = result.SkipResponseFormat,
             DisableThinking = result.DisableThinking,
             AbortOnLoop = result.AbortOnLoop,
@@ -133,7 +174,12 @@ public sealed class ArchiveStore
                 ServerContextSize = result.ServerContextSize
             },
             RunDirectory = result.OutputDirectory,
-            Runs = runs
+            Runs = runs,
+            ScoreVersions = scoreVersions,
+            DefaultDetectionProfile = availableProfiles.Contains(ScoringProfiles.OfficialV1Name, StringComparer.OrdinalIgnoreCase)
+                ? ScoringProfiles.OfficialV1Name
+                : availableProfiles[0],
+            AvailableDetectionProfiles = availableProfiles
         };
     }
 
@@ -149,7 +195,8 @@ public sealed class ArchiveStore
         }
 
         var records = new List<ArchiveRecord>();
-        foreach (var path in Directory.EnumerateFiles(_archiveRoot, "*.json", SearchOption.AllDirectories))
+        foreach (var path in Directory.EnumerateFiles(_archiveRoot, "*.json", SearchOption.AllDirectories)
+                     .Where(path => !IsMigrationBackupPath(path)))
         {
             var record = TryLoad(path);
             if (record is null)
@@ -269,6 +316,108 @@ public sealed class ArchiveStore
         return updatedPaths;
     }
 
+    public ArchiveMigrationResult MigrateScores(ArchiveMigrationOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        if (!Directory.Exists(_archiveRoot))
+        {
+            return new ArchiveMigrationResult { BackupDirectory = options.BackupDirectory };
+        }
+
+        var files = new List<ArchiveMigrationFileResult>();
+        var scanned = 0;
+        var changedFiles = 0;
+        var writtenFiles = 0;
+        var migratedRuns = 0;
+        var alreadyVersionedRuns = 0;
+
+        foreach (var path in Directory.EnumerateFiles(_archiveRoot, "*.json", SearchOption.AllDirectories)
+                     .Where(path => !IsMigrationBackupPath(path)))
+        {
+            scanned++;
+            var json = File.ReadAllText(path, Encoding.UTF8);
+            var runProfileStates = ReadRunProfileStates(json, out var hasScoreVersions);
+            ArchiveRecord? record;
+            try
+            {
+                record = JsonSerializer.Deserialize<ArchiveRecord>(json, ReadOptions);
+            }
+            catch (JsonException ex)
+            {
+                files.Add(new ArchiveMigrationFileResult { Path = path, Warning = ex.Message });
+                continue;
+            }
+
+            if (record is null || record.Runs.Count == 0)
+            {
+                files.Add(new ArchiveMigrationFileResult { Path = path, Warning = "No archive runs found." });
+                continue;
+            }
+
+            NormalizeLoadedRecord(record);
+            record.ArchivePath = Path.GetFullPath(path);
+
+            var fileMigratedRuns = 0;
+            var fileAlreadyVersionedRuns = 0;
+            for (var i = 0; i < record.Runs.Count; i++)
+            {
+                var run = record.Runs[i];
+                var missingProfile = i >= runProfileStates.Count || runProfileStates[i];
+                if (missingProfile)
+                {
+                    ApplyLegacyMigrationMetadata(record, run, options);
+                    fileMigratedRuns++;
+                    continue;
+                }
+
+                fileAlreadyVersionedRuns++;
+            }
+
+            RefreshRecordScoreProfiles(record);
+            var changed = fileMigratedRuns > 0 || !hasScoreVersions;
+            string? backupPath = null;
+            if (changed)
+            {
+                changedFiles++;
+                if (options.Write)
+                {
+                    if (!string.IsNullOrWhiteSpace(options.BackupDirectory))
+                    {
+                        backupPath = BackupArchiveFile(path, options.BackupDirectory);
+                    }
+
+                    File.WriteAllText(path, JsonSerializer.Serialize(record, WriteOptions), Encoding.UTF8);
+                    writtenFiles++;
+                }
+            }
+
+            migratedRuns += fileMigratedRuns;
+            alreadyVersionedRuns += fileAlreadyVersionedRuns;
+            files.Add(new ArchiveMigrationFileResult
+            {
+                Path = path,
+                Changed = changed,
+                Written = changed && options.Write,
+                MigratedRuns = fileMigratedRuns,
+                AlreadyVersionedRuns = fileAlreadyVersionedRuns,
+                Profile = options.AssumedProfile,
+                BackupPath = backupPath
+            });
+        }
+
+        return new ArchiveMigrationResult
+        {
+            FilesScanned = scanned,
+            FilesChanged = changedFiles,
+            FilesWritten = writtenFiles,
+            RunsMigrated = migratedRuns,
+            RunsAlreadyVersioned = alreadyVersionedRuns,
+            BackupDirectory = options.BackupDirectory,
+            Files = files
+        };
+    }
+
     private static ArchiveRecord? TryLoad(string path)
     {
         try
@@ -348,9 +497,143 @@ public sealed class ArchiveStore
 
         foreach (var run in record.Runs)
         {
-            run.NormalizeAfterLoad();
+            run.NormalizeAfterLoad(record);
+        }
+
+        record.ScoreVersions ??= [];
+        if (record.ScoreVersions.Count == 0)
+        {
+            record.ScoreVersions = record.Runs
+                .Select(run => ArchiveScoreVersion.FromRun(run, run.IsLegacyMigrated ? "legacy_migrated" : "native"))
+                .ToList();
+        }
+
+        record.AvailableDetectionProfiles = record.Runs
+            .Select(run => run.ScoringProfile)
+            .Concat(record.ScoreVersions.Select(version => version.Profile))
+            .Where(profile => !string.IsNullOrWhiteSpace(profile))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(profile => profile, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (record.AvailableDetectionProfiles.Count == 0)
+        {
+            record.AvailableDetectionProfiles.Add("legacy-unknown");
+        }
+
+        if (string.IsNullOrWhiteSpace(record.DefaultDetectionProfile)
+            || !record.AvailableDetectionProfiles.Contains(record.DefaultDetectionProfile, StringComparer.OrdinalIgnoreCase))
+        {
+            record.DefaultDetectionProfile = record.AvailableDetectionProfiles.Contains(ScoringProfiles.OfficialV1Name, StringComparer.OrdinalIgnoreCase)
+                ? ScoringProfiles.OfficialV1Name
+                : record.AvailableDetectionProfiles[0];
         }
     }
+
+    private static List<bool> ReadRunProfileStates(string json, out bool hasScoreVersions)
+    {
+        hasScoreVersions = false;
+        var states = new List<bool>();
+        try
+        {
+            using var document = JsonDocument.Parse(json, new JsonDocumentOptions
+            {
+                CommentHandling = JsonCommentHandling.Skip,
+                AllowTrailingCommas = true
+            });
+            var root = document.RootElement;
+            hasScoreVersions = root.TryGetProperty("scoreVersions", out var versions)
+                               && versions.ValueKind == JsonValueKind.Array;
+            if (!root.TryGetProperty("runs", out var runs) || runs.ValueKind != JsonValueKind.Array)
+            {
+                return states;
+            }
+
+            foreach (var run in runs.EnumerateArray())
+            {
+                states.Add(!run.TryGetProperty("scoringProfile", out var profile)
+                           || profile.ValueKind == JsonValueKind.Null
+                           || string.IsNullOrWhiteSpace(profile.GetString()));
+            }
+        }
+        catch (JsonException)
+        {
+            // The caller will report the deserialize failure; return an empty state list here.
+        }
+
+        return states;
+    }
+
+    private static void ApplyLegacyMigrationMetadata(ArchiveRecord record, ArchiveRunScore run, ArchiveMigrationOptions options)
+    {
+        var profileName = string.IsNullOrWhiteSpace(options.AssumedProfile)
+            ? "legacy-unknown"
+            : options.AssumedProfile.Trim();
+        var isOfficialV1 = string.Equals(profileName, ScoringProfiles.OfficialV1Name, StringComparison.OrdinalIgnoreCase);
+
+        run.ScoreSchemaVersion = ScoringProfiles.ScoreSchemaVersion;
+        run.ScoringProfile = isOfficialV1 ? ScoringProfiles.OfficialV1Name : profileName;
+        run.ScoringProfileVersion = isOfficialV1 ? ScoringProfiles.OfficialV1Version : 0;
+        run.ScoringEngineVersion = isOfficialV1 ? ScoringProfiles.OfficialV1EngineVersion : "unknown";
+        run.ParserVersion = ResponseParser.CurrentParserVersion;
+        run.GroundTruthSha256 = string.IsNullOrWhiteSpace(run.GroundTruthSha256) ? options.GroundTruthSha256 : run.GroundTruthSha256;
+        run.SourceSha256 = FirstNonEmpty(run.SourceSha256, record.SourceSha256, options.SourceSha256);
+        run.PromptVersion = string.IsNullOrWhiteSpace(run.PromptVersion) || string.Equals(run.PromptVersion, PromptVersions.Unknown, StringComparison.OrdinalIgnoreCase)
+            ? PromptVersions.ForRunName(run.RunName)
+            : run.PromptVersion;
+        var completedAt = run.CompletedAt ?? record.CompletedAt;
+        run.ComputedAt = completedAt == default ? options.MigratedAt : completedAt;
+        run.IsLegacyMigrated = true;
+        run.IsRescored = false;
+        run.OfficialComparable = ScoringProfiles.IsOfficialComparableProfile(run.ScoringProfile) && record.SourceHashMatches;
+
+        record.LegacyMigration = new ArchiveLegacyMigration
+        {
+            IsLegacyMigrated = true,
+            MigratedAt = options.MigratedAt,
+            AssumedProfile = run.ScoringProfile
+        };
+    }
+
+    private static void RefreshRecordScoreProfiles(ArchiveRecord record)
+    {
+        record.ScoreVersions = record.Runs
+            .Select(run => ArchiveScoreVersion.FromRun(run, run.IsLegacyMigrated ? "legacy_migrated" : (run.IsRescored ? "recomputed_from_run_json" : "native")))
+            .ToList();
+
+        record.AvailableDetectionProfiles = record.Runs
+            .Select(run => run.ScoringProfile)
+            .Where(profile => !string.IsNullOrWhiteSpace(profile))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(profile => profile, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (record.AvailableDetectionProfiles.Count == 0)
+        {
+            record.AvailableDetectionProfiles.Add("legacy-unknown");
+        }
+
+        record.DefaultDetectionProfile = record.AvailableDetectionProfiles.Contains(ScoringProfiles.OfficialV1Name, StringComparer.OrdinalIgnoreCase)
+            ? ScoringProfiles.OfficialV1Name
+            : record.AvailableDetectionProfiles[0];
+    }
+
+    private string BackupArchiveFile(string path, string backupDirectory)
+    {
+        var fullBackupRoot = Path.GetFullPath(backupDirectory);
+        var relative = Path.GetRelativePath(_archiveRoot, path);
+        var backupPath = Path.Combine(fullBackupRoot, relative);
+        Directory.CreateDirectory(Path.GetDirectoryName(backupPath)!);
+        File.Copy(path, backupPath, overwrite: true);
+        return backupPath;
+    }
+
+    private static string FirstNonEmpty(params string?[] values)
+        => values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value)) ?? string.Empty;
+
+    private static bool IsMigrationBackupPath(string path)
+        => path.Contains($"{Path.DirectorySeparatorChar}_migration-backup{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase)
+           || path.Contains($"{Path.AltDirectorySeparatorChar}_migration-backup{Path.AltDirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase);
 
     private static string HashServerUrl(string serverUrl)
     {

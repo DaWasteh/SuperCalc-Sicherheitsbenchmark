@@ -241,6 +241,10 @@ internal static partial class TestRunner
             Assert(html.Contains("radarChart", StringComparison.Ordinal), "html should contain the radar chart canvas");
             Assert(html.Contains("reasoningChart", StringComparison.Ordinal), "html should include the Denken-vs-Sagen chart when diagnostics exist");
             Assert(html.Contains("heatmap", StringComparison.Ordinal), "html should include the vulnerability heatmap");
+            Assert(html.Contains("openMetricModal", StringComparison.Ordinal), "html should include maximizable metric-card modal code");
+            Assert(html.Contains("openHelpPopover", StringComparison.Ordinal), "html should include metric help popover code");
+            Assert(html.Contains("aria-modal=\"true\"", StringComparison.Ordinal), "metric overlays should expose ARIA modal attributes");
+            Assert(html.Contains("data-help-metric", StringComparison.Ordinal), "metric headings should include help buttons");
 
             const string open = "<script id=\"data\" type=\"application/json\">";
             var start = html.IndexOf(open, StringComparison.Ordinal);
@@ -257,6 +261,9 @@ internal static partial class TestRunner
             Assert(series.TryGetProperty("scoreMax", out _), "payload should expose scoreMax for uncertainty bars");
             Assert(series.TryGetProperty("criticalRecall", out _), "payload should expose severity metrics");
             Assert(series.TryGetProperty("parseSuccessRate", out _), "payload should expose parse/completion health metrics");
+            Assert(series.TryGetProperty("evidenceFidelity", out _), "payload should expose evidence fidelity drilldown metrics");
+            Assert(series.TryGetProperty("hallucinationRate", out _), "payload should expose hallucination drilldown metrics");
+            Assert(series.TryGetProperty("falsePositiveTaxonomy", out _), "payload should expose FP taxonomy drilldown data");
             Assert(series.TryGetProperty("thinkingTp", out _), "payload should expose Denken/Gedacht TP statistics");
             Assert(series.TryGetProperty("outputTp", out _), "payload should expose Sagen/Gesagt TP statistics");
             Assert(series.GetProperty("visibleReasoningRuns").GetInt32() == 1, "payload should count visible reasoning runs");
@@ -265,6 +272,63 @@ internal static partial class TestRunner
             Assert(csv.Contains("model_family", StringComparison.Ordinal), "csv should have a header row");
             Assert(csv.Contains("critical_recall_percent", StringComparison.Ordinal), "csv should include severity metric columns");
             Assert(csv.Contains("thinking_tp", StringComparison.Ordinal), "csv should include Denken-vs-Sagen columns");
+            Assert(csv.Contains("hallucination_rate_percent", StringComparison.Ordinal), "csv should include hallucination metric columns");
+            Assert(csv.Contains("fp_taxonomy", StringComparison.Ordinal), "csv should include FP taxonomy columns");
+        }
+        finally
+        {
+            TryDeleteDirectory(tempRoot);
+        }
+    }
+
+    private static void ArchiveAndComparisonExposeTruthAuditMetrics()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "supercalc-truth-audit-archive-test-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var store = new ArchiveStore(tempRoot);
+            var result = FakeResult("Qwen3-Coder-30B-Q4_K_M.gguf", 70, 2, 0, 1, 2);
+            var now = DateTimeOffset.UtcNow;
+            result.Run3 = new BenchmarkRunArtifacts
+            {
+                RunName = "Run 3",
+                RunKind = "truth_audit",
+                GroundTruthVisibleToModel = true,
+                PromptVersion = PromptVersions.TruthAuditV1,
+                StartedAt = now,
+                CompletedAt = now,
+                Response = "{\"summary\":\"ok\"}",
+                TruthAudit = new TruthAuditResult
+                {
+                    AuditedRunName = "Run 1",
+                    AuditedRunScoreProfile = ScoringProfiles.OfficialV1Name,
+                    AuditedRunScorePercent = 70,
+                    AccountabilityScore = 88,
+                    TruthAuditAccuracy = 0.9,
+                    OverclaimRate = 0.1,
+                    MissAdmissionRate = 0.8,
+                    FalsePositiveAdmissionRate = 1.0,
+                    EvidenceLaunderingCount = 1,
+                    QuoteFidelity = 0.95
+                },
+                Score = new ScoringResult { RunName = "Run 3", PromptVersion = PromptVersions.TruthAuditV1, ScorePercent = 88, RawPoints = 88 }
+            };
+
+            store.Save(result);
+            var record = store.LoadAll().Single();
+            Assert(record.Runs.Count == 2, "archive should store primary run and truth-audit run");
+            Assert(record.PrimaryRun?.RunName == "Run 1", "truth audit must not become the primary detection run");
+            var auditRun = record.Runs.Single(r => r.RunKind == "truth_audit");
+            Assert(auditRun.GroundTruthVisibleToModel, "truth-audit archive run must mark ground truth as visible");
+            Assert(auditRun.TruthAudit?.AccountabilityScore == 88, "truth-audit metrics should be archived");
+
+            var report = ComparisonReport.Build(store.LoadGroups(), "supercalc-v3");
+            var series = report.Series.Single();
+            Assert(series.TruthAuditRunCount == 1, "comparison should aggregate truth-audit run count");
+            Assert(Math.Abs(series.AccountabilityScore - 88) < 0.001, $"accountability should aggregate, got {series.AccountabilityScore}");
+            var html = new ComparisonHtmlWriter().BuildHtml(report);
+            Assert(html.Contains("accountabilityScore", StringComparison.Ordinal), "HTML payload should expose accountability score");
+            Assert(new ComparisonHtmlWriter().BuildCsv(report).Contains("accountability_score", StringComparison.Ordinal), "CSV should expose accountability score");
         }
         finally
         {
@@ -360,7 +424,7 @@ internal static partial class TestRunner
             var record = store.LoadAll().Single();
             Assert(record.SchemaVersion == ArchiveRecord.CurrentSchemaVersion, "new archives should use current schema version");
             Assert(record.TimeoutSeconds == BenchmarkDefaults.OfficialRequestTimeoutSeconds, "request timeout should be archived for slow-model diagnostics");
-            Assert(File.ReadAllText(path).Contains("\"schemaVersion\": 2", StringComparison.Ordinal), "saved JSON should declare schema v2");
+            Assert(File.ReadAllText(path).Contains("\"schemaVersion\": 3", StringComparison.Ordinal), "saved JSON should declare schema v3");
             var run = record.Runs.Single();
             Assert(run.FinishReason == "length", "finish reason should be archived");
             Assert(run.LoopDetected, "loop flag should be archived");
@@ -369,6 +433,171 @@ internal static partial class TestRunner
             Assert(run.DurationMs >= 2000, "per-run duration should be archived");
             Assert(run.PromptChars == "prompt".Length, "prompt character count should be archived without storing the prompt");
             Assert(run.VulnerabilityResults.Count == FakeVulnIds.Length, "v2 scorecards should include rich vulnerability results");
+        }
+        finally
+        {
+            TryDeleteDirectory(tempRoot);
+        }
+    }
+
+    private static void ArchiveStoresOfficialV1ScoreMetadata()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "supercalc-score-version-test-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var store = new ArchiveStore(tempRoot);
+            var path = store.Save(FakeResult("Qwen3-Coder-30B-Q4_K_M.gguf", 70, 2, 0, 1, 2));
+            var record = store.LoadAll().Single();
+            var run = record.Runs.Single();
+
+            Assert(record.SchemaVersion == ArchiveRecord.CurrentSchemaVersion, "new scorecards should use the current archive schema");
+            Assert(run.ScoreSchemaVersion == ScoringProfiles.ScoreSchemaVersion, "run should include score schema version");
+            Assert(run.ScoringProfile == ScoringProfiles.OfficialV1Name, $"new run should use official-v1, got {run.ScoringProfile}");
+            Assert(run.ScoringProfileVersion == ScoringProfiles.OfficialV1Version, "official-v1 profile version should be archived");
+            Assert(run.ScoringEngineVersion == ScoringProfiles.OfficialV1EngineVersion, "engine freeze id should be archived");
+            Assert(run.ParserVersion == ResponseParser.CurrentParserVersion, "parser version should be archived");
+            Assert(run.PromptVersion == PromptVersions.AnalysisV1, "Run 1 prompt version should be archived");
+            Assert(run.SourceSha256 == "deadbeef", "source hash should be copied to the run score");
+            Assert(run.OfficialComparable, "normal official fake run should be comparable");
+            Assert(record.ScoreVersions.Count == 1, "scoreVersions should index the archived run score");
+            Assert(record.ScoreVersions[0].Profile == ScoringProfiles.OfficialV1Name, "scoreVersions should carry the profile");
+            Assert(File.ReadAllText(path).Contains("\"scoreVersions\"", StringComparison.Ordinal), "scoreVersions should be serialized");
+        }
+        finally
+        {
+            TryDeleteDirectory(tempRoot);
+        }
+    }
+
+    private static void ArchiveStoresRepeatGroupMetadata()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "supercalc-repeat-metadata-test-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var store = new ArchiveStore(tempRoot);
+            store.Save(FakeResult("Qwen3-Coder-30B-Q4_K_M.gguf", 70, 2, 0, 1, 2, repeatGroupId: "repeat-test", repeatIndex: 2, repeatCount: 5));
+            var record = store.LoadAll().Single();
+            Assert(record.RepeatGroupId == "repeat-test", "repeatGroupId should be archived");
+            Assert(record.RepeatIndex == 2, $"repeatIndex should be archived, got {record.RepeatIndex}");
+            Assert(record.RepeatCount == 5, $"repeatCount should be archived, got {record.RepeatCount}");
+        }
+        finally
+        {
+            TryDeleteDirectory(tempRoot);
+        }
+    }
+
+    private static void ArchiveMigrationVersionsLegacyScores()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "supercalc-score-migration-test-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var directory = Path.Combine(tempRoot, "supercalc-v3", "legacy-model__Q4_K_M");
+            Directory.CreateDirectory(directory);
+            var path = Path.Combine(directory, "legacy.json");
+            File.WriteAllText(path, """
+{
+  "schemaVersion": 2,
+  "recordId": "legacy",
+  "benchmarkId": "supercalc-v3",
+  "benchmarkProfile": "official",
+  "toolVersion": "test",
+  "rawModelId": "legacy-model-Q4_K_M.gguf",
+  "modelFamily": "legacy-model",
+  "quant": "Q4_K_M",
+  "groupKey": "legacy-model__Q4_K_M",
+  "sourceSha256": "deadbeef",
+  "sourceHashMatches": true,
+  "startedAt": "2026-01-01T00:00:00Z",
+  "completedAt": "2026-01-01T00:00:01Z",
+  "runs": [
+    {
+      "runName": "Run 1",
+      "scorePercent": 50,
+      "rawPoints": 10,
+      "fullTruePositives": 1,
+      "partialTruePositives": 1,
+      "falsePositives": 0,
+      "missed": 2,
+      "precision": 1,
+      "recall": 0.5,
+      "f1": 0.66,
+      "vulnerabilityCredit": { "SC-V3-001": 1.0, "SC-V3-002": 0.5, "SC-V3-003": 0.0 }
+    }
+  ]
+}
+""", System.Text.Encoding.UTF8);
+
+            var dryRun = new ArchiveStore(tempRoot).MigrateScores(new ArchiveMigrationOptions
+            {
+                AssumedProfile = ScoringProfiles.OfficialV1Name,
+                Write = false,
+                GroundTruthSha256 = "gt-hash",
+                SourceSha256 = "deadbeef"
+            });
+            Assert(dryRun.FilesChanged == 1, "dry-run should detect the legacy scorecard");
+            Assert(!File.ReadAllText(path).Contains("scoringProfile", StringComparison.Ordinal), "dry-run must not write changes");
+
+            var backup = Path.Combine(tempRoot, "_migration-backup", "test");
+            var written = new ArchiveStore(tempRoot).MigrateScores(new ArchiveMigrationOptions
+            {
+                AssumedProfile = ScoringProfiles.OfficialV1Name,
+                Write = true,
+                BackupDirectory = backup,
+                GroundTruthSha256 = "gt-hash",
+                SourceSha256 = "deadbeef"
+            });
+            Assert(written.FilesWritten == 1, "write mode should update one scorecard");
+            Assert(written.RunsMigrated == 1, "one run should be legacy-migrated");
+            Assert(Directory.EnumerateFiles(backup, "*.json", SearchOption.AllDirectories).Any(), "migration should create a backup copy");
+
+            var record = new ArchiveStore(tempRoot).LoadAll().Single();
+            var run = record.Runs.Single();
+            Assert(run.ScorePercent == 50 && run.RawPoints == 10, "migration must not change point values");
+            Assert(run.ScoringProfile == ScoringProfiles.OfficialV1Name, "legacy score should be marked official-v1");
+            Assert(run.IsLegacyMigrated, "run should be marked legacy-migrated");
+            Assert(run.GroundTruthSha256 == "gt-hash", "ground-truth hash should be filled when supplied");
+            Assert(record.ScoreVersions.Single().Source == "legacy_migrated", "scoreVersions should mark legacy migration source");
+        }
+        finally
+        {
+            TryDeleteDirectory(tempRoot);
+        }
+    }
+
+    private static void ComparisonFiltersByScoringProfile()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "supercalc-profile-filter-test-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var store = new ArchiveStore(tempRoot);
+            store.Save(FakeResult("Qwen3-Coder-30B-Q4_K_M.gguf", 80, 2, 0, 0, 2));
+
+            var legacyDirectory = Path.Combine(tempRoot, "supercalc-v3", "legacy__Q5_K_M");
+            Directory.CreateDirectory(legacyDirectory);
+            File.WriteAllText(Path.Combine(legacyDirectory, "legacy.json"), """
+{
+  "schemaVersion": 2,
+  "recordId": "legacy-filter",
+  "benchmarkId": "supercalc-v3",
+  "rawModelId": "legacy-Q5_K_M.gguf",
+  "modelFamily": "legacy",
+  "quant": "Q5_K_M",
+  "sourceHashMatches": true,
+  "startedAt": "2026-01-01T00:00:00Z",
+  "completedAt": "2026-01-01T00:00:01Z",
+  "runs": [
+    { "runName": "Run 1", "scorePercent": 40, "rawPoints": 8, "vulnerabilityCredit": { "SC-V3-001": 1.0 } }
+  ]
+}
+""", System.Text.Encoding.UTF8);
+
+            var all = ComparisonReport.Build(store.LoadGroups(), "supercalc-v3");
+            Assert(all.Series.Count == 2, $"unfiltered comparison should include both groups, got {all.Series.Count}");
+
+            var officialV1 = ComparisonReport.Build(store.LoadGroups(), "supercalc-v3", scoringProfile: ScoringProfiles.OfficialV1Name);
+            Assert(officialV1.Series.Count == 1, $"official-v1 filter should include only native official-v1 runs, got {officialV1.Series.Count}");
+            Assert(officialV1.Series.Single().Quant == "Q4_K_M", "profile filter should exclude legacy-unknown scorecards");
         }
         finally
         {
@@ -437,7 +666,7 @@ internal static partial class TestRunner
 
     // Minimal but realistic BenchmarkRunResult with a single primary run whose per-vulnerability
     // credit is derived from the requested TP/partial/missed counts.
-    private static BenchmarkRunResult FakeResult(string model, double scorePercent, int fullTp, int partialTp, int fp, int missed, bool includeReasoning = false)
+    private static BenchmarkRunResult FakeResult(string model, double scorePercent, int fullTp, int partialTp, int fp, int missed, bool includeReasoning = false, string repeatGroupId = "", int repeatIndex = 1, int repeatCount = 1)
     {
         var score = FakeScore("Run 1", scorePercent, fullTp, partialTp, fp, missed);
         var reasoningDisclosure = FakeReasoningDisclosure(fullTp, partialTp, fp, includeReasoning);
@@ -453,6 +682,9 @@ internal static partial class TestRunner
             MaxTokens = -1,
             TimeoutSeconds = BenchmarkDefaults.OfficialRequestTimeoutSeconds,
             Seed = 12345,
+            RepeatGroupId = repeatGroupId,
+            RepeatIndex = repeatIndex,
+            RepeatCount = repeatCount,
             SourceFile = "enhanced_calc.cpp",
             SourceSha256 = "deadbeef",
             ExpectedSourceSha256 = "deadbeef",

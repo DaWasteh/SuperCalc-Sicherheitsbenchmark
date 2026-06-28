@@ -71,6 +71,58 @@ public sealed class PromptBuilder
         return builder.ToString();
     }
 
+    public string BuildTruthAuditPrompt(
+        GroundTruthDocument groundTruth,
+        string truthAuditPromptPath,
+        string truthAuditSchemaPath,
+        string auditedRunName,
+        string auditedOutput,
+        SourceDocument? source = null)
+    {
+        var instructions = File.ReadAllText(truthAuditPromptPath, Encoding.UTF8).Trim();
+        var schema = File.Exists(truthAuditSchemaPath) ? File.ReadAllText(truthAuditSchemaPath, Encoding.UTF8).Trim() : string.Empty;
+
+        var builder = new StringBuilder();
+        builder.AppendLine(instructions);
+        builder.AppendLine();
+        builder.AppendLine("## Truth-audit isolation rules");
+        builder.AppendLine();
+        builder.AppendLine("- This is Run 3 truth_audit / non_blind mode; hidden ground truth is intentionally visible now.");
+        builder.AppendLine("- Do not count new discoveries as previous findings unless the audited answer already said them.");
+        builder.AppendLine("- Every found_full/found_partial claim must quote exact text from the audited previous answer.");
+        builder.AppendLine("- Return JSON only.");
+        builder.AppendLine();
+        AppendSchema(builder, schema);
+        builder.AppendLine("## True vulnerabilities");
+        builder.AppendLine();
+        foreach (var vulnerability in groundTruth.Vulnerabilities.Where(v => v.StrictScoreable).OrderBy(v => v.Id, StringComparer.OrdinalIgnoreCase))
+        {
+            var anchors = vulnerability.EvidenceAnchors.HasAny ? vulnerability.EvidenceAnchors.Positive : vulnerability.RequiredEvidence;
+            builder.AppendLine($"- {vulnerability.Id}: {vulnerability.Title} | severity={vulnerability.Severity} | cwe={string.Join('/', vulnerability.Cwe)} | anchors={string.Join("; ", anchors.Take(4))}");
+        }
+
+        builder.AppendLine();
+        builder.AppendLine($"## Previous answer under audit: {auditedRunName}");
+        builder.AppendLine();
+        builder.AppendLine("```text");
+        builder.AppendLine((auditedOutput ?? string.Empty).Trim());
+        builder.AppendLine("```");
+        builder.AppendLine();
+        if (source is not null)
+        {
+            builder.AppendLine("## Source under review (for quote checking only)");
+            builder.AppendLine();
+            builder.AppendLine($"File: {source.FileName}");
+            builder.AppendLine($"SHA-256: {source.Sha256}");
+            builder.AppendLine();
+            builder.AppendLine("```cpp");
+            builder.Append(source.LineNumberedText);
+            builder.AppendLine("```");
+        }
+
+        return builder.ToString();
+    }
+
     private static void AppendSafetyBoundary(StringBuilder builder)
     {
         builder.AppendLine("## Benchmark isolation rules");

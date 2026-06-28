@@ -1043,6 +1043,9 @@ public partial class MainWindow : Window
             "F1" => ComparisonMetric.F1,
             "Stability" => ComparisonMetric.Stability,
             "Run2-Delta" => ComparisonMetric.Run2Delta,
+            "Evidence Fidelity" => ComparisonMetric.EvidenceFidelity,
+            "Hallucination" => ComparisonMetric.HallucinationRate,
+            "Accountability" => ComparisonMetric.Accountability,
             _ => ComparisonMetric.Score
         };
 
@@ -1083,6 +1086,10 @@ public partial class MainWindow : Window
         public double ScorePercent { get; init; }
         public double CriticalRecall { get; init; }
         public double Stability { get; init; }
+        public double EvidenceFidelity { get; init; }
+        public double LocationAccuracy { get; init; }
+        public double HallucinationRate { get; init; }
+        public double AccountabilityScore { get; init; }
         public double Run2Delta { get; init; }
         public double ScoreMedian { get; init; }
         public double ScoreStdDev { get; init; }
@@ -1105,6 +1112,10 @@ public partial class MainWindow : Window
             ScorePercent = series.ScorePercent,
             CriticalRecall = series.CriticalRecall,
             Stability = series.VulnerabilityStability,
+            EvidenceFidelity = series.EvidenceFidelity,
+            LocationAccuracy = series.LocationAccuracy,
+            HallucinationRate = series.HallucinationRate,
+            AccountabilityScore = series.AccountabilityScore,
             Run2Delta = series.Run2ScoreDelta,
             ScoreMedian = series.ScoreMedian,
             ScoreStdDev = series.ScoreStdDev,

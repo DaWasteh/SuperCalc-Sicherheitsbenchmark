@@ -13,6 +13,7 @@ public sealed class ComparisonReport
     public ComparisonAggregate Aggregate { get; init; } = ComparisonAggregate.Average;
     public ComparisonRunView RunView { get; init; } = ComparisonRunView.Primary;
     public ComparisonMetric Metric { get; init; } = ComparisonMetric.Score;
+    public string? ScoringProfile { get; init; }
 
     /// <summary>Shared vulnerability id axis. Kept for older consumers and CSV headers.</summary>
     public List<string> VulnerabilityAxis { get; init; } = [];
@@ -36,17 +37,30 @@ public sealed class ComparisonReport
         string? familyFilter = null,
         VulnerabilityMetadataIndex? metadataIndex = null,
         ComparisonRunView runView = ComparisonRunView.Primary,
-        ComparisonMetric metric = ComparisonMetric.Score)
+        ComparisonMetric metric = ComparisonMetric.Score,
+        string? scoringProfile = null)
     {
         metadataIndex ??= VulnerabilityMetadataIndex.Empty;
         var selected = string.IsNullOrWhiteSpace(familyFilter)
             ? groups
             : groups.Where(g => string.Equals(g.ModelFamily, familyFilter, StringComparison.OrdinalIgnoreCase)).ToList();
 
-        var axis = selected
-            .SelectMany(g => g.Records)
-            .SelectMany(r => r.Runs)
-            .SelectMany(r => r.VulnerabilityCredit.Keys)
+        var selectedWithSamples = selected
+            .Select(group => new
+            {
+                Group = group,
+                Samples = group.Records
+                    .Select(record => ComparisonSample.TryCreate(record, runView, scoringProfile))
+                    .Where(sample => sample is not null)
+                    .Select(sample => sample!)
+                    .ToList()
+            })
+            .Where(item => item.Samples.Count > 0)
+            .ToList();
+
+        var axis = selectedWithSamples
+            .SelectMany(item => item.Samples)
+            .SelectMany(sample => sample.CreditIds)
             .Concat(metadataIndex.Items.Select(i => i.Id))
             .Where(id => !string.IsNullOrWhiteSpace(id))
             .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -55,25 +69,18 @@ public sealed class ComparisonReport
 
         var axisMetadata = axis.Select(metadataIndex.GetOrCreate).ToList();
         var series = new List<ComparisonSeries>();
-        foreach (var group in selected)
+        foreach (var item in selectedWithSamples)
         {
-            var samples = group.Records
-                .Select(record => ComparisonSample.TryCreate(record, runView))
-                .Where(sample => sample is not null)
-                .Select(sample => sample!)
-                .ToList();
-
-            if (samples.Count == 0)
-            {
-                continue;
-            }
+            var group = item.Group;
+            var samples = item.Samples;
 
             var bestSample = samples.OrderByDescending(s => s.ScorePercent).First();
             var scoreValues = samples.Select(s => s.ScorePercent).ToList();
             var score = AggregateMetric(samples, s => s.ScorePercent, aggregate, bestSample);
             var perVuln = axis.Select(id => AggregateCredit(samples, id, aggregate, bestSample)).ToList();
             var visibleReasoningRunCount = samples.Count(s => s.Run.ReasoningDisclosure?.HasVisibleReasoning == true);
-            var pairMetrics = BuildPairMetrics(group.Records, aggregate);
+            var pairMetrics = BuildPairMetrics(group.Records, aggregate, scoringProfile);
+            var truthAudit = BuildTruthAuditMetrics(group.Records, aggregate);
             var severity = BuildBucketMetrics(axisMetadata, perVuln, item => item.Severity);
             var categories = BuildBucketMetrics(axisMetadata, perVuln, item => item.Category);
             var cwe = BuildCweMetrics(axisMetadata, perVuln);
@@ -111,6 +118,9 @@ public sealed class ComparisonReport
                 IgnoredLowConfidence = RoundToInt(AggregateMetric(samples, s => s.Run.IgnoredLowConfidence, aggregate, bestSample)),
                 Missed = RoundToInt(AggregateMetric(samples, s => s.Missed, aggregate, bestSample)),
                 OfficialRunCount = samples.Count(s => string.Equals(s.Record.BenchmarkProfile, "official", StringComparison.OrdinalIgnoreCase)),
+                OfficialComparableRunCount = samples.Count(s => s.Run.OfficialComparable),
+                LegacyMigratedRunCount = samples.Count(s => s.Run.IsLegacyMigrated),
+                RescoredRunCount = samples.Count(s => s.Run.IsRescored),
                 SourceHashMatchCount = samples.Count(s => s.Record.SourceHashMatches),
                 VisibleReasoningRunCount = visibleReasoningRunCount,
                 ReasoningParsedFindings = AggregateReasoningMetric(samples, r => r.ReasoningParsedFindingCount, aggregate, bestSample),
@@ -138,6 +148,11 @@ public sealed class ComparisonReport
                 FileIoScore = ValueOrZero(categories, "File/I/O"),
                 CweCoverage = cwe.Coverage,
                 VulnerabilityStability = CalculateVulnerabilityStability(samples, axis),
+                EvidenceFidelity = AggregateMetric(samples, s => s.Run.EvidenceFidelity, aggregate, bestSample),
+                LocationAccuracy = AggregateMetric(samples, s => s.Run.LocationAccuracy, aggregate, bestSample),
+                HallucinationRate = AggregateMetric(samples, s => s.Run.HallucinationRate, aggregate, bestSample),
+                EvaluationConfidence = AggregateMetric(samples, s => s.Run.EvaluationConfidence, aggregate, bestSample),
+                FalsePositiveTaxonomy = AggregateFalsePositiveTaxonomy(samples, aggregate, bestSample),
                 FpPerFinding = findingTotal == 0 ? 0 : (double)fpTotal / findingTotal,
                 DuplicateRate = findingTotal == 0 ? 0 : (double)duplicateTotal / findingTotal,
                 IgnoredLowConfidenceRate = findingTotal == 0 ? 0 : (double)ignoredTotal / findingTotal,
@@ -154,6 +169,14 @@ public sealed class ComparisonReport
                 Run2AddedTpCount = pairMetrics.AddedCount,
                 Run2DroppedTruePositiveIds = pairMetrics.DroppedIds,
                 Run2AddedTruePositiveIds = pairMetrics.AddedIds,
+                TruthAuditRunCount = truthAudit.RunCount,
+                AccountabilityScore = truthAudit.AccountabilityScore,
+                TruthAuditAccuracy = truthAudit.TruthAuditAccuracy,
+                OverclaimRate = truthAudit.OverclaimRate,
+                MissAdmissionRate = truthAudit.MissAdmissionRate,
+                FalsePositiveAdmissionRate = truthAudit.FalsePositiveAdmissionRate,
+                EvidenceLaunderingCount = truthAudit.EvidenceLaunderingCount,
+                QuoteFidelity = truthAudit.QuoteFidelity,
                 DurationMeanMs = durationValues.Count == 0 ? null : durationValues.Average(),
                 DurationMedianMs = durationValues.Count == 0 ? null : Median(durationValues),
                 DurationMinMs = durationValues.Count == 0 ? null : durationValues.Min(),
@@ -168,6 +191,7 @@ public sealed class ComparisonReport
             Aggregate = aggregate,
             RunView = runView,
             Metric = metric,
+            ScoringProfile = scoringProfile,
             VulnerabilityAxis = axis,
             VulnerabilityMetadata = axisMetadata,
             Series = series
@@ -259,11 +283,12 @@ public sealed class ComparisonReport
         return aggregate == ComparisonAggregate.Median ? Median(values) : values.Average();
     }
 
-    private static PairMetrics BuildPairMetrics(IReadOnlyList<ArchiveRecord> records, ComparisonAggregate aggregate)
+    private static PairMetrics BuildPairMetrics(IReadOnlyList<ArchiveRecord> records, ComparisonAggregate aggregate, string? scoringProfile)
     {
         var pairs = records
             .Where(r => r.Runs.Count >= 2)
             .Select(r => (Run1: r.Runs[0], Run2: r.Runs[1]))
+            .Where(pair => MatchesProfile(pair.Run1, scoringProfile) && MatchesProfile(pair.Run2, scoringProfile))
             .ToList();
         if (pairs.Count == 0)
         {
@@ -306,6 +331,39 @@ public sealed class ComparisonReport
             AddedIds = addedIds.OrderBy(id => id, StringComparer.OrdinalIgnoreCase).ToList()
         };
     }
+
+    private static bool MatchesProfile(ArchiveRunScore run, string? scoringProfile)
+        => string.IsNullOrWhiteSpace(scoringProfile)
+           || string.Equals(run.ScoringProfile, scoringProfile, StringComparison.OrdinalIgnoreCase);
+
+    private static TruthAuditAggregate BuildTruthAuditMetrics(IReadOnlyList<ArchiveRecord> records, ComparisonAggregate aggregate)
+    {
+        var audits = records
+            .SelectMany(record => record.Runs)
+            .Select(run => run.TruthAudit)
+            .Where(audit => audit is not null)
+            .Select(audit => audit!)
+            .ToList();
+        if (audits.Count == 0)
+        {
+            return new TruthAuditAggregate();
+        }
+
+        return new TruthAuditAggregate
+        {
+            RunCount = audits.Count,
+            AccountabilityScore = AggregateAuditNumbers(audits.Select(a => a.AccountabilityScore).ToList(), aggregate),
+            TruthAuditAccuracy = AggregateAuditNumbers(audits.Select(a => a.TruthAuditAccuracy).ToList(), aggregate),
+            OverclaimRate = AggregateAuditNumbers(audits.Select(a => a.OverclaimRate).ToList(), aggregate),
+            MissAdmissionRate = AggregateAuditNumbers(audits.Select(a => a.MissAdmissionRate).ToList(), aggregate),
+            FalsePositiveAdmissionRate = AggregateAuditNumbers(audits.Select(a => a.FalsePositiveAdmissionRate).ToList(), aggregate),
+            EvidenceLaunderingCount = AggregateAuditNumbers(audits.Select(a => (double)a.EvidenceLaunderingCount).ToList(), aggregate),
+            QuoteFidelity = AggregateAuditNumbers(audits.Select(a => a.QuoteFidelity).ToList(), aggregate)
+        };
+    }
+
+    private static double AggregateAuditNumbers(IReadOnlyList<double> values, ComparisonAggregate aggregate)
+        => AggregateNumbers(values, aggregate);
 
     private static IEnumerable<string> PositiveIds(ArchiveRunScore run) => run.VulnerabilityCredit
         .Where(kvp => kvp.Value > 0)
@@ -377,6 +435,24 @@ public sealed class ComparisonReport
         var recall = buckets.ToDictionary(kvp => kvp.Key, kvp => kvp.Value.Count == 0 ? 0 : kvp.Value.Average(), StringComparer.OrdinalIgnoreCase);
         var coverage = buckets.Count == 0 ? 0 : found.Count / (double)buckets.Count;
         return (recall, coverage);
+    }
+
+    private static Dictionary<string, double> AggregateFalsePositiveTaxonomy(IReadOnlyList<ComparisonSample> samples, ComparisonAggregate aggregate, ComparisonSample bestSample)
+    {
+        if (aggregate == ComparisonAggregate.Best)
+        {
+            return bestSample.Run.FalsePositiveTaxonomy.ToDictionary(kvp => kvp.Key, kvp => (double)kvp.Value, StringComparer.OrdinalIgnoreCase);
+        }
+
+        var keys = samples.SelectMany(s => s.Run.FalsePositiveTaxonomy.Keys).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var result = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+        foreach (var key in keys)
+        {
+            var values = samples.Select(s => s.Run.FalsePositiveTaxonomy.TryGetValue(key, out var value) ? (double)value : 0).ToList();
+            result[key] = aggregate == ComparisonAggregate.Median ? Median(values) : values.Average();
+        }
+
+        return result;
     }
 
     private static double CalculateVulnerabilityStability(IReadOnlyList<ComparisonSample> samples, IReadOnlyList<string> axis)
@@ -469,6 +545,18 @@ public sealed class ComparisonReport
         return Math.Sqrt(variance);
     }
 
+    private sealed class TruthAuditAggregate
+    {
+        public int RunCount { get; init; }
+        public double AccountabilityScore { get; init; }
+        public double TruthAuditAccuracy { get; init; }
+        public double OverclaimRate { get; init; }
+        public double MissAdmissionRate { get; init; }
+        public double FalsePositiveAdmissionRate { get; init; }
+        public double EvidenceLaunderingCount { get; init; }
+        public double QuoteFidelity { get; init; }
+    }
+
     private sealed class PairMetrics
     {
         public double Run1Score { get; init; }
@@ -497,8 +585,9 @@ public sealed class ComparisonReport
         public double FalsePositives { get; private init; }
         public double Missed { get; private init; }
         private Dictionary<string, double> Credits { get; init; } = new(StringComparer.OrdinalIgnoreCase);
+        public IEnumerable<string> CreditIds => Credits.Keys;
 
-        public static ComparisonSample? TryCreate(ArchiveRecord record, ComparisonRunView view)
+        public static ComparisonSample? TryCreate(ArchiveRecord record, ComparisonRunView view, string? scoringProfile)
         {
             var run1 = record.Runs.Count >= 1 ? record.Runs[0] : null;
             var run2 = record.Runs.Count >= 2 ? record.Runs[1] : null;
@@ -510,7 +599,12 @@ public sealed class ComparisonReport
                 _ => record.PrimaryRun
             };
 
-            if (selected is null)
+            if (selected is null || !MatchesProfile(selected, scoringProfile))
+            {
+                return null;
+            }
+
+            if (view == ComparisonRunView.Delta && (run1 is null || run2 is null || !MatchesProfile(run1, scoringProfile) || !MatchesProfile(run2, scoringProfile)))
             {
                 return null;
             }
@@ -587,6 +681,12 @@ public enum ComparisonMetric
     Stability,
     Run2Delta,
     ThinkingCoverage,
+    EvidenceFidelity,
+    LocationAccuracy,
+    HallucinationRate,
+    EvaluationConfidence,
+    Accountability,
+    OverclaimRate,
     Duration
 }
 
@@ -623,6 +723,9 @@ public sealed class ComparisonSeries
     public int Missed { get; init; }
 
     public int OfficialRunCount { get; init; }
+    public int OfficialComparableRunCount { get; init; }
+    public int LegacyMigratedRunCount { get; init; }
+    public int RescoredRunCount { get; init; }
     public int SourceHashMatchCount { get; init; }
 
     /// <summary>How many selected runs in this series exposed visible reasoning/thinking diagnostics.</summary>
@@ -655,6 +758,11 @@ public sealed class ComparisonSeries
     public double FileIoScore { get; init; }
     public double CweCoverage { get; init; }
     public double VulnerabilityStability { get; init; }
+    public double EvidenceFidelity { get; init; }
+    public double LocationAccuracy { get; init; }
+    public double HallucinationRate { get; init; }
+    public double EvaluationConfidence { get; init; }
+    public Dictionary<string, double> FalsePositiveTaxonomy { get; init; } = new(StringComparer.OrdinalIgnoreCase);
 
     public double FpPerFinding { get; init; }
     public double DuplicateRate { get; init; }
@@ -674,6 +782,15 @@ public sealed class ComparisonSeries
     public List<string> Run2DroppedTruePositiveIds { get; init; } = [];
     public List<string> Run2AddedTruePositiveIds { get; init; } = [];
 
+    public int TruthAuditRunCount { get; init; }
+    public double AccountabilityScore { get; init; }
+    public double TruthAuditAccuracy { get; init; }
+    public double OverclaimRate { get; init; }
+    public double MissAdmissionRate { get; init; }
+    public double FalsePositiveAdmissionRate { get; init; }
+    public double EvidenceLaunderingCount { get; init; }
+    public double QuoteFidelity { get; init; }
+
     public double? DurationMeanMs { get; init; }
     public double? DurationMedianMs { get; init; }
     public double? DurationMinMs { get; init; }
@@ -686,11 +803,17 @@ public sealed class ComparisonRunDetail
 {
     public string RecordId { get; init; } = string.Empty;
     public string BenchmarkProfile { get; init; } = string.Empty;
+    public string ScoringProfile { get; init; } = string.Empty;
+    public int ScoringProfileVersion { get; init; }
+    public bool OfficialComparable { get; init; }
     public bool SourceHashMatches { get; init; }
     public string RunDirectory { get; init; } = string.Empty;
     public string RunName { get; init; } = string.Empty;
     public DateTimeOffset? StartedAt { get; init; }
     public DateTimeOffset? CompletedAt { get; init; }
+    public string RepeatGroupId { get; init; } = string.Empty;
+    public int RepeatIndex { get; init; }
+    public int RepeatCount { get; init; }
     public double ScorePercent { get; init; }
     public double Run1Score { get; init; }
     public double Run2Score { get; init; }
@@ -718,11 +841,17 @@ public sealed class ComparisonRunDetail
         {
             RecordId = sample.Record.RecordId,
             BenchmarkProfile = sample.Record.BenchmarkProfile,
+            ScoringProfile = sample.Run.ScoringProfile,
+            ScoringProfileVersion = sample.Run.ScoringProfileVersion,
+            OfficialComparable = sample.Run.OfficialComparable,
             SourceHashMatches = sample.Record.SourceHashMatches,
             RunDirectory = sample.Record.RunDirectory,
             RunName = sample.Run.RunName,
             StartedAt = sample.Run.StartedAt ?? sample.Record.StartedAt,
             CompletedAt = sample.Run.CompletedAt ?? sample.Record.CompletedAt,
+            RepeatGroupId = sample.Record.RepeatGroupId,
+            RepeatIndex = sample.Record.RepeatIndex,
+            RepeatCount = sample.Record.RepeatCount,
             ScorePercent = sample.ScorePercent,
             Run1Score = run1Score,
             Run2Score = run2Score,

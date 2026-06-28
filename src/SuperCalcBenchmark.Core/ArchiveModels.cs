@@ -10,7 +10,7 @@ namespace SuperCalcBenchmark.Core;
 /// </summary>
 public sealed class ArchiveRecord
 {
-    public const int CurrentSchemaVersion = 2;
+    public const int CurrentSchemaVersion = 3;
 
     [JsonPropertyName("schemaVersion")]
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;
@@ -65,6 +65,15 @@ public sealed class ArchiveRecord
     [JsonPropertyName("seed")]
     public int? Seed { get; set; }
 
+    [JsonPropertyName("repeatGroupId")]
+    public string RepeatGroupId { get; set; } = string.Empty;
+
+    [JsonPropertyName("repeatIndex")]
+    public int RepeatIndex { get; set; } = 1;
+
+    [JsonPropertyName("repeatCount")]
+    public int RepeatCount { get; set; } = 1;
+
     [JsonPropertyName("skipResponseFormat")]
     public bool SkipResponseFormat { get; set; }
 
@@ -115,12 +124,25 @@ public sealed class ArchiveRecord
     [JsonPropertyName("runs")]
     public List<ArchiveRunScore> Runs { get; set; } = [];
 
+    /// <summary>Parallel score-version index used by migration/rescoring workflows.</summary>
+    [JsonPropertyName("scoreVersions")]
+    public List<ArchiveScoreVersion> ScoreVersions { get; set; } = [];
+
+    [JsonPropertyName("defaultDetectionProfile")]
+    public string DefaultDetectionProfile { get; set; } = ScoringProfiles.OfficialV1Name;
+
+    [JsonPropertyName("availableDetectionProfiles")]
+    public List<string> AvailableDetectionProfiles { get; set; } = [ScoringProfiles.OfficialV1Name];
+
+    [JsonPropertyName("legacyMigration")]
+    public ArchiveLegacyMigration? LegacyMigration { get; set; }
+
     /// <summary>
     /// The run used as the headline result in comparisons. Run 2 (self-validation) when it
     /// exists, otherwise Run 1.
     /// </summary>
     [JsonIgnore]
-    public ArchiveRunScore? PrimaryRun => Runs.Count == 0 ? null : Runs[^1];
+    public ArchiveRunScore? PrimaryRun => Runs.LastOrDefault(run => !string.Equals(run.RunKind, "truth_audit", StringComparison.OrdinalIgnoreCase)) ?? Runs.LastOrDefault();
 }
 
 public sealed class ArchiveModelMetadata
@@ -168,10 +190,137 @@ public sealed class ArchiveServerMetadata
     public int? BatchSize { get; set; }
 }
 
+public sealed class ArchiveLegacyMigration
+{
+    [JsonPropertyName("isLegacyMigrated")]
+    public bool IsLegacyMigrated { get; set; }
+
+    [JsonPropertyName("migratedAt")]
+    public DateTimeOffset MigratedAt { get; set; }
+
+    [JsonPropertyName("assumedProfile")]
+    public string AssumedProfile { get; set; } = string.Empty;
+}
+
+public sealed class ArchiveScoreVersion
+{
+    [JsonPropertyName("profile")]
+    public string Profile { get; set; } = string.Empty;
+
+    [JsonPropertyName("profileVersion")]
+    public int ProfileVersion { get; set; }
+
+    [JsonPropertyName("runName")]
+    public string RunName { get; set; } = string.Empty;
+
+    [JsonPropertyName("scorePercent")]
+    public double ScorePercent { get; set; }
+
+    [JsonPropertyName("rawPoints")]
+    public double RawPoints { get; set; }
+
+    [JsonPropertyName("source")]
+    public string Source { get; set; } = "native";
+
+    [JsonPropertyName("scoreSchemaVersion")]
+    public int ScoreSchemaVersion { get; set; }
+
+    [JsonPropertyName("scoringEngineVersion")]
+    public string ScoringEngineVersion { get; set; } = string.Empty;
+
+    [JsonPropertyName("parserVersion")]
+    public string ParserVersion { get; set; } = string.Empty;
+
+    [JsonPropertyName("groundTruthSha256")]
+    public string GroundTruthSha256 { get; set; } = string.Empty;
+
+    [JsonPropertyName("sourceSha256")]
+    public string SourceSha256 { get; set; } = string.Empty;
+
+    [JsonPropertyName("promptVersion")]
+    public string PromptVersion { get; set; } = string.Empty;
+
+    [JsonPropertyName("computedAt")]
+    public DateTimeOffset? ComputedAt { get; set; }
+
+    [JsonPropertyName("isLegacyMigrated")]
+    public bool IsLegacyMigrated { get; set; }
+
+    [JsonPropertyName("isRescored")]
+    public bool IsRescored { get; set; }
+
+    public static ArchiveScoreVersion FromRun(ArchiveRunScore run, string source) => new()
+    {
+        Profile = run.ScoringProfile,
+        ProfileVersion = run.ScoringProfileVersion,
+        RunName = run.RunName,
+        ScorePercent = run.ScorePercent,
+        RawPoints = run.RawPoints,
+        Source = source,
+        ScoreSchemaVersion = run.ScoreSchemaVersion,
+        ScoringEngineVersion = run.ScoringEngineVersion,
+        ParserVersion = run.ParserVersion,
+        GroundTruthSha256 = run.GroundTruthSha256,
+        SourceSha256 = run.SourceSha256,
+        PromptVersion = run.PromptVersion,
+        ComputedAt = run.ComputedAt == default ? null : run.ComputedAt,
+        IsLegacyMigrated = run.IsLegacyMigrated,
+        IsRescored = run.IsRescored
+    };
+}
+
 public sealed class ArchiveRunScore
 {
     [JsonPropertyName("runName")]
     public string RunName { get; set; } = string.Empty;
+
+    [JsonPropertyName("runKind")]
+    public string RunKind { get; set; } = "blind_analysis";
+
+    [JsonPropertyName("groundTruthVisibleToModel")]
+    public bool GroundTruthVisibleToModel { get; set; }
+
+    [JsonPropertyName("scoreSchemaVersion")]
+    public int ScoreSchemaVersion { get; set; }
+
+    [JsonPropertyName("scoringProfile")]
+    public string ScoringProfile { get; set; } = string.Empty;
+
+    [JsonPropertyName("scoringProfileVersion")]
+    public int ScoringProfileVersion { get; set; }
+
+    [JsonPropertyName("scoringEngineVersion")]
+    public string ScoringEngineVersion { get; set; } = string.Empty;
+
+    [JsonPropertyName("parserVersion")]
+    public string ParserVersion { get; set; } = string.Empty;
+
+    [JsonPropertyName("groundTruthSha256")]
+    public string GroundTruthSha256 { get; set; } = string.Empty;
+
+    [JsonPropertyName("sourceSha256")]
+    public string SourceSha256 { get; set; } = string.Empty;
+
+    [JsonPropertyName("promptVersion")]
+    public string PromptVersion { get; set; } = string.Empty;
+
+    [JsonPropertyName("computedAt")]
+    public DateTimeOffset ComputedAt { get; set; }
+
+    [JsonPropertyName("isLegacyMigrated")]
+    public bool IsLegacyMigrated { get; set; }
+
+    [JsonPropertyName("isRescored")]
+    public bool IsRescored { get; set; }
+
+    [JsonPropertyName("isAdjudicated")]
+    public bool IsAdjudicated { get; set; }
+
+    [JsonPropertyName("adjudicationLabel")]
+    public string AdjudicationLabel { get; set; } = string.Empty;
+
+    [JsonPropertyName("officialComparable")]
+    public bool OfficialComparable { get; set; }
 
     [JsonPropertyName("scorePercent")]
     public double ScorePercent { get; set; }
@@ -279,6 +428,30 @@ public sealed class ArchiveRunScore
     [JsonPropertyName("reasoningDisclosure")]
     public ReasoningDisclosureDiagnostics? ReasoningDisclosure { get; set; }
 
+    [JsonPropertyName("truthAudit")]
+    public TruthAuditResult? TruthAudit { get; set; }
+
+    [JsonPropertyName("selfValidation")]
+    public RunComparison? SelfValidation { get; set; }
+
+    [JsonPropertyName("evidenceFidelity")]
+    public double EvidenceFidelity { get; set; }
+
+    [JsonPropertyName("locationAccuracy")]
+    public double LocationAccuracy { get; set; }
+
+    [JsonPropertyName("hallucinationRate")]
+    public double HallucinationRate { get; set; }
+
+    [JsonPropertyName("duplicateRate")]
+    public double DuplicateRate { get; set; }
+
+    [JsonPropertyName("evaluationConfidence")]
+    public double EvaluationConfidence { get; set; }
+
+    [JsonPropertyName("falsePositiveTaxonomy")]
+    public Dictionary<string, int> FalsePositiveTaxonomy { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
     /// <summary>
     /// Per-vulnerability credit in [0,1] keyed by ground-truth id: 1.0 full, 0.5 partial,
     /// 0.0 missed. Kept for v1 compatibility and small consumers.
@@ -300,6 +473,12 @@ public sealed class ArchiveRunScore
             string.IsNullOrWhiteSpace(artifacts.ReasoningDisclosure.Summary) ? null : artifacts.ReasoningDisclosure);
 
         run.RunName = string.IsNullOrWhiteSpace(artifacts.RunName) ? run.RunName : artifacts.RunName;
+        run.RunKind = string.IsNullOrWhiteSpace(artifacts.RunKind) ? run.RunKind : artifacts.RunKind;
+        run.GroundTruthVisibleToModel = artifacts.GroundTruthVisibleToModel;
+        run.TruthAudit = artifacts.TruthAudit;
+        run.PromptVersion = string.IsNullOrWhiteSpace(artifacts.PromptVersion) || string.Equals(artifacts.PromptVersion, PromptVersions.Unknown, StringComparison.OrdinalIgnoreCase)
+            ? run.PromptVersion
+            : artifacts.PromptVersion;
         run.FinishReason = artifacts.FinishReason ?? string.Empty;
         run.LoopDetected = artifacts.LoopDetected;
         run.LoopDiagnosticsSummary = artifacts.LoopDiagnosticsSummary ?? string.Empty;
@@ -342,16 +521,45 @@ public sealed class ArchiveRunScore
                 Credit = value,
                 Status = vulnerability.Found ? (vulnerability.Partial ? "partial" : "full") : "missed",
                 MatchScore = vulnerability.MatchScore,
-                FindingIndex = vulnerability.FindingIndex
+                FindingIndex = vulnerability.FindingIndex,
+                Category = vulnerability.Category,
+                Module = vulnerability.Module,
+                Exploitability = vulnerability.Exploitability,
+                Difficulty = vulnerability.Difficulty,
+                EvidenceFidelity = vulnerability.EvidenceFidelity,
+                LocationAccuracy = vulnerability.LocationAccuracy
             });
         }
 
         return new ArchiveRunScore
         {
             RunName = score.RunName,
+            RunKind = PromptVersions.ForRunName(score.RunName) switch
+            {
+                PromptVersions.SelfValidateV1 => "self_validation",
+                PromptVersions.TruthAuditV1 => "truth_audit",
+                _ => "blind_analysis"
+            },
+            GroundTruthVisibleToModel = string.Equals(score.PromptVersion, PromptVersions.TruthAuditV1, StringComparison.OrdinalIgnoreCase),
+            ScoreSchemaVersion = score.ScoreSchemaVersion <= 0 ? ScoringProfiles.ScoreSchemaVersion : score.ScoreSchemaVersion,
+            ScoringProfile = string.IsNullOrWhiteSpace(score.ScoringProfile) ? ScoringProfiles.OfficialV1Name : score.ScoringProfile,
+            ScoringProfileVersion = score.ScoringProfileVersion <= 0 ? ScoringProfiles.OfficialV1Version : score.ScoringProfileVersion,
+            ScoringEngineVersion = string.IsNullOrWhiteSpace(score.ScoringEngineVersion) ? ScoringProfiles.OfficialV1EngineVersion : score.ScoringEngineVersion,
+            ParserVersion = string.IsNullOrWhiteSpace(score.ParserVersion) ? ResponseParser.CurrentParserVersion : score.ParserVersion,
+            GroundTruthSha256 = score.GroundTruthSha256,
+            SourceSha256 = score.SourceSha256,
+            PromptVersion = string.IsNullOrWhiteSpace(score.PromptVersion) || string.Equals(score.PromptVersion, PromptVersions.Unknown, StringComparison.OrdinalIgnoreCase)
+                ? PromptVersions.ForRunName(score.RunName)
+                : score.PromptVersion,
+            ComputedAt = score.ComputedAt == default ? DateTimeOffset.UtcNow : score.ComputedAt,
+            IsLegacyMigrated = score.IsLegacyMigrated,
+            IsRescored = score.IsRescored,
+            IsAdjudicated = score.IsAdjudicated,
+            AdjudicationLabel = score.AdjudicationLabel,
+            OfficialComparable = ScoringProfiles.IsOfficialComparableProfile(score.ScoringProfile) && !score.IsAdjudicated,
             ScorePercent = score.ScorePercent,
             RawPoints = score.RawPoints,
-            MaxPoints = score.ScoreableVulnerabilityCount * 5.0,
+            MaxPoints = score.MaxPoints > 0 ? score.MaxPoints : score.ScoreableVulnerabilityCount * ScoringProfiles.OfficialV1.Points.FullTp,
             ScoreableVulnerabilityCount = score.ScoreableVulnerabilityCount,
             FindingCount = score.FindingCount,
             FullTruePositives = score.FullTruePositives,
@@ -363,17 +571,39 @@ public sealed class ArchiveRunScore
             Precision = score.Precision,
             Recall = score.Recall,
             F1 = score.F1,
+            EvidenceFidelity = score.EvidenceFidelity,
+            LocationAccuracy = score.LocationAccuracy,
+            HallucinationRate = score.HallucinationRate,
+            DuplicateRate = score.DuplicateRate,
+            EvaluationConfidence = score.EvaluationConfidence,
+            FalsePositiveTaxonomy = new Dictionary<string, int>(score.FalsePositiveTaxonomy, StringComparer.OrdinalIgnoreCase),
             ReasoningDisclosure = reasoningDisclosure,
             VulnerabilityCredit = credit,
             VulnerabilityResults = results
         };
     }
 
-    public void NormalizeAfterLoad()
+    public void NormalizeAfterLoad(ArchiveRecord? record = null)
     {
         var existingCredit = VulnerabilityCredit ?? new Dictionary<string, double>();
         VulnerabilityCredit = new Dictionary<string, double>(existingCredit, StringComparer.OrdinalIgnoreCase);
         VulnerabilityResults ??= [];
+        FalsePositiveTaxonomy = new Dictionary<string, int>(FalsePositiveTaxonomy ?? new Dictionary<string, int>(), StringComparer.OrdinalIgnoreCase);
+
+        if (HallucinationRate <= 0 && FindingCount > 0 && FalsePositives > 0)
+        {
+            HallucinationRate = FalsePositives / (double)Math.Max(1, FindingCount - IgnoredLowConfidence);
+        }
+
+        if (DuplicateRate <= 0 && FindingCount > 0 && Duplicates > 0)
+        {
+            DuplicateRate = Duplicates / (double)FindingCount;
+        }
+
+        if (FalsePositiveTaxonomy.Count == 0 && FalsePositives > 0)
+        {
+            FalsePositiveTaxonomy["unsupported_by_code"] = FalsePositives;
+        }
 
         if (VulnerabilityResults.Count == 0 && VulnerabilityCredit.Count > 0)
         {
@@ -408,6 +638,64 @@ public sealed class ArchiveRunScore
         {
             ParseMode = "unknown";
         }
+
+        if (string.IsNullOrWhiteSpace(RunKind))
+        {
+            RunKind = PromptVersion switch
+            {
+                PromptVersions.SelfValidateV1 => "self_validation",
+                PromptVersions.TruthAuditV1 => "truth_audit",
+                _ => string.Equals(RunName, "Run 2", StringComparison.OrdinalIgnoreCase) ? "self_validation" : "blind_analysis"
+            };
+        }
+
+        GroundTruthVisibleToModel = GroundTruthVisibleToModel || string.Equals(RunKind, "truth_audit", StringComparison.OrdinalIgnoreCase);
+
+        if (string.IsNullOrWhiteSpace(ScoringProfile))
+        {
+            ScoringProfile = "legacy-unknown";
+        }
+
+        if (ScoreSchemaVersion <= 0 && !string.Equals(ScoringProfile, "legacy-unknown", StringComparison.OrdinalIgnoreCase))
+        {
+            ScoreSchemaVersion = ScoringProfiles.ScoreSchemaVersion;
+        }
+
+        if (ScoringProfileVersion <= 0 && string.Equals(ScoringProfile, ScoringProfiles.OfficialV1Name, StringComparison.OrdinalIgnoreCase))
+        {
+            ScoringProfileVersion = ScoringProfiles.OfficialV1Version;
+        }
+
+        if (string.IsNullOrWhiteSpace(ScoringEngineVersion))
+        {
+            ScoringEngineVersion = string.Equals(ScoringProfile, ScoringProfiles.OfficialV1Name, StringComparison.OrdinalIgnoreCase)
+                ? ScoringProfiles.OfficialV1EngineVersion
+                : "unknown";
+        }
+
+        if (string.IsNullOrWhiteSpace(ParserVersion))
+        {
+            ParserVersion = string.Equals(ScoringProfile, "legacy-unknown", StringComparison.OrdinalIgnoreCase)
+                ? "unknown"
+                : ResponseParser.CurrentParserVersion;
+        }
+
+        if (string.IsNullOrWhiteSpace(SourceSha256))
+        {
+            SourceSha256 = record?.SourceSha256 ?? string.Empty;
+        }
+
+        if (string.IsNullOrWhiteSpace(PromptVersion))
+        {
+            PromptVersion = PromptVersions.ForRunName(RunName);
+        }
+
+        if (ComputedAt == default)
+        {
+            ComputedAt = CompletedAt ?? record?.CompletedAt ?? DateTimeOffset.MinValue;
+        }
+
+        OfficialComparable = OfficialComparable || (!IsAdjudicated && ScoringProfiles.IsOfficialComparableProfile(ScoringProfile) && (record?.SourceHashMatches ?? true));
     }
 
     private static string CreditToStatus(double credit) => credit >= 0.99 ? "full" : credit > 0 ? "partial" : "missed";
@@ -464,6 +752,18 @@ public sealed class ArchiveVulnerabilityResult
 
     [JsonPropertyName("module")]
     public string Module { get; set; } = string.Empty;
+
+    [JsonPropertyName("exploitability")]
+    public string Exploitability { get; set; } = string.Empty;
+
+    [JsonPropertyName("difficulty")]
+    public string Difficulty { get; set; } = string.Empty;
+
+    [JsonPropertyName("evidenceFidelity")]
+    public double EvidenceFidelity { get; set; }
+
+    [JsonPropertyName("locationAccuracy")]
+    public double LocationAccuracy { get; set; }
 }
 
 /// <summary>One model family + quant, with every archived run for it.</summary>

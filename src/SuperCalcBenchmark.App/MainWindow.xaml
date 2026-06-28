@@ -249,6 +249,9 @@
                             <ComboBoxItem Content="F1" />
                             <ComboBoxItem Content="Stability" />
                             <ComboBoxItem Content="Run2-Delta" />
+                            <ComboBoxItem Content="Evidence Fidelity" />
+                            <ComboBoxItem Content="Hallucination" />
+                            <ComboBoxItem Content="Accountability" />
                         </ComboBox>
                         <Button x:Name="OpenComparisonButton" Content="Diagramme öffnen (HTML)" Margin="16,4,4,4" Click="OpenComparisonButton_Click" IsEnabled="False" ToolTip="Erzeugt interaktive Vergleichsdiagramme als HTML und öffnet sie im Browser." />
                         <Button x:Name="OpenArchiveFolderButton" Content="Archiv bearbeiten" Click="OpenArchiveFolderButton_Click" ToolTip="Öffnet die Scorecard-JSONs. modelFamily/quant können manuell korrigiert werden; danach Archiv neu laden." />
@@ -305,6 +308,9 @@
                             <DataGridTextColumn Header="Score" Binding="{Binding ScorePercent, StringFormat=0.##}" IsReadOnly="True" Width="Auto" />
                             <DataGridTextColumn Header="Critical" Binding="{Binding CriticalRecall, StringFormat=P1}" IsReadOnly="True" Width="Auto" />
                             <DataGridTextColumn Header="Stability" Binding="{Binding Stability, StringFormat=P1}" IsReadOnly="True" Width="Auto" />
+                            <DataGridTextColumn Header="Evidence" Binding="{Binding EvidenceFidelity, StringFormat=P1}" IsReadOnly="True" Width="Auto" />
+                            <DataGridTextColumn Header="Hallucination" Binding="{Binding HallucinationRate, StringFormat=P1}" IsReadOnly="True" Width="Auto" />
+                            <DataGridTextColumn Header="Audit" Binding="{Binding AccountabilityScore, StringFormat=0.##}" IsReadOnly="True" Width="Auto" />
                             <DataGridTextColumn Header="Run2 Δ" Binding="{Binding Run2Delta, StringFormat=0.##}" IsReadOnly="True" Width="Auto" />
                             <DataGridTextColumn Header="Median" Binding="{Binding ScoreMedian, StringFormat=0.##}" IsReadOnly="True" Width="Auto" />
                             <DataGridTextColumn Header="σ" Binding="{Binding ScoreStdDev, StringFormat=0.##}" IsReadOnly="True" Width="Auto" />

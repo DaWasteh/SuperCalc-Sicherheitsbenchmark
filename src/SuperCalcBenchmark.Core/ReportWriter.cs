@@ -57,6 +57,15 @@ public sealed class ReportWriter
             File.WriteAllText(Path.Combine(result.OutputDirectory, "run2_request.json"), result.Run2.RequestJson, Encoding.UTF8);
         }
 
+        if (result.Run3 is not null)
+        {
+            File.WriteAllText(Path.Combine(result.OutputDirectory, "run3_prompt.txt"), result.Run3.Prompt, Encoding.UTF8);
+            File.WriteAllText(Path.Combine(result.OutputDirectory, "run3_response.txt"), result.Run3.Response, Encoding.UTF8);
+            File.WriteAllText(Path.Combine(result.OutputDirectory, "run3_reasoning.txt"), result.Run3.ReasoningContent, Encoding.UTF8);
+            File.WriteAllText(Path.Combine(result.OutputDirectory, "run3_raw_response.json"), result.Run3.RawResponse, Encoding.UTF8);
+            File.WriteAllText(Path.Combine(result.OutputDirectory, "run3_request.json"), result.Run3.RequestJson, Encoding.UTF8);
+        }
+
         File.WriteAllText(Path.Combine(result.OutputDirectory, "report.md"), BuildMarkdownReport(result), Encoding.UTF8);
         File.WriteAllText(Path.Combine(result.OutputDirectory, "findings-run1.csv"), BuildFindingsCsv(result.Run1.Score), Encoding.UTF8);
         if (result.Run2 is not null)
@@ -76,6 +85,10 @@ public sealed class ReportWriter
         builder.AppendLine($"- Server: `{result.ServerUrl}`");
         builder.AppendLine($"- Server context window: `{(result.ServerContextSize?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown")}`");
         builder.AppendLine($"- Requested max completion tokens: `{FormatMaxTokens(result.MaxTokens)}`");
+        if (!string.IsNullOrWhiteSpace(result.RepeatGroupId) || result.RepeatCount > 1)
+        {
+            builder.AppendLine($"- Repeat group: `{(string.IsNullOrWhiteSpace(result.RepeatGroupId) ? "n/a" : result.RepeatGroupId)}` ({result.RepeatIndex}/{result.RepeatCount}, seed `{result.Seed}`)");
+        }
         builder.AppendLine($"- HTTP request timeout: `{FormatTimeout(result.TimeoutSeconds)}`");
         builder.AppendLine($"- Thinking disable requested: `{result.DisableThinking}`");
         builder.AppendLine($"- Streaming loop guard enabled: `{result.AbortOnLoop}`");
@@ -105,10 +118,23 @@ public sealed class ReportWriter
             builder.AppendLine($"- Kept true positives: {FormatList(result.Comparison.KeptTruePositiveIds)}");
             builder.AppendLine($"- Dropped true positives: {FormatList(result.Comparison.DroppedTruePositiveIds)}");
             builder.AppendLine($"- Added true positives: {FormatList(result.Comparison.AddedTruePositiveIds)}");
+            builder.AppendLine($"- Kept false positives: {result.Comparison.KeptFalsePositives} ({FormatList(result.Comparison.KeptFalsePositiveKeys)})");
+            builder.AppendLine($"- Dropped false positives: {result.Comparison.DroppedFalsePositives} ({FormatList(result.Comparison.DroppedFalsePositiveKeys)})");
+            builder.AppendLine($"- Added false positives: {result.Comparison.AddedFalsePositives} ({FormatList(result.Comparison.AddedFalsePositiveKeys)})");
             builder.AppendLine($"- False positives Run 1 → Run 2: {result.Comparison.Run1FalsePositives} → {result.Comparison.Run2FalsePositives}");
-            builder.AppendLine($"- False-positive reduction: {result.Comparison.FalsePositiveReduction}");
+            builder.AppendLine($"- False-positive reduction: {result.Comparison.FalsePositiveReduction} ({result.Comparison.FalsePositiveReductionRate:P1})");
             builder.AppendLine($"- True-positive retention: {result.Comparison.TruePositiveRetention:P1}");
+            builder.AppendLine($"- Over-pruning rate: {result.Comparison.OverPruningRate:P1}");
+            builder.AppendLine($"- Evidence improvement delta: {result.Comparison.EvidenceImprovementDelta:+0.00;-0.00;0.00}");
+            builder.AppendLine($"- Severity corrected: {result.Comparison.SeverityCorrectedCount}");
             builder.AppendLine();
+            AppendSelfValidationTables(builder, result.Comparison);
+            builder.AppendLine();
+        }
+
+        if (result.Run3?.TruthAudit is not null)
+        {
+            AppendTruthAudit(builder, result.Run3.TruthAudit);
         }
 
         AppendFindingLedger(builder, result.Run1.Score);
@@ -134,6 +160,18 @@ public sealed class ReportWriter
         builder.AppendLine("| ------ | ----: |");
         builder.AppendLine($"| Score | {score.ScorePercent:0.##}/100 |");
         builder.AppendLine($"| Raw points | {score.RawPoints:0.##} |");
+        builder.AppendLine($"| Score schema version | {score.ScoreSchemaVersion} |");
+        builder.AppendLine($"| Scoring profile | `{EscapePipe(score.ScoringProfile)}` v{score.ScoringProfileVersion} |");
+        builder.AppendLine($"| Adjudicated | {score.IsAdjudicated} |");
+        if (!string.IsNullOrWhiteSpace(score.AdjudicationLabel))
+        {
+            builder.AppendLine($"| Adjudication label | `{EscapePipe(score.AdjudicationLabel)}` |");
+        }
+        builder.AppendLine($"| Scoring engine | `{EscapePipe(score.ScoringEngineVersion)}` |");
+        builder.AppendLine($"| Parser version | `{EscapePipe(score.ParserVersion)}` |");
+        builder.AppendLine($"| Prompt version | `{EscapePipe(score.PromptVersion)}` |");
+        builder.AppendLine($"| Ground-truth SHA-256 | `{EscapePipe(score.GroundTruthSha256)}` |");
+        builder.AppendLine($"| Score computed at | `{score.ComputedAt:O}` |");
         builder.AppendLine($"| Findings parsed | {score.FindingCount} |");
         builder.AppendLine($"| Full TP | {score.FullTruePositives} |");
         builder.AppendLine($"| Partial TP | {score.PartialTruePositives} |");
@@ -144,6 +182,12 @@ public sealed class ReportWriter
         builder.AppendLine($"| Precision | {score.Precision:P1} |");
         builder.AppendLine($"| Recall | {score.Recall:P1} |");
         builder.AppendLine($"| F1 | {score.F1:P1} |");
+        builder.AppendLine($"| Evidence fidelity | {score.EvidenceFidelity:P1} |");
+        builder.AppendLine($"| Location accuracy | {score.LocationAccuracy:P1} |");
+        builder.AppendLine($"| Hallucination rate | {score.HallucinationRate:P1} |");
+        builder.AppendLine($"| Duplicate rate | {score.DuplicateRate:P1} |");
+        builder.AppendLine($"| Evaluation confidence | {score.EvaluationConfidence:P1} |");
+        builder.AppendLine($"| FP taxonomy | {FormatTaxonomy(score.FalsePositiveTaxonomy)} |");
         builder.AppendLine();
     }
 
@@ -243,6 +287,68 @@ public sealed class ReportWriter
         builder.AppendLine();
     }
 
+    private static void AppendSelfValidationTables(StringBuilder builder, RunComparison comparison)
+    {
+        var interestingVulnerabilities = comparison.VulnerabilityChanges
+            .Where(change => !string.Equals(change.Change, "unchanged", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(change => change.GroundTruthId, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (interestingVulnerabilities.Count > 0)
+        {
+            builder.AppendLine("### Self-Validation Vulnerability Changes");
+            builder.AppendLine();
+            builder.AppendLine("| GroundTruthId | Run1 status | Run2 status | Change | Evidence Δ | Location Δ | Notes |");
+            builder.AppendLine("| ------------- | ----------- | ----------- | ------ | ---------: | ---------: | ----- |");
+            foreach (var change in interestingVulnerabilities)
+            {
+                builder.AppendLine($"| {EscapePipe(change.GroundTruthId)} | {EscapePipe(change.Run1Status)} | {EscapePipe(change.Run2Status)} | {EscapePipe(change.Change)} | {change.EvidenceDelta:+0.00;-0.00;0.00} | {change.LocationDelta:+0.00;-0.00;0.00} | {EscapePipe(change.Notes)} |");
+            }
+
+            builder.AppendLine();
+        }
+
+        if (comparison.FindingChanges.Count > 0)
+        {
+            builder.AppendLine("### Self-Validation Finding Changes");
+            builder.AppendLine();
+            builder.AppendLine("| Finding | Run1 # | Run2 # | Change | FP Category | Evidence Δ | Notes |");
+            builder.AppendLine("| ------- | -----: | -----: | ------ | ----------- | ---------: | ----- |");
+            foreach (var change in comparison.FindingChanges.OrderBy(change => change.Change, StringComparer.OrdinalIgnoreCase).ThenBy(change => change.FindingKey, StringComparer.OrdinalIgnoreCase))
+            {
+                builder.AppendLine($"| {EscapePipe(change.FindingKey)} | {(change.Run1FindingIndex?.ToString() ?? "-")} | {(change.Run2FindingIndex?.ToString() ?? "-")} | {EscapePipe(change.Change)} | {EscapePipe(change.FalsePositiveCategory)} | {change.EvidenceDelta:+0.00;-0.00;0.00} | {EscapePipe(change.Notes)} |");
+            }
+
+            builder.AppendLine();
+        }
+    }
+
+    private static void AppendTruthAudit(StringBuilder builder, TruthAuditResult audit)
+    {
+        builder.AppendLine("## Run 3 — Truth Audit / Honesty");
+        builder.AppendLine();
+        builder.AppendLine($"- Audited previous run: `{audit.AuditedRunName}`");
+        builder.AppendLine($"- Detection score of audited run: `{audit.AuditedRunScorePercent:0.##}` `{audit.AuditedRunScoreProfile}`");
+        builder.AppendLine($"- Selection reason: `{audit.SelectionReason}`");
+        builder.AppendLine($"- Accountability score: {audit.AccountabilityScore:0.##}/100");
+        builder.AppendLine($"- Truth-audit accuracy: {audit.TruthAuditAccuracy:P1}");
+        builder.AppendLine($"- Overclaim rate: {audit.OverclaimRate:P1}");
+        builder.AppendLine($"- Miss admission rate: {audit.MissAdmissionRate:P1}");
+        builder.AppendLine($"- FP admission rate: {audit.FalsePositiveAdmissionRate:P1}");
+        builder.AppendLine($"- Evidence laundering: {audit.EvidenceLaunderingCount} case(s)");
+        builder.AppendLine($"- Quote fidelity: {audit.QuoteFidelity:P1}");
+        builder.AppendLine();
+        builder.AppendLine("| ID | Actual audited status | Model self-assessment | Correct? | Quote valid? | Notes |");
+        builder.AppendLine("| -- | --------------------- | --------------------- | -------- | ------------ | ----- |");
+        foreach (var item in audit.Items.OrderBy(i => i.Id, StringComparer.OrdinalIgnoreCase))
+        {
+            builder.AppendLine($"| {EscapePipe(item.Id)} | {EscapePipe(item.ActualStatus)} | {EscapePipe(item.SelfAssessment)} | {item.Correct} | {item.QuoteValid} | {EscapePipe(item.Notes)} |");
+        }
+
+        builder.AppendLine();
+        builder.AppendLine("> Run 3 is non-blind: ground truth is intentionally visible and the result does not improve the Blind/Self-Validation detection score.");
+        builder.AppendLine();
+    }
+
     private static void AppendFindingLedger(StringBuilder builder, ScoringResult score)
     {
         builder.AppendLine($"## {score.RunName} Finding Ledger");
@@ -266,6 +372,19 @@ public sealed class ReportWriter
             builder.AppendLine($"- Points: `{finding.Points:0.##}`");
             builder.AppendLine($"- Duplicate: `{finding.Duplicate}`");
             builder.AppendLine($"- Severity mismatch: `{finding.SeverityMismatch}`");
+            if (!string.IsNullOrWhiteSpace(finding.FalsePositiveCategory))
+            {
+                builder.AppendLine($"- False-positive category: `{finding.FalsePositiveCategory}`");
+            }
+            if (!string.IsNullOrWhiteSpace(finding.AdjudicationReason))
+            {
+                builder.AppendLine($"- Adjudication: `{EscapePipe(finding.AdjudicationReason)}`");
+            }
+            builder.AppendLine($"- Evidence fidelity: `{finding.EvidenceFidelity:0.00}` (exact={finding.EvidenceExactMatch}, normalized={finding.EvidenceNormalizedMatch})");
+            builder.AppendLine($"- Location accuracy: `{finding.LocationAccuracy:0.00}`");
+            builder.AppendLine($"- Accepted evidence anchors: {FormatList(finding.AcceptedEvidenceAnchors)}");
+            builder.AppendLine($"- Missing must anchors: {FormatList(finding.MissingMustAnchors)}");
+            builder.AppendLine($"- Rejections/caps: {FormatList(finding.RejectedBecause)}");
             builder.AppendLine();
             builder.AppendLine("| Signal | Weight | Value | Detail |");
             builder.AppendLine("| ------ | -----: | ----: | ------ |");
@@ -296,13 +415,14 @@ public sealed class ReportWriter
     private static string BuildFindingsCsv(ScoringResult score)
     {
         var builder = new StringBuilder();
-        builder.AppendLine("run,finding_index,classification,points,match_score,matched_id,title,reason");
+        builder.AppendLine("run,finding_index,classification,fp_category,points,match_score,matched_id,title,reason");
         foreach (var finding in score.Findings.OrderBy(f => f.FindingIndex))
         {
             builder.AppendLine(string.Join(',',
                 Csv(score.RunName),
                 finding.FindingIndex,
                 Csv(finding.Classification.ToString()),
+                Csv(finding.FalsePositiveCategory),
                 finding.Points.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 finding.MatchScore.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 Csv(finding.MatchedVulnerabilityId ?? "UNMATCHED"),
@@ -338,6 +458,10 @@ public sealed class ReportWriter
     private static string FormatNullablePercent(double? value) => value is null ? "n/a" : value.Value.ToString("P1", System.Globalization.CultureInfo.InvariantCulture);
 
     private static string FormatList(IReadOnlyList<string> items) => items.Count == 0 ? "-" : string.Join(", ", items.Select(i => $"`{i}`"));
+
+    private static string FormatTaxonomy(IReadOnlyDictionary<string, int> taxonomy) => taxonomy.Count == 0
+        ? "-"
+        : string.Join(", ", taxonomy.OrderByDescending(kvp => kvp.Value).ThenBy(kvp => kvp.Key, StringComparer.OrdinalIgnoreCase).Select(kvp => $"`{kvp.Key}`={kvp.Value}"));
 
     private static string EscapePipe(string value) => value.Replace("|", "\\|", StringComparison.Ordinal).Replace("\r", " ", StringComparison.Ordinal).Replace("\n", " ", StringComparison.Ordinal);
 

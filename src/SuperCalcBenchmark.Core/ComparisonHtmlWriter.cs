@@ -45,6 +45,7 @@ public sealed class ComparisonHtmlWriter
             aggregate = report.Aggregate.ToString(),
             runView = report.RunView.ToString(),
             metric = MetricValue(report.Metric),
+            scoringProfile = report.ScoringProfile,
             axis = report.VulnerabilityMetadata.Select(a => new
             {
                 id = a.Id,
@@ -62,6 +63,9 @@ public sealed class ComparisonHtmlWriter
                 quant = s.Quant,
                 runCount = s.RunCount,
                 officialRunCount = s.OfficialRunCount,
+                officialComparableRunCount = s.OfficialComparableRunCount,
+                legacyMigratedRunCount = s.LegacyMigratedRunCount,
+                rescoredRunCount = s.RescoredRunCount,
                 sourceHashMatchCount = s.SourceHashMatchCount,
                 aggregate = s.Aggregate.ToString(),
                 runView = s.RunView.ToString(),
@@ -103,6 +107,11 @@ public sealed class ComparisonHtmlWriter
                 fileIoScore = Math.Round(s.FileIoScore * 100, 1),
                 cweCoverage = Math.Round(s.CweCoverage * 100, 1),
                 stability = Math.Round(s.VulnerabilityStability * 100, 1),
+                evidenceFidelity = Math.Round(s.EvidenceFidelity * 100, 1),
+                locationAccuracy = Math.Round(s.LocationAccuracy * 100, 1),
+                hallucinationRate = Math.Round(s.HallucinationRate * 100, 1),
+                evaluationConfidence = Math.Round(s.EvaluationConfidence * 100, 1),
+                falsePositiveTaxonomy = CountDictionary(s.FalsePositiveTaxonomy),
                 fpRate = Math.Round(s.FpPerFinding * 100, 1),
                 duplicateRate = Math.Round(s.DuplicateRate * 100, 1),
                 ignoredRate = Math.Round(s.IgnoredLowConfidenceRate * 100, 1),
@@ -117,6 +126,14 @@ public sealed class ComparisonHtmlWriter
                 run2TpRetention = Math.Round(s.Run2TpRetention * 100, 1),
                 run2DroppedTpCount = Math.Round(s.Run2DroppedTpCount, 1),
                 run2AddedTpCount = Math.Round(s.Run2AddedTpCount, 1),
+                truthAuditRunCount = s.TruthAuditRunCount,
+                accountabilityScore = Math.Round(s.AccountabilityScore, 2),
+                truthAuditAccuracy = Math.Round(s.TruthAuditAccuracy * 100, 1),
+                overclaimRate = Math.Round(s.OverclaimRate * 100, 1),
+                missAdmissionRate = Math.Round(s.MissAdmissionRate * 100, 1),
+                falsePositiveAdmissionRate = Math.Round(s.FalsePositiveAdmissionRate * 100, 1),
+                evidenceLaunderingCount = Math.Round(s.EvidenceLaunderingCount, 1),
+                quoteFidelity = Math.Round(s.QuoteFidelity * 100, 1),
                 run2DroppedIds = s.Run2DroppedTruePositiveIds,
                 run2AddedIds = s.Run2AddedTruePositiveIds,
                 durationMeanSec = s.DurationMeanMs.HasValue ? Math.Round(s.DurationMeanMs.Value / 1000.0, 1) : (double?)null,
@@ -132,6 +149,9 @@ public sealed class ComparisonHtmlWriter
                 {
                     recordId = d.RecordId,
                     benchmarkProfile = d.BenchmarkProfile,
+                    scoringProfile = d.ScoringProfile,
+                    scoringProfileVersion = d.ScoringProfileVersion,
+                    officialComparable = d.OfficialComparable,
                     sourceHashMatches = d.SourceHashMatches,
                     runDirectory = d.RunDirectory,
                     runName = d.RunName,
@@ -154,6 +174,9 @@ public sealed class ComparisonHtmlWriter
                     fullTruePositives = d.FullTruePositives,
                     partialTruePositives = d.PartialTruePositives,
                     missed = d.Missed,
+                    repeatGroupId = d.RepeatGroupId,
+                    repeatIndex = d.RepeatIndex,
+                    repeatCount = d.RepeatCount,
                     hasVisibleReasoning = d.HasVisibleReasoning
                 }),
                 color = palette[i]
@@ -179,6 +202,15 @@ public sealed class ComparisonHtmlWriter
   h3 { font-size:14px; margin:14px 0 8px; }
   .meta,.note { color:var(--muted); font-size:12px; }
   .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; margin-bottom:18px; box-shadow:0 1px 2px rgba(0,0,0,.04); }
+  .card-heading { display:flex; align-items:center; gap:8px; margin:0 0 12px; }
+  .metric-title { background:transparent; color:var(--fg); border:0; padding:0; font-weight:650; text-align:left; cursor:zoom-in; }
+  .metric-help { width:22px; height:22px; border-radius:50%; padding:0; display:inline-flex; align-items:center; justify-content:center; font-weight:700; background:var(--soft); color:var(--accent); border:1px solid var(--line); }
+  .overlay-backdrop { position:fixed; inset:0; z-index:50; background:rgba(15,23,42,.58); backdrop-filter:blur(3px); display:flex; align-items:center; justify-content:center; padding:24px; }
+  .overlay-dialog { background:var(--card); color:var(--fg); border:1px solid var(--line); border-radius:16px; width:min(1180px,96vw); max-height:92vh; overflow:auto; box-shadow:0 24px 70px rgba(0,0,0,.35); padding:18px; }
+  .overlay-dialog.metric-modal { width:min(1420px,98vw); }
+  .overlay-dialog .chart-box { height:min(72vh,760px); }
+  .overlay-close { float:right; width:34px; height:34px; border-radius:999px; padding:0; margin-left:10px; }
+  .metric-card.in-modal { margin:0; border:0; box-shadow:none; padding:0; }
   .grid { display:grid; grid-template-columns:1fr; gap:18px; }
   @media (min-width:1100px) { .grid.two { grid-template-columns:1fr 1fr; } .grid.three { grid-template-columns:repeat(3,1fr); } }
   .chart-box { position:relative; height:420px; }
@@ -231,7 +263,7 @@ public sealed class ComparisonHtmlWriter
   let sortKey = "score";
   let sortDir = -1;
 
-  meta.textContent = `Benchmark: ${data.benchmarkId} · erzeugt ${data.generatedAt} · Aggregation: ${data.aggregate} · Run-Sicht: ${data.runView} · ${data.series.length} Modell(e)/Quants · ${data.axis.length} Schwachstellen`;
+  meta.textContent = `Benchmark: ${data.benchmarkId} · erzeugt ${data.generatedAt} · Aggregation: ${data.aggregate} · Run-Sicht: ${data.runView} · Scoring-Profil: ${data.scoringProfile || "alle"} · ${data.series.length} Modell(e)/Quants · ${data.axis.length} Schwachstellen`;
   if (!data.series.length) {
     content.innerHTML = '<div class="card empty">Noch keine archivierten Runs gefunden. Starte einen Benchmark, danach erscheinen hier die Vergleiche.</div>';
     return;
@@ -244,6 +276,16 @@ public sealed class ComparisonHtmlWriter
   const cwes = uniq(data.axis.flatMap(a => a.cwe || []));
   const hasChart = typeof Chart !== "undefined";
   const hasReasoningStats = data.series.some(s => s.visibleReasoningRuns > 0);
+  const metricHelp = {
+    mainMetric:{title:"Hauptmetrik", body:"Zeigt die aktuell ausgewählte Vergleichsmetrik pro Modell/Quant. Datenbasis sind archivierte Scorecards nach aktivem Run-View und Scoring-Profil. Fehlerbalken und Tooltipps verwenden Score-Verteilung derselben Gruppe; bei wenigen Runs ist die Unsicherheit nur deskriptiv."},
+    severityRecall:{title:"Severity-Recall", body:"Zeigt Recall/Credit getrennt nach Severity-Buckets. Full TP zählt 1.0, Partial TP 0.5, missed 0. Die Werte werden über die Vulnerability-Achse der lokalen Ground Truth aggregiert; kleine Buckets können stark schwanken."},
+    vulnerabilityRadar:{title:"Einzelwerte je Schwachstelle", body:"Radar über einzelne Ground-Truth-IDs. Jede Achse ist ein Finding-Credit: 1 voll gefunden, 0.5 teilweise, 0 verpasst. Im Delta-Modus sind negative Werte Run-2-Verschlechterungen."},
+    run2Delta:{title:"Run 1 → Run 2", body:"Vergleicht Blind-Analyse und Self-Validation. Steigende Linien bedeuten Score-Verbesserung, fallende Linien Over-Pruning oder schlechtere Finalisierung. Truth-Audit wird hier nicht eingerechnet."},
+    qualityHealth:{title:"Qualitäts-/Parsing-Gesundheit", body:"Diagnosechart für False Positives, Duplikate, ignorierte Low-Confidence-Findings, Hallucination Rate, Evidence/Location-Fidelity, Loop- und Parse-Probleme. Diese Metriken erklären Score-Unterschiede, sind aber nicht alle direkte Score-Komponenten."},
+    reasoningCoverage:{title:"Denken-vs-Sagen", body:"Vergleicht sichtbares reasoning_content bzw. <think>-Blöcke mit finalem Output. Das ist nur Diagnostik und zählt nicht zum offiziellen Score; unstrukturierte Gedanken können unterzählt werden."},
+    heatmap:{title:"Vulnerability Heatmap", body:"Matrix aus Modell/Quant gegen Ground-Truth-ID. Grün bedeutet erkannt, orange teilweise, rot/verblasst verpasst. Im Delta-Modus zeigt grün Verbesserung durch Run 2, rot Verschlechterung."},
+    overview:{title:"Übersicht", body:"Tabellarischer Drilldown pro Modell/Quant mit Score-Versionen, Run-Details, Repeat-Metadaten, Parse-/Loop-Hinweisen, FP-Taxonomie und Run-2-Änderungen. Sortierbar über Spaltenköpfe."}
+  };
 
   content.innerHTML = `
     <div class="card">
@@ -258,7 +300,8 @@ public sealed class ComparisonHtmlWriter
         <label>Metrik<select id="metric">
           <option value="score">Gesamt-Score</option><option value="criticalRecall">Critical Recall</option><option value="highCriticalRecall">High+Critical Recall</option>
           <option value="f1">F1</option><option value="fpRate">FP-Rate</option><option value="stability">Stability</option><option value="run2Delta">Run2-Delta</option>
-          <option value="thinkingCoverage">Thinking Coverage</option><option value="duration">Duration</option>
+          <option value="thinkingCoverage">Thinking Coverage</option><option value="evidenceFidelity">Evidence Fidelity</option><option value="locationAccuracy">Location Accuracy</option>
+          <option value="hallucinationRate">Hallucination Rate</option><option value="evaluationConfidence">Evaluation Confidence</option><option value="accountability">Truth-Audit Accountability</option><option value="overclaimRate">Overclaim Rate</option><option value="duration">Duration</option>
         </select></label>
         <label>Run-Sicht<select id="runView"><option value="primary">Primary</option><option value="run1">Run 1</option><option value="run2">Run 2</option><option value="delta">Run2 - Run1 Delta</option></select></label>
         <label>Score min<input id="minScore" type="number" min="-100" max="100" step="1" /></label>
@@ -266,6 +309,7 @@ public sealed class ComparisonHtmlWriter
         <label>Min Runs<input id="minRuns" type="number" min="1" step="1" /></label>
         <label>Max σ<input id="maxStd" type="number" min="0" step="1" /></label>
         <label>Max FP<input id="maxFp" type="number" min="0" step="1" /></label>
+        <label>Max Hallucination %<input id="maxHallucination" type="number" min="0" max="100" step="1" /></label>
         <label>Min Critical %<input id="minCritical" type="number" min="0" max="100" step="1" /></label>
         <label>Top-N Charts<input id="topN" type="number" min="1" step="1" value="24" /></label>
       </div>
@@ -284,19 +328,19 @@ public sealed class ComparisonHtmlWriter
     </div>
     ${hasChart ? `
       <div class="grid two">
-        <div class="card"><h2 id="barTitle">Hauptmetrik</h2><div class="note">Fehlerbalken zeigen Score-Min/Max der Gruppe; Metrik und Run-Sicht sind clientseitig umschaltbar.</div><div class="chart-box"><canvas id="barChart"></canvas></div></div>
-        <div class="card"><h2>Severity-Recall</h2><div class="chart-box"><canvas id="severityChart"></canvas></div></div>
+        <div class="card metric-card" data-metric-id="mainMetric">${metricHeader("mainMetric","Hauptmetrik", "barTitle")}<div class="note">Fehlerbalken zeigen Score-Min/Max der Gruppe; Metrik und Run-Sicht sind clientseitig umschaltbar.</div><div class="chart-box"><canvas id="barChart"></canvas></div></div>
+        <div class="card metric-card" data-metric-id="severityRecall">${metricHeader("severityRecall","Severity-Recall")}<div class="chart-box"><canvas id="severityChart"></canvas></div></div>
       </div>
       <div class="grid two">
-        <div class="card"><h2>Einzelwerte je Schwachstelle (Netz)</h2><div class="chart-box"><canvas id="radarChart"></canvas></div></div>
-        <div class="card"><h2>Run 1 → Run 2</h2><div class="chart-box"><canvas id="slopeChart"></canvas></div></div>
+        <div class="card metric-card" data-metric-id="vulnerabilityRadar">${metricHeader("vulnerabilityRadar","Einzelwerte je Schwachstelle (Netz)")}<div class="chart-box"><canvas id="radarChart"></canvas></div></div>
+        <div class="card metric-card" data-metric-id="run2Delta">${metricHeader("run2Delta","Run 1 → Run 2")}<div class="chart-box"><canvas id="slopeChart"></canvas></div></div>
       </div>
       <div class="grid two">
-        <div class="card"><h2>Qualitäts-/Parsing-Gesundheit</h2><div class="chart-box"><canvas id="qualityChart"></canvas></div></div>
-        ${hasReasoningStats ? '<div class="card"><h2>Denken-vs-Sagen</h2><div class="note">Diagnostik aus sichtbarem <code>reasoning_content</code> / <code>&lt;think&gt;</code>; nicht Teil des Scores.</div><div class="chart-box"><canvas id="reasoningChart"></canvas></div></div>' : '<div class="card"><h2>Denken-vs-Sagen</h2><div class="empty">Keine sichtbaren Reasoning-Daten in den gefilterten Scorecards.</div></div>'}
+        <div class="card metric-card" data-metric-id="qualityHealth">${metricHeader("qualityHealth","Qualitäts-/Parsing-Gesundheit")}<div class="chart-box"><canvas id="qualityChart"></canvas></div></div>
+        ${hasReasoningStats ? '<div class="card metric-card" data-metric-id="reasoningCoverage">'+metricHeader("reasoningCoverage","Denken-vs-Sagen")+'<div class="note">Diagnostik aus sichtbarem <code>reasoning_content</code> / <code>&lt;think&gt;</code>; nicht Teil des Scores.</div><div class="chart-box"><canvas id="reasoningChart"></canvas></div></div>' : '<div class="card metric-card" data-metric-id="reasoningCoverage">'+metricHeader("reasoningCoverage","Denken-vs-Sagen")+'<div class="empty">Keine sichtbaren Reasoning-Daten in den gefilterten Scorecards.</div></div>'}
       </div>` : '<div class="card note">Chart.js konnte nicht geladen werden (keine Internetverbindung?). Heatmap, Filter und Tabelle funktionieren weiterhin offline.</div>'}
-    <div class="card"><h2>Vulnerability Heatmap</h2><div class="note">0 = verpasst, 0.5 = teilweise, 1 = voll erkannt. Bei Delta: grün = Run 2 besser, rot = schlechter.</div><div id="heatmap" class="heatmap"></div></div>
-    <div class="card"><h2>Übersicht</h2><div id="tableWrap" class="table-wrap"></div><div class="note">Details pro Modell aufklappen. Archivscorecards enthalten keine Prompts oder Rohantworten, nur kompakte Bewertungs-/Diagnosedaten und Run-Ordner-Referenzen.</div></div>`;
+    <div class="card metric-card" data-metric-id="heatmap">${metricHeader("heatmap","Vulnerability Heatmap")}<div class="note">0 = verpasst, 0.5 = teilweise, 1 = voll erkannt. Bei Delta: grün = Run 2 besser, rot = schlechter.</div><div id="heatmap" class="heatmap"></div></div>
+    <div class="card metric-card" data-metric-id="overview">${metricHeader("overview","Übersicht")}<div id="tableWrap" class="table-wrap"></div><div class="note">Details pro Modell aufklappen. Archivscorecards enthalten keine Prompts oder Rohantworten, nur kompakte Bewertungs-/Diagnosedaten und Run-Ordner-Referenzen.</div></div>`;
 
   fillSelect("family", families);
   fillSelect("quant", quants);
@@ -306,10 +350,11 @@ public sealed class ComparisonHtmlWriter
   document.getElementById("metric").value = data.metric || "score";
   document.getElementById("runView").value = (data.runView || "primary").toLowerCase();
 
-  const inputs = ["q","family","quant","severity","category","cwe","metric","runView","minScore","maxScore","minRuns","maxStd","maxFp","minCritical","topN","onlyOfficial","onlyHash","noLoop","withReasoning","repeated","hideUnknown","fillToggle"];
+  const inputs = ["q","family","quant","severity","category","cwe","metric","runView","minScore","maxScore","minRuns","maxStd","maxFp","maxHallucination","minCritical","topN","onlyOfficial","onlyHash","noLoop","withReasoning","repeated","hideUnknown","fillToggle"];
   inputs.forEach(id => document.getElementById(id)?.addEventListener("input", render));
   inputs.forEach(id => document.getElementById(id)?.addEventListener("change", render));
   document.getElementById("csvButton").addEventListener("click", exportFilteredCsv);
+  wireMetricInteractions();
   document.getElementById("resetButton").addEventListener("click", () => { document.querySelectorAll("input").forEach(i => { if (i.type === "checkbox") i.checked = i.id === "onlyHash"; else if (i.id !== "topN") i.value = ""; }); document.getElementById("topN").value = "24"; document.querySelectorAll("select[multiple]").forEach(s => [...s.options].forEach(o => o.selected = false)); document.getElementById("metric").value = "score"; document.getElementById("runView").value = (data.runView || "primary").toLowerCase(); render(); });
 
   function render() {
@@ -328,7 +373,7 @@ public sealed class ComparisonHtmlWriter
       q: document.getElementById("q").value.trim().toLowerCase(),
       families: selected("family"), quants: selected("quant"), severities: selected("severity"), categories: selected("category"), cwes: selected("cwe"),
       metric: document.getElementById("metric").value, runView: document.getElementById("runView").value,
-      minScore: num("minScore"), maxScore: num("maxScore"), minRuns: num("minRuns"), maxStd: num("maxStd"), maxFp: num("maxFp"), minCritical: num("minCritical"), topN: num("topN"),
+      minScore: num("minScore"), maxScore: num("maxScore"), minRuns: num("minRuns"), maxStd: num("maxStd"), maxFp: num("maxFp"), maxHallucination: num("maxHallucination"), minCritical: num("minCritical"), topN: num("topN"),
       onlyOfficial: checked("onlyOfficial"), onlyHash: checked("onlyHash"), noLoop: checked("noLoop"), withReasoning: checked("withReasoning"), repeated: checked("repeated"), hideUnknown: checked("hideUnknown"), fill: checked("fillToggle")
     };
   }
@@ -344,6 +389,7 @@ public sealed class ComparisonHtmlWriter
     if (st.minRuns !== null && s.runCount < st.minRuns) return false;
     if (st.maxStd !== null && s.scoreStdDev > st.maxStd) return false;
     if (st.maxFp !== null && s.falsePositives > st.maxFp) return false;
+    if (st.maxHallucination !== null && s.hallucinationRate > st.maxHallucination) return false;
     if (st.minCritical !== null && s.criticalRecall < st.minCritical) return false;
     if (st.onlyOfficial && s.officialRunCount !== s.runCount) return false;
     if (st.onlyHash && s.sourceHashMatchCount !== s.runCount) return false;
@@ -374,12 +420,18 @@ public sealed class ComparisonHtmlWriter
       case "stability": return s.stability ?? 0;
       case "run2Delta": return s.run2Delta ?? 0;
       case "thinkingCoverage": return s.thinkingToOutputCoverage ?? 0;
+      case "evidenceFidelity": return s.evidenceFidelity ?? 0;
+      case "locationAccuracy": return s.locationAccuracy ?? 0;
+      case "hallucinationRate": return s.hallucinationRate ?? 0;
+      case "evaluationConfidence": return s.evaluationConfidence ?? 0;
+      case "accountability": return s.accountabilityScore ?? 0;
+      case "overclaimRate": return s.overclaimRate ?? 0;
       case "duration": return s.durationMedianSec ?? s.durationMeanSec ?? 0;
       default: return scoreForRunView(s, st.runView);
     }
   }
   function scoreForRunView(s, runView) { if (runView === "run1") return s.run1Score || s.score; if (runView === "run2") return s.run2Score || s.score; if (runView === "delta") return s.run2Delta || 0; return s.score; }
-  function metricLabel(st) { return ({score:"Gesamt-Score",criticalRecall:"Critical Recall %",highCriticalRecall:"High+Critical Recall %",f1:"F1 %",fpRate:"FP-Rate %",stability:"Stability %",run2Delta:"Run2-Delta",thinkingCoverage:"Thinking Coverage %",duration:"Duration sec"})[st.metric] || "Metrik"; }
+  function metricLabel(st) { return ({score:"Gesamt-Score",criticalRecall:"Critical Recall %",highCriticalRecall:"High+Critical Recall %",f1:"F1 %",fpRate:"FP-Rate %",stability:"Stability %",run2Delta:"Run2-Delta",thinkingCoverage:"Thinking Coverage %",evidenceFidelity:"Evidence Fidelity %",locationAccuracy:"Location Accuracy %",hallucinationRate:"Hallucination Rate %",evaluationConfidence:"Evaluation Confidence %",accountability:"Truth-Audit Accountability",overclaimRate:"Overclaim Rate %",duration:"Duration sec"})[st.metric] || "Metrik"; }
 
   function renderCharts(rows, axisIdx, st) {
     const metricName = metricLabel(st);
@@ -398,7 +450,7 @@ public sealed class ComparisonHtmlWriter
     const slopeRows = rows.filter(s => s.run2Score || s.run1Score).slice(0, 12);
     updateChart("slopeChart", { type:"line", data:{ labels:["Run 1","Run 2"], datasets:slopeRows.map(s=>({ label:s.label, data:[s.run1Score,s.run2Score], borderColor:s.color, backgroundColor:s.color, tension:0.15 }))}, options:{ responsive:true, maintainAspectRatio:false, scales:{ y:{ beginAtZero:true, max:100, title:{display:true,text:"Score"}}}, plugins:{legend:{position:"bottom",labels:{boxWidth:12,font:{size:11}}}} }});
     updateChart("qualityChart", { type:"bar", data:{ labels:rows.map(s=>s.label), datasets:[
-      {label:"FP",data:rows.map(s=>s.falsePositives),backgroundColor:"#ef4444cc"},{label:"Duplicates",data:rows.map(s=>s.duplicates),backgroundColor:"#f59e0bcc"},{label:"Ignored",data:rows.map(s=>s.ignoredLowConfidence),backgroundColor:"#64748bcc"},{label:"Loop %",data:rows.map(s=>s.loopRate),backgroundColor:"#a855f7aa"},{label:"Parse fail %",data:rows.map(s=>100-(s.parseSuccessRate||0)),backgroundColor:"#0ea5e9aa"}]}, options:{ indexAxis:"y", responsive:true, maintainAspectRatio:false, scales:{x:{beginAtZero:true}}, plugins:{legend:{position:"bottom"}} }});
+      {label:"FP",data:rows.map(s=>s.falsePositives),backgroundColor:"#ef4444cc"},{label:"Duplicates",data:rows.map(s=>s.duplicates),backgroundColor:"#f59e0bcc"},{label:"Ignored",data:rows.map(s=>s.ignoredLowConfidence),backgroundColor:"#64748bcc"},{label:"Hallucination %",data:rows.map(s=>s.hallucinationRate),backgroundColor:"#fb7185aa"},{label:"Evidence %",data:rows.map(s=>s.evidenceFidelity),backgroundColor:"#22c55e99"},{label:"Location %",data:rows.map(s=>s.locationAccuracy),backgroundColor:"#14b8a699"},{label:"Loop %",data:rows.map(s=>s.loopRate),backgroundColor:"#a855f7aa"},{label:"Parse fail %",data:rows.map(s=>100-(s.parseSuccessRate||0)),backgroundColor:"#0ea5e9aa"}]}, options:{ indexAxis:"y", responsive:true, maintainAspectRatio:false, scales:{x:{beginAtZero:true}}, plugins:{legend:{position:"bottom"}} }});
     if (hasReasoningStats && document.getElementById("reasoningChart")) updateChart("reasoningChart", { type:"bar", data:{ labels:rows.map(s=>s.label), datasets:[{label:"Gedacht TP",data:rows.map(s=>s.thinkingTp),backgroundColor:"#6366f1cc"},{label:"Gesagt TP",data:rows.map(s=>s.outputTp),backgroundColor:"#10b981cc"},{label:"Nur gedacht",data:rows.map(s=>s.thinkingOnlyTp),backgroundColor:"#f59e0bcc"}]}, options:{ indexAxis:"y", responsive:true, maintainAspectRatio:false, scales:{x:{beginAtZero:true}}, plugins:{legend:{position:"bottom"}} }});
   }
 
@@ -410,7 +462,7 @@ public sealed class ComparisonHtmlWriter
   }
 
   const cols = [
-    {key:"label",title:"Modell · Quant",kind:"detail"},{key:"runCount",title:"Runs",kind:"num"},{key:"score",title:"Score",kind:"num"},{key:"criticalRecall",title:"Critical %",kind:"num"},{key:"highCriticalRecall",title:"High+Crit %",kind:"num"},{key:"stability",title:"Stability %",kind:"num"},{key:"run2Delta",title:"Run2 Δ",kind:"num"},{key:"scoreMedian",title:"Median",kind:"num"},{key:"scoreStdDev",title:"±σ",kind:"num"},{key:"scoreIqr",title:"IQR",kind:"num"},{key:"precision",title:"Precision %",kind:"num"},{key:"recall",title:"Recall %",kind:"num"},{key:"f1",title:"F1 %",kind:"num"},{key:"fullTp",title:"Full TP",kind:"num"},{key:"partialTp",title:"Partial",kind:"num"},{key:"falsePositives",title:"FP",kind:"num"},{key:"duplicates",title:"Dup",kind:"num"},{key:"missed",title:"Missed",kind:"num"},{key:"parseSuccessRate",title:"Parse %",kind:"num"},{key:"loopRate",title:"Loop %",kind:"num"},{key:"durationMedianSec",title:"Dur s",kind:"num"},{key:"thinkingToOutputCoverage",title:"Think→Out %",kind:"num"}
+    {key:"label",title:"Modell · Quant",kind:"detail"},{key:"runCount",title:"Runs",kind:"num"},{key:"score",title:"Score",kind:"num"},{key:"criticalRecall",title:"Critical %",kind:"num"},{key:"highCriticalRecall",title:"High+Crit %",kind:"num"},{key:"evidenceFidelity",title:"Evidence %",kind:"num"},{key:"locationAccuracy",title:"Location %",kind:"num"},{key:"hallucinationRate",title:"Hallucination %",kind:"num"},{key:"stability",title:"Stability %",kind:"num"},{key:"run2Delta",title:"Run2 Δ",kind:"num"},{key:"accountabilityScore",title:"Audit",kind:"num"},{key:"overclaimRate",title:"Overclaim %",kind:"num"},{key:"scoreMedian",title:"Median",kind:"num"},{key:"scoreStdDev",title:"±σ",kind:"num"},{key:"scoreIqr",title:"IQR",kind:"num"},{key:"precision",title:"Precision %",kind:"num"},{key:"recall",title:"Recall %",kind:"num"},{key:"f1",title:"F1 %",kind:"num"},{key:"fullTp",title:"Full TP",kind:"num"},{key:"partialTp",title:"Partial",kind:"num"},{key:"falsePositives",title:"FP",kind:"num"},{key:"duplicates",title:"Dup",kind:"num"},{key:"missed",title:"Missed",kind:"num"},{key:"parseSuccessRate",title:"Parse %",kind:"num"},{key:"loopRate",title:"Loop %",kind:"num"},{key:"durationMedianSec",title:"Dur s",kind:"num"},{key:"thinkingToOutputCoverage",title:"Think→Out %",kind:"num"}
   ];
   function renderTable(rows, st) {
     rows = rows.slice().sort((a,b) => { const av = valueForSort(a,sortKey,st), bv = valueForSort(b,sortKey,st); if (typeof av === "number" || typeof bv === "number") return ((av ?? -Infinity) - (bv ?? -Infinity))*sortDir; return String(av??"").localeCompare(String(bv??""))*sortDir; });
@@ -420,13 +472,82 @@ public sealed class ComparisonHtmlWriter
     document.querySelectorAll("th[data-key]").forEach(th => th.addEventListener("click", () => { const k = th.getAttribute("data-key"); if (k === sortKey) sortDir = -sortDir; else { sortKey = k; sortDir = k === "label" ? 1 : -1; } render(); }));
   }
   function cell(s,c,st) { if (c.kind === "detail") return detailCell(s); const v = valueForSort(s,c.key,st); return typeof v === "number" && Number.isFinite(v) ? (Number.isInteger(v) ? v : v.toFixed(1)) : "n/a"; }
-  function detailCell(s) { const details = s.details || []; const rows = details.map(d => `<tr><td>${esc(d.completedAt||"")}</td><td>${esc(d.runName)}</td><td>${fmt(d.score)}</td><td>${fmtSigned(d.run2Delta)}</td><td>${esc(d.finishReason||"")}</td><td>${esc(d.parseMode||"")}</td><td>${d.loopDetected?'ja':'nein'}</td><td>${fmt(d.durationSec)}</td><td>${d.responseChars}/${d.reasoningChars}</td></tr>`).join(""); return `<details><summary>${esc(s.label)}</summary><div class="note">Profil: ${s.officialRunCount}/${s.runCount} offiziell · Source-Hash: ${s.sourceHashMatchCount}/${s.runCount} · Run2 dropped: ${(s.run2DroppedIds||[]).join(', ')||'—'} · added: ${(s.run2AddedIds||[]).join(', ')||'—'}</div><table class="detail-table"><thead><tr><th>Datum</th><th>Run</th><th>Score</th><th>Run2 Δ</th><th>Finish</th><th>Parse</th><th>Loop</th><th>s</th><th>Out/Think chars</th></tr></thead><tbody>${rows}</tbody></table></details>`; }
+  function detailCell(s) { const details = s.details || []; const rows = details.map(d => `<tr><td>${esc(d.completedAt||"")}</td><td>${esc(d.runName)}</td><td>${esc(d.scoringProfile||"legacy-unknown")}</td><td>${fmt(d.score)}</td><td>${fmtSigned(d.run2Delta)}</td><td>${esc(d.finishReason||"")}</td><td>${esc(d.parseMode||"")}</td><td>${d.loopDetected?'ja':'nein'}</td><td>${fmt(d.durationSec)}</td><td>${d.responseChars}/${d.reasoningChars}</td><td>${esc(d.repeatGroupId||'—')} ${d.repeatCount>1 ? '('+d.repeatIndex+'/'+d.repeatCount+')' : ''}</td></tr>`).join(""); const fpTax = Object.entries(s.falsePositiveTaxonomy||{}).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`${esc(k)}=${fmt(v)}`).join(', ') || '—'; return `<details><summary>${esc(s.label)}</summary><div class="note">Profil: ${s.officialRunCount}/${s.runCount} offiziell · official comparable: ${s.officialComparableRunCount}/${s.runCount} · legacy-migriert: ${s.legacyMigratedRunCount}/${s.runCount} · rescored: ${s.rescoredRunCount}/${s.runCount} · Source-Hash: ${s.sourceHashMatchCount}/${s.runCount} · FP-Taxonomie: ${fpTax} · Run2 dropped: ${(s.run2DroppedIds||[]).join(', ')||'—'} · added: ${(s.run2AddedIds||[]).join(', ')||'—'}</div><table class="detail-table"><thead><tr><th>Datum</th><th>Run</th><th>Scoring-Profil</th><th>Score</th><th>Run2 Δ</th><th>Finish</th><th>Parse</th><th>Loop</th><th>s</th><th>Out/Think chars</th><th>Repeat</th></tr></thead><tbody>${rows}</tbody></table></details>`; }
   function valueForSort(s,key,st) { if (key === "score") return scoreForRunView(s, st.runView); return s[key]; }
+
+  function metricHeader(metricId, title, titleId) {
+    const idAttr = titleId ? ` id="${esc(titleId)}"` : "";
+    return `<div class="card-heading"><button${idAttr} type="button" class="metric-title" data-modal-metric="${esc(metricId)}" aria-label="${esc(title)} maximieren">${esc(title)}</button><button type="button" class="metric-help" data-help-metric="${esc(metricId)}" aria-label="Hilfe zu ${esc(title)}">?</button></div>`;
+  }
+
+  function wireMetricInteractions() {
+    document.querySelectorAll("[data-modal-metric]").forEach(btn => btn.addEventListener("click", ev => { ev.stopPropagation(); openMetricModal(btn.getAttribute("data-modal-metric")); }));
+    document.querySelectorAll("[data-help-metric]").forEach(btn => btn.addEventListener("click", ev => { ev.stopPropagation(); openHelpPopover(btn.getAttribute("data-help-metric")); }));
+  }
+
+  let activeOverlay = null;
+  let activePlaceholder = null;
+  let activeMovedCard = null;
+  let lastFocusedElement = null;
+  function openMetricModal(metricId) {
+    if (activeOverlay) closeOverlay();
+    const card = [...document.querySelectorAll(".metric-card")].find(el => el.getAttribute("data-metric-id") === metricId);
+    if (!card) return;
+    lastFocusedElement = document.activeElement;
+    activePlaceholder = document.createComment(`metric-${metricId}-placeholder`);
+    card.parentNode.insertBefore(activePlaceholder, card);
+    activeMovedCard = card;
+    const overlay = createOverlay("metric-modal");
+    const close = overlay.querySelector(".overlay-close");
+    const body = overlay.querySelector(".overlay-body");
+    body.appendChild(card);
+    card.classList.add("in-modal");
+    document.body.appendChild(overlay);
+    activeOverlay = overlay;
+    close.focus();
+    resizeChartsSoon();
+  }
+
+  function openHelpPopover(metricId) {
+    if (activeOverlay) closeOverlay();
+    const help = metricHelp[metricId] || {title:"Metrik", body:"Keine Detailbeschreibung verfügbar."};
+    lastFocusedElement = document.activeElement;
+    const overlay = createOverlay("help-popover");
+    overlay.querySelector(".overlay-body").innerHTML = `<h2>${esc(help.title)}</h2><p>${esc(help.body)}</p><div class="note">Schließen mit Esc, Klick außerhalb oder X. Alle Werte stammen aus lokalen Archiv-Scorecards; Ground Truth wird nur offline zur Aggregation verwendet.</div>`;
+    document.body.appendChild(overlay);
+    activeOverlay = overlay;
+    overlay.querySelector(".overlay-close").focus();
+  }
+
+  function createOverlay(extraClass) {
+    const overlay = document.createElement("div");
+    overlay.className = "overlay-backdrop";
+    overlay.innerHTML = `<div class="overlay-dialog ${extraClass}" role="dialog" aria-modal="true" tabindex="-1"><button type="button" class="overlay-close" aria-label="Overlay schließen">×</button><div class="overlay-body"></div></div>`;
+    overlay.addEventListener("click", ev => { if (ev.target === overlay) closeOverlay(); });
+    overlay.querySelector(".overlay-close").addEventListener("click", closeOverlay);
+    return overlay;
+  }
+
+  function closeOverlay() {
+    if (!activeOverlay) return;
+    if (activeMovedCard && activePlaceholder) {
+      activeMovedCard.classList.remove("in-modal");
+      activePlaceholder.parentNode.insertBefore(activeMovedCard, activePlaceholder);
+      activePlaceholder.remove();
+    }
+    activeOverlay.remove();
+    activeOverlay = null; activePlaceholder = null; activeMovedCard = null;
+    if (lastFocusedElement && typeof lastFocusedElement.focus === "function") lastFocusedElement.focus();
+    resizeChartsSoon();
+  }
+
+  document.addEventListener("keydown", ev => { if (ev.key === "Escape" && activeOverlay) closeOverlay(); });
+  function resizeChartsSoon() { setTimeout(() => Object.values(charts).forEach(chart => chart && chart.resize && chart.resize()), 40); }
 
   function exportFilteredCsv() {
     const st = readState(); const rows = data.series.filter(s => includeSeries(s, st));
-    const headers = ["model_family","quant","runs","score","critical_recall_pct","high_critical_recall_pct","f1_pct","stability_pct","run2_delta","fp","duplicates","missed","parse_success_pct","loop_pct","duration_median_sec"];
-    const lines = [headers.join(",")]; rows.forEach(s => lines.push([s.family,s.quant,s.runCount,scoreForRunView(s,st.runView),s.criticalRecall,s.highCriticalRecall,s.f1,s.stability,s.run2Delta,s.falsePositives,s.duplicates,s.missed,s.parseSuccessRate,s.loopRate,s.durationMedianSec??""].map(csv).join(",")));
+    const headers = ["model_family","quant","runs","score","critical_recall_pct","high_critical_recall_pct","evidence_fidelity_pct","location_accuracy_pct","hallucination_rate_pct","f1_pct","stability_pct","run2_delta","fp","duplicates","missed","parse_success_pct","loop_pct","duration_median_sec"]; 
+    const lines = [headers.join(",")]; rows.forEach(s => lines.push([s.family,s.quant,s.runCount,scoreForRunView(s,st.runView),s.criticalRecall,s.highCriticalRecall,s.evidenceFidelity,s.locationAccuracy,s.hallucinationRate,s.f1,s.stability,s.run2Delta,s.falsePositives,s.duplicates,s.missed,s.parseSuccessRate,s.loopRate,s.durationMedianSec??""].map(csv).join(",")));
     const blob = new Blob([lines.join("\n")], {type:"text/csv;charset=utf-8"}); const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `supercalc-comparison-filtered-${Date.now()}.csv`; a.click(); URL.revokeObjectURL(a.href);
   }
 
@@ -456,14 +577,16 @@ public sealed class ComparisonHtmlWriter
         var builder = new StringBuilder();
         var header = new List<string>
         {
-            "model_family", "quant", "run_count", "aggregate", "run_view", "score_percent",
+            "model_family", "quant", "run_count", "aggregate", "run_view", "scoring_profile", "official_comparable_runs", "legacy_migrated_runs", "rescored_runs", "score_percent",
             "score_mean", "score_median", "score_stddev", "score_iqr", "score_ci95", "score_min", "score_max",
             "precision_percent", "recall_percent", "f1_percent",
             "critical_recall_percent", "high_recall_percent", "medium_recall_percent", "low_recall_percent", "high_critical_recall_percent",
             "memory_safety_percent", "concurrency_percent", "injection_percent", "auth_crypto_percent", "numeric_dos_percent", "file_io_percent", "cwe_coverage_percent", "stability_percent",
+            "evidence_fidelity_percent", "location_accuracy_percent", "hallucination_rate_percent", "evaluation_confidence_percent", "fp_taxonomy",
             "full_tp", "partial_tp", "false_positives", "duplicates", "ignored_low_confidence", "missed",
             "parse_success_percent", "loop_rate_percent", "empty_output_rate_percent", "visible_reasoning_rate_percent",
             "run1_score", "run2_score", "run2_delta", "run2_fp_reduction", "run2_tp_retention_percent", "run2_dropped_tp", "run2_added_tp",
+            "truth_audit_runs", "accountability_score", "truth_audit_accuracy_percent", "overclaim_rate_percent", "miss_admission_rate_percent", "fp_admission_rate_percent", "evidence_laundering_count", "quote_fidelity_percent",
             "duration_mean_sec", "duration_median_sec", "duration_min_sec", "duration_max_sec",
             "visible_reasoning_runs", "thinking_parsed_findings", "output_parsed_findings",
             "thinking_tp", "output_tp", "thinking_only_tp", "output_only_tp", "thinking_to_output_coverage_percent"
@@ -480,6 +603,10 @@ public sealed class ComparisonHtmlWriter
                 s.RunCount.ToString(CultureInfo.InvariantCulture),
                 Csv(s.Aggregate.ToString()),
                 Csv(s.RunView.ToString()),
+                Csv(report.ScoringProfile ?? "all"),
+                s.OfficialComparableRunCount.ToString(CultureInfo.InvariantCulture),
+                s.LegacyMigratedRunCount.ToString(CultureInfo.InvariantCulture),
+                s.RescoredRunCount.ToString(CultureInfo.InvariantCulture),
                 s.ScorePercent.ToString("0.##", CultureInfo.InvariantCulture),
                 s.ScoreMean.ToString("0.##", CultureInfo.InvariantCulture),
                 s.ScoreMedian.ToString("0.##", CultureInfo.InvariantCulture),
@@ -504,6 +631,11 @@ public sealed class ComparisonHtmlWriter
                 (s.FileIoScore * 100).ToString("0.#", CultureInfo.InvariantCulture),
                 (s.CweCoverage * 100).ToString("0.#", CultureInfo.InvariantCulture),
                 (s.VulnerabilityStability * 100).ToString("0.#", CultureInfo.InvariantCulture),
+                (s.EvidenceFidelity * 100).ToString("0.#", CultureInfo.InvariantCulture),
+                (s.LocationAccuracy * 100).ToString("0.#", CultureInfo.InvariantCulture),
+                (s.HallucinationRate * 100).ToString("0.#", CultureInfo.InvariantCulture),
+                (s.EvaluationConfidence * 100).ToString("0.#", CultureInfo.InvariantCulture),
+                Csv(FormatTaxonomy(s.FalsePositiveTaxonomy)),
                 s.FullTruePositives.ToString(CultureInfo.InvariantCulture),
                 s.PartialTruePositives.ToString(CultureInfo.InvariantCulture),
                 s.FalsePositives.ToString(CultureInfo.InvariantCulture),
@@ -521,6 +653,14 @@ public sealed class ComparisonHtmlWriter
                 (s.Run2TpRetention * 100).ToString("0.#", CultureInfo.InvariantCulture),
                 s.Run2DroppedTpCount.ToString("0.#", CultureInfo.InvariantCulture),
                 s.Run2AddedTpCount.ToString("0.#", CultureInfo.InvariantCulture),
+                s.TruthAuditRunCount.ToString(CultureInfo.InvariantCulture),
+                s.AccountabilityScore.ToString("0.##", CultureInfo.InvariantCulture),
+                (s.TruthAuditAccuracy * 100).ToString("0.#", CultureInfo.InvariantCulture),
+                (s.OverclaimRate * 100).ToString("0.#", CultureInfo.InvariantCulture),
+                (s.MissAdmissionRate * 100).ToString("0.#", CultureInfo.InvariantCulture),
+                (s.FalsePositiveAdmissionRate * 100).ToString("0.#", CultureInfo.InvariantCulture),
+                s.EvidenceLaunderingCount.ToString("0.#", CultureInfo.InvariantCulture),
+                (s.QuoteFidelity * 100).ToString("0.#", CultureInfo.InvariantCulture),
                 s.DurationMeanMs.HasValue ? (s.DurationMeanMs.Value / 1000.0).ToString("0.#", CultureInfo.InvariantCulture) : string.Empty,
                 s.DurationMedianMs.HasValue ? (s.DurationMedianMs.Value / 1000.0).ToString("0.#", CultureInfo.InvariantCulture) : string.Empty,
                 s.DurationMinMs.HasValue ? (s.DurationMinMs.Value / 1000.0).ToString("0.#", CultureInfo.InvariantCulture) : string.Empty,
@@ -544,6 +684,9 @@ public sealed class ComparisonHtmlWriter
     private static Dictionary<string, double> PercentDictionary(Dictionary<string, double> values)
         => values.ToDictionary(kvp => kvp.Key, kvp => Math.Round(kvp.Value * 100, 1), StringComparer.OrdinalIgnoreCase);
 
+    private static Dictionary<string, double> CountDictionary(Dictionary<string, double> values)
+        => values.ToDictionary(kvp => kvp.Key, kvp => Math.Round(kvp.Value, 1), StringComparer.OrdinalIgnoreCase);
+
     private static string MetricValue(ComparisonMetric metric) => metric switch
     {
         ComparisonMetric.CriticalRecall => "criticalRecall",
@@ -553,6 +696,12 @@ public sealed class ComparisonHtmlWriter
         ComparisonMetric.Stability => "stability",
         ComparisonMetric.Run2Delta => "run2Delta",
         ComparisonMetric.ThinkingCoverage => "thinkingCoverage",
+        ComparisonMetric.EvidenceFidelity => "evidenceFidelity",
+        ComparisonMetric.LocationAccuracy => "locationAccuracy",
+        ComparisonMetric.HallucinationRate => "hallucinationRate",
+        ComparisonMetric.EvaluationConfidence => "evaluationConfidence",
+        ComparisonMetric.Accountability => "accountability",
+        ComparisonMetric.OverclaimRate => "overclaimRate",
         ComparisonMetric.Duration => "duration",
         _ => "score"
     };
@@ -587,6 +736,16 @@ public sealed class ComparisonHtmlWriter
         var gi = (int)Math.Round((g + m) * 255);
         var bi = (int)Math.Round((b + m) * 255);
         return $"#{ri:x2}{gi:x2}{bi:x2}";
+    }
+
+    private static string FormatTaxonomy(Dictionary<string, double> taxonomy)
+    {
+        if (taxonomy.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        return string.Join("; ", taxonomy.OrderByDescending(kvp => kvp.Value).ThenBy(kvp => kvp.Key, StringComparer.OrdinalIgnoreCase).Select(kvp => $"{kvp.Key}={kvp.Value:0.#}"));
     }
 
     private static string Csv(string value)

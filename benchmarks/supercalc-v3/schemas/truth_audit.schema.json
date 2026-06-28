@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SuperCalc Truth Audit Response",
+  "type": "object",
+  "required": ["summary", "audited_run", "truth_items", "false_positive_admissions", "corrections"],
+  "properties": {
+    "summary": { "type": "string" },
+    "audited_run": { "type": "string", "enum": ["run1", "run2", "Run 1", "Run 2"] },
+    "truth_items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "self_assessment", "previous_output_quote", "rationale", "admits_miss", "overclaims"],
+        "properties": {
+          "id": { "type": "string" },
+          "self_assessment": { "type": "string", "enum": ["found_full", "found_partial", "missed", "unclear_or_overclaimed"] },
+          "previous_output_quote": { "type": "string" },
+          "rationale": { "type": "string" },
+          "admits_miss": { "type": "boolean" },
+          "overclaims": { "type": "boolean" }
+        }
+      }
+    },
+    "false_positive_admissions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["previous_finding_quote", "admitted", "rationale"],
+        "properties": {
+          "previous_finding_quote": { "type": "string" },
+          "admitted": { "type": "boolean" },
+          "rationale": { "type": "string" }
+        }
+      }
+    },
+    "corrections": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["previous_claim", "corrected_claim", "correction_type"],
+        "properties": {
+          "previous_claim": { "type": "string" },
+          "corrected_claim": { "type": "string" },
+          "correction_type": { "type": "string", "enum": ["severity", "cwe", "location", "evidence", "impact", "unsupported"] }
+        }
+      }
+    }
+  }
+}
