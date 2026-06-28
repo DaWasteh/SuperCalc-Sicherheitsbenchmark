@@ -27,7 +27,7 @@
                         <ComboBoxItem Content="Dark" />
                     </ComboBox>
                 </StackPanel>
-                <TextBlock Text="Llama.cpp-Server refreshen, Modell auswählen, Benchmark starten — Hidden Ground Truth bleibt lokal." Foreground="{DynamicResource TextSecondaryBrush}" />
+                <TextBlock Text="Llama.cpp-Server refreshen, Modell auswählen, Benchmark starten — Run 3 Truth-Audit läuft automatisch mit." Foreground="{DynamicResource TextSecondaryBrush}" />
             </StackPanel>
             <TextBlock x:Name="DotNetInfoTextBlock" DockPanel.Dock="Right" VerticalAlignment="Center" Foreground="{DynamicResource TextSecondaryBrush}" />
         </DockPanel>
@@ -86,7 +86,7 @@
                         <RowDefinition Height="*" />
                     </Grid.RowDefinitions>
 
-                    <UniformGrid Grid.Row="0" Columns="3" Margin="0,0,0,10">
+                    <UniformGrid Grid.Row="0" Columns="4" Margin="0,0,0,10">
                         <Border BorderBrush="{DynamicResource BorderBrush}" Background="{DynamicResource SurfaceBrush}" BorderThickness="1" CornerRadius="6" Padding="12" Margin="4">
                             <StackPanel>
                                 <TextBlock Text="Run 1 — Blind Analysis" FontWeight="SemiBold" FontSize="16" />
@@ -99,6 +99,13 @@
                                 <TextBlock Text="Run 2 — Self-Validation" FontWeight="SemiBold" FontSize="16" />
                                 <TextBlock x:Name="Run2ScoreTextBlock" Text="Noch nicht gestartet" FontSize="26" FontWeight="Bold" Margin="0,8,0,0" />
                                 <TextBlock x:Name="Run2DetailsTextBlock" Text="" TextWrapping="Wrap" Foreground="{DynamicResource TextSecondaryBrush}" />
+                            </StackPanel>
+                        </Border>
+                        <Border BorderBrush="{DynamicResource BorderBrush}" Background="{DynamicResource SurfaceBrush}" BorderThickness="1" CornerRadius="6" Padding="12" Margin="4">
+                            <StackPanel>
+                                <TextBlock Text="Run 3 — Truth Audit" FontWeight="SemiBold" FontSize="16" />
+                                <TextBlock x:Name="Run3ScoreTextBlock" Text="Läuft automatisch mit" FontSize="26" FontWeight="Bold" Margin="0,8,0,0" />
+                                <TextBlock x:Name="Run3DetailsTextBlock" Text="Non-blind Ehrlichkeits-/Accountability-Test nach Run 2" TextWrapping="Wrap" Foreground="{DynamicResource TextSecondaryBrush}" />
                             </StackPanel>
                         </Border>
                         <Border BorderBrush="{DynamicResource BorderBrush}" Background="{DynamicResource SurfaceBrush}" BorderThickness="1" CornerRadius="6" Padding="12" Margin="4">
@@ -180,9 +187,40 @@
                 </Grid>
             </TabItem>
 
+            <TabItem Header="Run 3 Audit">
+                <Grid Margin="8">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <TextBlock x:Name="Run3AuditSummaryTextBlock"
+                               Text="Run 3 läuft automatisch nach Run 2. Danach erscheinen hier Ehrlichkeits-/Accountability-Metriken."
+                               TextWrapping="Wrap"
+                               Margin="4,0,4,8"
+                               Foreground="{DynamicResource TextSecondaryBrush}" />
+                    <DataGrid Grid.Row="1" x:Name="Run3AuditGrid"
+                              AutoGenerateColumns="False"
+                              CanUserAddRows="False"
+                              CanUserDeleteRows="False">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="ID" Binding="{Binding Id}" Width="100" />
+                            <DataGridTextColumn Header="Actual" Binding="{Binding ActualStatus}" Width="110" />
+                            <DataGridTextColumn Header="Self Assessment" Binding="{Binding SelfAssessment}" Width="180" />
+                            <DataGridCheckBoxColumn Header="Correct" Binding="{Binding Correct}" Width="80" />
+                            <DataGridCheckBoxColumn Header="Quote OK" Binding="{Binding QuoteValid}" Width="80" />
+                            <DataGridCheckBoxColumn Header="Overclaim" Binding="{Binding Overclaim}" Width="90" />
+                            <DataGridCheckBoxColumn Header="Laundering" Binding="{Binding EvidenceLaundering}" Width="100" />
+                            <DataGridTextColumn Header="Previous Quote" Binding="{Binding PreviousOutputQuote}" Width="280" />
+                            <DataGridTextColumn Header="Notes" Binding="{Binding Notes}" Width="*" />
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </Grid>
+            </TabItem>
+
             <TabItem Header="Raw Outputs">
                 <Grid Margin="8">
                     <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="*" />
                     </Grid.ColumnDefinitions>
@@ -200,7 +238,7 @@
                             </ScrollViewer>
                         </DockPanel>
                     </GroupBox>
-                    <GroupBox Header="Run 2 — Prompt / Thinking / Output / Raw" Grid.Column="1" Margin="4,0,0,0">
+                    <GroupBox Header="Run 2 — Prompt / Thinking / Output / Raw" Grid.Column="1" Margin="4,0,4,0">
                         <DockPanel>
                             <Button x:Name="AbortRun2Button"
                                     DockPanel.Dock="Top"
@@ -208,9 +246,21 @@
                                     IsEnabled="False"
                                     Margin="8,8,8,4"
                                     Click="AbortRun2Button_Click"
-                                    ToolTip="Stoppt nur Run 2: bisherige Tokens/Thinking werden analysiert und der Benchmark wird ausgewertet/gespeichert." />
+                                    ToolTip="Stoppt nur Run 2: bisherige Tokens/Thinking werden analysiert und danach läuft Run 3 automatisch." />
                             <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                                 <StackPanel x:Name="Run2RawPanel" Margin="8" />
+                            </ScrollViewer>
+                        </DockPanel>
+                    </GroupBox>
+                    <GroupBox Header="Run 3 — Truth Audit / Honesty / Raw" Grid.Column="2" Margin="4,0,0,0">
+                        <DockPanel>
+                            <TextBlock DockPanel.Dock="Top"
+                                       Text="Run 3 läuft immer automatisch nach Run 2. Abbrechen stoppt den gesamten Benchmark."
+                                       TextWrapping="Wrap"
+                                       Margin="8,8,8,4"
+                                       Foreground="{DynamicResource TextSecondaryBrush}" />
+                            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                                <StackPanel x:Name="Run3RawPanel" Margin="8" />
                             </ScrollViewer>
                         </DockPanel>
                     </GroupBox>

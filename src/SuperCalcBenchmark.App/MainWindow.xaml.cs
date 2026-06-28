@@ -66,7 +66,7 @@ public partial class MainWindow : Window
 
     // Live-streaming UI state. Tokens arrive via IProgress and are appended to these
     // text boxes in real time. _activeLivePanel points at whichever run is currently
-    // streaming (Run 1 first, then Run 2).
+    // streaming (Run 1, then Run 2, then the automatic Run 3 truth audit).
     private StackPanel? _activeLivePanel;
     private TextBox? _liveReasoningBox;
     private TextBox? _liveContentBox;
@@ -83,6 +83,7 @@ public partial class MainWindow : Window
         DotNetInfoTextBlock.Text = $".NET {Environment.Version.Major} | {_repositoryRoot}";
         ShowRawOutputPlaceholder(Run1RawPanel, "Noch kein Run-1-Output. Nach dem Benchmark siehst du hier Prompt, Thinking, Output und Raw API Response.");
         ShowRawOutputPlaceholder(Run2RawPanel, "Noch kein Run-2-Output. Nach dem Benchmark siehst du hier Prompt, Thinking, Output und Raw API Response.");
+        ShowRawOutputPlaceholder(Run3RawPanel, "Noch kein Run-3-Output. Run 3 läuft automatisch nach Run 2 als Truth-Audit / Ehrlichkeitstest.");
         AppendLog("Bereit. Wenn du ein neues Modell in llama-server geladen hast: Refresh Models klicken, Modell wählen, Benchmark starten.");
         InitializeComparisonPlaceholder();
         Loaded += MainWindow_Loaded;
@@ -360,10 +361,10 @@ public partial class MainWindow : Window
         _run1ManualStop = new CancellationTokenSource();
         _run2ManualStop = new CancellationTokenSource();
         SetBusy(true, benchmarkRunning: true);
-        StatusTextBlock.Text = "Benchmark läuft... Run 1 + Run 2 können je nach Modell einige Minuten dauern.";
+        StatusTextBlock.Text = "Benchmark läuft... Run 1 + Run 2 + Run 3 Truth-Audit können je nach Modell einige Minuten dauern.";
         AppendLog($"Benchmark startet für Modell: {model}");
         AppendLog($"Repository: {_repositoryRoot}");
-        AppendLog($"Request-Settings: max_tokens={options.MaxTokens}, response_format={!options.SkipResponseFormat}, disable_thinking={options.DisableThinking}, loop_abort={options.AbortOnLoop}, timeout={options.Timeout.TotalSeconds:0}s");
+        AppendLog($"Request-Settings: max_tokens={options.MaxTokens}, response_format={!options.SkipResponseFormat}, disable_thinking={options.DisableThinking}, truth_audit={options.WithTruthAudit}, loop_abort={options.AbortOnLoop}, timeout={options.Timeout.TotalSeconds:0}s");
 
         try
         {
@@ -547,7 +548,9 @@ public partial class MainWindow : Window
             GroundTruthPath = Path.Combine(_repositoryRoot, "benchmarks", "supercalc-v3", "ground_truth.json"),
             AnalysisPromptPath = Path.Combine(_repositoryRoot, "benchmarks", "supercalc-v3", "prompts", "analysis_v1.md"),
             SelfValidatePromptPath = Path.Combine(_repositoryRoot, "benchmarks", "supercalc-v3", "prompts", "self_validate_v1.md"),
+            TruthAuditPromptPath = Path.Combine(_repositoryRoot, "benchmarks", "supercalc-v3", "prompts", "truth_audit_v1.md"),
             SchemaPath = Path.Combine(_repositoryRoot, "benchmarks", "supercalc-v3", "schemas", "llm_findings.schema.json"),
+            TruthAuditSchemaPath = Path.Combine(_repositoryRoot, "benchmarks", "supercalc-v3", "schemas", "truth_audit.schema.json"),
             OutputDirectory = outputDirectory,
             Temperature = 0.0,
             TopP = 1.0,
@@ -556,6 +559,9 @@ public partial class MainWindow : Window
             Timeout = TimeSpan.FromSeconds(timeoutSeconds),
             SkipResponseFormat = SkipResponseFormatCheckBox.IsChecked == true,
             DisableThinking = DisableThinkingCheckBox.IsChecked == true,
+            WithTruthAudit = true,
+            TruthAuditRepeatMode = "always",
+            TruthAuditSource = "best",
             ArchiveDirectory = Path.Combine(_repositoryRoot, ArchiveStore.DefaultArchiveFolderName),
             QuantOverride = string.IsNullOrWhiteSpace(QuantTextBox.Text) ? null : QuantTextBox.Text.Trim()
         };
@@ -690,11 +696,9 @@ public partial class MainWindow : Window
         // thread-pool thread. Marshal onto the UI thread before touching any controls.
         Dispatcher.Invoke(() =>
         {
-            // Render the finished run's score, matrix, findings and the full (non-live)
-            // raw-output panel right away. For Run 2, also flip the live view over first.
-            var isRun2 = string.Equals(artifacts.RunName, "Run 2", StringComparison.OrdinalIgnoreCase);
-
-            if (!isRun2)
+            // Render the finished run's score, matrix/audit grid and the full (non-live)
+            // raw-output panel right away. Then prepare the live view for the next run.
+            if (string.Equals(artifacts.RunName, "Run 1", StringComparison.OrdinalIgnoreCase))
             {
                 Run1ScoreTextBlock.Text = $"{artifacts.Score.ScorePercent:0.##}/100";
                 Run1DetailsTextBlock.Text = FormatScoreDetails(artifacts);
@@ -707,8 +711,10 @@ public partial class MainWindow : Window
                 AbortRun1Button.IsEnabled = false;
                 Run2ScoreTextBlock.Text = "Läuft...";
                 BeginLiveRun(Run2RawPanel, "Run 2 — Self-Validation", runNumber: 2);
+                return;
             }
-            else
+
+            if (string.Equals(artifacts.RunName, "Run 2", StringComparison.OrdinalIgnoreCase))
             {
                 Run2ScoreTextBlock.Text = $"{artifacts.Score.ScorePercent:0.##}/100";
                 Run2DetailsTextBlock.Text = FormatScoreDetails(artifacts);
@@ -716,6 +722,25 @@ public partial class MainWindow : Window
                 Run2FindingsGrid.ItemsSource = artifacts.Score.Findings;
                 PopulateRawOutputPanel(Run2RawPanel, artifacts);
                 AbortRun2Button.IsEnabled = false;
+                AppendLoopWarnings(artifacts);
+
+                // Run 2 done → the GUI always runs the non-blind Run 3 honesty audit.
+                Run3ScoreTextBlock.Text = "Läuft...";
+                Run3DetailsTextBlock.Text = "Truth-Audit wird vorbereitet...";
+                Run3AuditSummaryTextBlock.Text = "Run 3 läuft: Ground Truth ist für diesen Ehrlichkeits-/Accountability-Test absichtlich sichtbar.";
+                BeginLiveRun(Run3RawPanel, "Run 3 — Truth Audit / Honesty", runNumber: 3);
+                return;
+            }
+
+            if (string.Equals(artifacts.RunName, "Run 3", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(artifacts.RunKind, "truth_audit", StringComparison.OrdinalIgnoreCase))
+            {
+                var accountability = artifacts.TruthAudit?.AccountabilityScore ?? artifacts.Score.ScorePercent;
+                Run3ScoreTextBlock.Text = $"{accountability:0.##}/100";
+                Run3DetailsTextBlock.Text = FormatTruthAuditDetails(artifacts);
+                Run3AuditSummaryTextBlock.Text = FormatTruthAuditDetails(artifacts);
+                Run3AuditGrid.ItemsSource = artifacts.TruthAudit?.Items;
+                PopulateRawOutputPanel(Run3RawPanel, artifacts);
                 _activeRunNumber = 0;
                 AppendLoopWarnings(artifacts);
             }
@@ -1146,13 +1171,18 @@ public partial class MainWindow : Window
         Run1DetailsTextBlock.Text = string.Empty;
         Run2ScoreTextBlock.Text = "Wartet auf Run 1";
         Run2DetailsTextBlock.Text = string.Empty;
+        Run3ScoreTextBlock.Text = "Wartet auf Run 2";
+        Run3DetailsTextBlock.Text = string.Empty;
+        Run3AuditSummaryTextBlock.Text = "Run 3 läuft automatisch nach Run 2. Danach erscheinen hier Ehrlichkeits-/Accountability-Metriken.";
         ComparisonTextBlock.Text = "Nach dem Benchmark sichtbar";
         Run1MatrixGrid.ItemsSource = null;
         Run2MatrixGrid.ItemsSource = null;
         Run1FindingsGrid.ItemsSource = null;
         Run2FindingsGrid.ItemsSource = null;
+        Run3AuditGrid.ItemsSource = null;
         ShowRawOutputPlaceholder(Run1RawPanel, "Run 1 läuft bzw. wartet auf Server-Antwort...");
         ShowRawOutputPlaceholder(Run2RawPanel, "Run 2 wartet auf Run 1...");
+        ShowRawOutputPlaceholder(Run3RawPanel, "Run 3 wartet auf Run 2...");
         ProgressLogTextBox.Clear();
         OutputPathTextBlock.Text = "Run läuft...";
         OpenReportButton.IsEnabled = false;
@@ -1171,6 +1201,40 @@ public partial class MainWindow : Window
         if (artifacts.ManuallyStopped)
         {
             details += "\nManuell gestoppt: bisheriger Output/Thinking wurde analysiert und gespeichert.";
+        }
+
+        if (!string.IsNullOrWhiteSpace(artifacts.Parse.Warning))
+        {
+            details += $"\nParse: {artifacts.Parse.Warning}";
+        }
+
+        return details;
+    }
+
+    private static string FormatTruthAuditDetails(BenchmarkRunArtifacts artifacts)
+    {
+        var audit = artifacts.TruthAudit;
+        if (audit is null)
+        {
+            return $"Truth-Audit ohne auswertbare Audit-Daten. Finish: {artifacts.FinishReason} | Output: {artifacts.Response.Length} chars | Reasoning: {artifacts.ReasoningContent.Length} chars";
+        }
+
+        var details = $"Auditiert: {audit.AuditedRunName} ({audit.AuditedRunScorePercent:0.##}/100, {audit.AuditedRunScoreProfile})\n" +
+                      $"Accountability: {audit.AccountabilityScore:0.##}/100 | Truth-Accuracy: {audit.TruthAuditAccuracy:P1}\n" +
+                      $"Miss-Admission: {audit.MissAdmissionRate:P1} | FP-Admission: {audit.FalsePositiveAdmissionRate:P1} | Overclaim: {audit.OverclaimRate:P1}\n" +
+                      $"Quote-Fidelity: {audit.QuoteFidelity:P1} | Evidence-Laundering: {audit.EvidenceLaunderingCount} | Widersprüche: {audit.ContradictionCount}\n" +
+                      $"Tatsächlich verpasst: {audit.ActualMissedCount} | tatsächliche False Positives: {audit.ActualFalsePositiveCount}\n" +
+                      $"Finish: {artifacts.FinishReason} | Content: {artifacts.Response.Length} chars | Reasoning: {artifacts.ReasoningContent.Length} chars\n" +
+                      "Non-blind: Ground Truth ist in Run 3 absichtlich sichtbar; dieser Run verändert den Blind/Self-Validation-Score nicht.";
+
+        if (!string.IsNullOrWhiteSpace(audit.SelectionReason))
+        {
+            details += $"\nAuswahl: {audit.SelectionReason}";
+        }
+
+        if (!string.IsNullOrWhiteSpace(audit.Summary))
+        {
+            details += $"\nSummary: {audit.Summary}";
         }
 
         if (!string.IsNullOrWhiteSpace(artifacts.Parse.Warning))
@@ -1311,6 +1375,12 @@ public partial class MainWindow : Window
         builder.AppendLine($"Manueller Stop: {artifacts.ManuallyStopped}");
         builder.AppendLine($"Loop-Abbruch: {artifacts.LoopDetected} {artifacts.LoopDiagnosticsSummary}");
         builder.AppendLine($"response_format: {artifacts.UsedResponseFormat} | retry ohne response_format: {artifacts.RetriedWithoutResponseFormat} | thinking-disable hint: {artifacts.UsedThinkingControl}");
+        if (artifacts.TruthAudit is not null)
+        {
+            builder.AppendLine($"Truth-Audit: Accountability {artifacts.TruthAudit.AccountabilityScore:0.##}/100 | Accuracy {artifacts.TruthAudit.TruthAuditAccuracy:P1} | Overclaim {artifacts.TruthAudit.OverclaimRate:P1}");
+            builder.AppendLine("Run 3 ist non-blind: Ground Truth ist absichtlich sichtbar und verändert den Detection-Score nicht.");
+        }
+
         builder.AppendLine($"Denken-vs-Sagen: {FormatReasoningDisclosure(artifacts.ReasoningDisclosure)}");
         builder.AppendLine($"Loop-Check Output: {responseLoop.Summary}");
         builder.AppendLine($"Loop-Check Thinking: {reasoningLoop.Summary}");
