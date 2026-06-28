@@ -108,7 +108,7 @@ jobs:
           archive="supercalc-comparison-${RELEASE_TAG}.zip"
           cd release-artifacts
           zip -r "../$archive" .
-          printf 'ARCHIVE=%s\n' "../$archive" >> "$GITHUB_ENV"
+          echo "ARCHIVE=$archive" >> "$GITHUB_ENV"
 
       - name: Create GitHub Release
         env:
