@@ -18,6 +18,7 @@ public partial class MainWindow : Window
     private CancellationTokenSource? _benchmarkCancellation;
     private CancellationTokenSource? _run1ManualStop;
     private CancellationTokenSource? _run2ManualStop;
+    private CancellationTokenSource? _run3ManualStop;
     private int _activeRunNumber;
     private BenchmarkRunResult? _lastResult;
     private BenchmarkTheme _currentTheme = BenchmarkTheme.Light;
@@ -360,6 +361,7 @@ public partial class MainWindow : Window
         _benchmarkCancellation = new CancellationTokenSource();
         _run1ManualStop = new CancellationTokenSource();
         _run2ManualStop = new CancellationTokenSource();
+        _run3ManualStop = new CancellationTokenSource();
         SetBusy(true, benchmarkRunning: true);
         StatusTextBlock.Text = "Benchmark läuft... Run 1 + Run 2 + Run 3 Truth-Audit können je nach Modell einige Minuten dauern.";
         AppendLog($"Benchmark startet für Modell: {model}");
@@ -384,7 +386,8 @@ public partial class MainWindow : Window
                 onRunCompleted: OnRunCompleted,
                 streamProgress: streamProgress,
                 run1ManualAbortToken: _run1ManualStop.Token,
-                run2ManualAbortToken: _run2ManualStop.Token);
+                run2ManualAbortToken: _run2ManualStop.Token,
+                run3ManualAbortToken: _run3ManualStop.Token);
 
             _lastResult = result;
 
@@ -416,6 +419,8 @@ public partial class MainWindow : Window
             _run1ManualStop = null;
             _run2ManualStop?.Dispose();
             _run2ManualStop = null;
+            _run3ManualStop?.Dispose();
+            _run3ManualStop = null;
             _activeRunNumber = 0;
             SetBusy(false, benchmarkRunning: false);
         }
@@ -440,22 +445,37 @@ public partial class MainWindow : Window
         RequestManualRunStop(runNumber: 2);
     }
 
+    private void AbortRun3Button_Click(object sender, RoutedEventArgs e)
+    {
+        RequestManualRunStop(runNumber: 3);
+    }
+
     private void RequestManualRunStop(int runNumber)
     {
-        var cts = runNumber == 1 ? _run1ManualStop : _run2ManualStop;
+        var cts = runNumber switch
+        {
+            1 => _run1ManualStop,
+            2 => _run2ManualStop,
+            3 => _run3ManualStop,
+            _ => null
+        };
         if (cts is null || cts.IsCancellationRequested)
         {
             return;
         }
 
         cts.Cancel();
-        if (runNumber == 1)
+        switch (runNumber)
         {
-            AbortRun1Button.IsEnabled = false;
-        }
-        else
-        {
-            AbortRun2Button.IsEnabled = false;
+            case 1:
+                AbortRun1Button.IsEnabled = false;
+                break;
+            case 2:
+                AbortRun2Button.IsEnabled = false;
+                break;
+            case 3:
+                AbortRun3Button.IsEnabled = false;
+                break;
         }
 
         var message = $"Run {runNumber} manuell gestoppt: aktueller Stream wird geschlossen, bisherige Tokens/Thinking werden analysiert.";
@@ -575,7 +595,7 @@ public partial class MainWindow : Window
         _activeRunNumber = runNumber;
         _liveReasoningChars = 0;
         _liveContentChars = 0;
-        SetManualAbortButtons(run1Enabled: runNumber == 1, run2Enabled: runNumber == 2);
+        SetManualAbortButtons(run1Enabled: runNumber == 1, run2Enabled: runNumber == 2, run3Enabled: runNumber == 3);
 
         panel.Children.Clear();
 
@@ -742,6 +762,7 @@ public partial class MainWindow : Window
                 Run3AuditGrid.ItemsSource = artifacts.TruthAudit?.Items;
                 PopulateRawOutputPanel(Run3RawPanel, artifacts);
                 _activeRunNumber = 0;
+                AbortRun3Button.IsEnabled = false;
                 AppendLoopWarnings(artifacts);
             }
         });
@@ -1540,10 +1561,11 @@ public partial class MainWindow : Window
         }
     }
 
-    private void SetManualAbortButtons(bool run1Enabled, bool run2Enabled)
+    private void SetManualAbortButtons(bool run1Enabled, bool run2Enabled, bool run3Enabled = false)
     {
         AbortRun1Button.IsEnabled = run1Enabled && _run1ManualStop is { IsCancellationRequested: false };
         AbortRun2Button.IsEnabled = run2Enabled && _run2ManualStop is { IsCancellationRequested: false };
+        AbortRun3Button.IsEnabled = run3Enabled && _run3ManualStop is { IsCancellationRequested: false };
     }
 
     private static int ParseInt(string value, string label, int defaultValue, int min)

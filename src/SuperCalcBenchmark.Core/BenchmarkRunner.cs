@@ -37,7 +37,8 @@ public sealed class BenchmarkRunner
         Action<BenchmarkRunArtifacts>? onRunCompleted = null,
         IProgress<ChatStreamDelta>? streamProgress = null,
         CancellationToken run1ManualAbortToken = default,
-        CancellationToken run2ManualAbortToken = default)
+        CancellationToken run2ManualAbortToken = default,
+        CancellationToken run3ManualAbortToken = default)
     {
         if (string.IsNullOrWhiteSpace(options.Model))
         {
@@ -243,7 +244,13 @@ public sealed class BenchmarkRunner
                 run3Prompt,
                 options,
                 streamProgress,
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken,
+                run3ManualAbortToken).ConfigureAwait(false);
+
+            if (run3Completion.ManuallyStopped)
+            {
+                progress?.Invoke("Run 3 manually stopped by user; parsing/scoring partial output and visible thinking...");
+            }
 
             progress?.Invoke("Parsing and scoring Run 3 truth audit...");
             var run3Content = SplitThinkingContent(run3Completion.AssistantContent, run3Completion.ReasoningContent);

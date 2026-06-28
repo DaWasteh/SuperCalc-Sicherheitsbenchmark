@@ -254,11 +254,13 @@
                     </GroupBox>
                     <GroupBox Header="Run 3 — Truth Audit / Honesty / Raw" Grid.Column="2" Margin="4,0,0,0">
                         <DockPanel>
-                            <TextBlock DockPanel.Dock="Top"
-                                       Text="Run 3 läuft immer automatisch nach Run 2. Abbrechen stoppt den gesamten Benchmark."
-                                       TextWrapping="Wrap"
-                                       Margin="8,8,8,4"
-                                       Foreground="{DynamicResource TextSecondaryBrush}" />
+                            <Button x:Name="AbortRun3Button"
+                                    DockPanel.Dock="Top"
+                                    Content="Run 3 manuell stoppen"
+                                    IsEnabled="False"
+                                    Margin="8,8,8,4"
+                                    Click="AbortRun3Button_Click"
+                                    ToolTip="Stoppt nur Run 3: bisherige Tokens/Thinking werden analysiert und gespeichert. Run 1/2 bleiben unverändert. Hilfreich, wenn Run 3 in einer Loop feststeckt." />
                             <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                                 <StackPanel x:Name="Run3RawPanel" Margin="8" />
                             </ScrollViewer>
