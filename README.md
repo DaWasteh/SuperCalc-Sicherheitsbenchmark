@@ -6,6 +6,8 @@
 [![Security Profile](https://img.shields.io/badge/Security-Intentionally%20Vulnerable-red.svg)](#)
 [![Benchmark Version](https://img.shields.io/badge/Benchmark-v3.3-blue.svg)](#)
 
+🌐 **Live Comparison Page:** <https://dawasteh.github.io/SuperCalc-Sicherheitsbenchmark/>
+
 > **A rigorous, production-grade benchmark for evaluating Large Language Model (LLM) static-analysis and vulnerability-detection capabilities.**
 
 ---

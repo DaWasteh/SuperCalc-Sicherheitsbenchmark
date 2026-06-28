@@ -12,16 +12,9 @@ permissions:
   pages: write
   id-token: write
 
-# Allow only one concurrent deployment
-concurrency:
-  group: "pages"
-  cancel-in-progress: true
-
 jobs:
-  deploy:
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+  build:
+    name: Build Comparison Page
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -49,7 +42,34 @@ jobs:
             exit 1
           fi
 
-      - name: Upload artifact
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: comparison-page
+          path: public/
+          retention-days: 30
+          if-no-files-found: error
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: [build]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    # Allow only one concurrent Pages deployment
+    concurrency:
+      group: pages
+      cancel-in-progress: true
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: comparison-page
+          path: public
+
+      - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
           path: public
@@ -57,3 +77,53 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+
+  release:
+    name: Auto Release
+    needs: [build]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: release-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: comparison-page
+          path: release-artifacts/
+
+      - name: Create release archive
+        env:
+          RELEASE_TAG: v${{ github.run_number }}
+        run: |
+          set -eu
+          archive="supercalc-comparison-${RELEASE_TAG}.zip"
+          cd release-artifacts
+          zip -r "../$archive" .
+          printf 'ARCHIVE=%s\n' "../$archive" >> "$GITHUB_ENV"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: v${{ github.run_number }}
+        run: |
+          set -eu
+          if gh release view "$RELEASE_TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "Release $RELEASE_TAG already exists – skipping."
+            exit 0
+          fi
+          gh release create "$RELEASE_TAG" \
+            "$ARCHIVE" \
+            --repo "${{ github.repository }}" \
+            --target "${{ github.event.repository.default_branch }}" \
+            --title "SuperCalc Comparison $RELEASE_TAG" \
+            --generate-notes \
+            --latest
