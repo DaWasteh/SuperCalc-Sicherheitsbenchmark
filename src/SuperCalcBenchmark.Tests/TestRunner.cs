@@ -50,6 +50,8 @@ internal static partial class TestRunner
         Run("model identity detects quant and family", ModelIdentityDetectsQuantAndFamily);
         Run("model identity honors manual quant override", ModelIdentityHonorsQuantOverride);
         Run("archive store updates editable identity fields", ArchiveStoreUpdatesEditableIdentityFields);
+        Run("archive rename updates file name to new family", ArchiveRenameUpdatesFileNameToNewFamily);
+        Run("archive store returns latest manual quant for family", ArchiveStoreReturnsLatestManualQuantForFamily);
         Run("archive manual quant edit rebuilds group key", ArchiveManualQuantEditRebuildsGroupKey);
         Run("archive duplicate run names do not clobber", ArchiveDuplicateRunNamesDoNotClobber);
         Run("archive manual model rename merges groups", ArchiveManualModelRenameMergesGroups);

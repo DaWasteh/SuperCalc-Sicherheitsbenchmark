@@ -250,6 +250,29 @@ public sealed class ArchiveStore
     }
 
     /// <summary>
+    /// Returns the most recent manually-recorded quant for a model family, or
+    /// <see langword="null"/> if the family has no archived run with a known (non-unknown)
+    /// quant. Used to pre-fill the GUI quant field when the same model is run again, so a
+    /// user's earlier manual correction does not have to be re-entered every time.
+    /// </summary>
+    public string? TryGetLatestQuant(string modelFamily)
+    {
+        var family = (modelFamily ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(family))
+        {
+            return null;
+        }
+
+        return LoadAll()
+            .Where(r => string.Equals(r.ModelFamily, family, StringComparison.OrdinalIgnoreCase))
+            .Where(r => !string.IsNullOrWhiteSpace(r.Quant)
+                        && !string.Equals(r.Quant, ModelIdentity.UnknownQuant, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(r => r.CompletedAt)
+            .Select(r => r.Quant)
+            .FirstOrDefault();
+    }
+
+    /// <summary>
     /// Updates only the manually editable archive identity fields for already-loaded records
     /// and writes the scorecards back to disk. Files are moved into the matching
     /// archive/&lt;benchmark&gt;/&lt;family&gt;__&lt;quant&gt;/ folder when the group changes.
@@ -296,7 +319,19 @@ public sealed class ArchiveStore
             var targetDirectory = Path.Combine(_archiveRoot, TextUtil.SafeFileNamePart(record.BenchmarkId), record.GroupKey);
             Directory.CreateDirectory(targetDirectory);
 
-            var newPath = Path.Combine(targetDirectory, Path.GetFileName(oldPath));
+            // Rebuild the file name from the original run timestamp + the (possibly renamed)
+            // model family, so the on-disk name stays consistent with its folder/group instead
+            // of keeping a stale family label after a manual rename. The timestamp stem is the
+            // portion of the original name before the first underscore.
+            var oldFileName = Path.GetFileName(oldPath);
+            var stamp = oldFileName;
+            var separatorIndex = oldFileName.IndexOf('_');
+            if (separatorIndex >= 0)
+            {
+                stamp = oldFileName[..separatorIndex];
+            }
+
+            var newPath = Path.Combine(targetDirectory, $"{stamp}_{TextUtil.SafeFileNamePart(record.ModelFamily)}.json");
             if (!string.Equals(oldPath, newPath, StringComparison.OrdinalIgnoreCase) && File.Exists(newPath))
             {
                 newPath = EnsureUniquePath(newPath);

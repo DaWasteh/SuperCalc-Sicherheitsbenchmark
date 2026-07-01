@@ -65,6 +65,54 @@ internal static partial class TestRunner
         }
     }
 
+    private static void ArchiveRenameUpdatesFileNameToNewFamily()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "supercalc-archive-rename-filename-test-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var store = new ArchiveStore(tempRoot);
+            var originalPath = store.Save(FakeResult("local-server-alias", 42, 4, 0, 1, 0));
+            var originalStamp = Path.GetFileName(originalPath).Split('_')[0];
+            var group = store.LoadGroups().Single();
+
+            var updatedPaths = store.UpdateIdentity(group.Records, "qwen3-coder-30b", "Q4_K_M");
+            var newName = Path.GetFileName(updatedPaths[0]);
+
+            Assert(newName.Contains("qwen3-coder-30b", StringComparison.Ordinal), "renamed scorecard should carry the new family name");
+            Assert(!newName.Contains("local-server-alias", StringComparison.Ordinal), "renamed scorecard should not keep the stale family name");
+            Assert(newName.StartsWith(originalStamp, StringComparison.Ordinal), "renamed scorecard should preserve the original run timestamp");
+            Assert(!File.Exists(originalPath), "stale scorecard name should be removed after the rename");
+        }
+        finally
+        {
+            TryDeleteDirectory(tempRoot);
+        }
+    }
+
+    private static void ArchiveStoreReturnsLatestManualQuantForFamily()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "supercalc-archive-quant-lookup-test-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var store = new ArchiveStore(tempRoot);
+            store.Save(FakeResult("custom-model.gguf", 50, 5, 0, 0, 1));
+
+            // A family that only has unknown-quant runs exposes no known quant to pre-fill.
+            Assert(store.TryGetLatestQuant("custom-model") is null, "family with only unknown-quant should return null");
+            Assert(store.TryGetLatestQuant("never-archived") is null, "unknown family should return null");
+
+            // After a manual quant correction, the latest known quant must be retrievable so the
+            // GUI can pre-fill it on the next run of the same model.
+            var group = store.LoadGroups().Single();
+            store.UpdateIdentity(group.Records, "custom-model", "Q5_K_M");
+            Assert(store.TryGetLatestQuant("custom-model") == "Q5_K_M", "latest manually corrected quant should be returned");
+        }
+        finally
+        {
+            TryDeleteDirectory(tempRoot);
+        }
+    }
+
     private static void ArchiveManualQuantEditRebuildsGroupKey()
     {
         var tempRoot = Path.Combine(Path.GetTempPath(), "supercalc-archive-edit-test-" + Guid.NewGuid().ToString("N"));

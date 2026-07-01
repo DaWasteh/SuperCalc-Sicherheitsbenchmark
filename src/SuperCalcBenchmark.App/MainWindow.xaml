@@ -53,7 +53,7 @@
                 <Button x:Name="RefreshModelsButton" Grid.Row="0" Grid.Column="2" Content="Refresh Models" Click="RefreshModelsButton_Click" />
 
                 <TextBlock Grid.Row="0" Grid.Column="3" Text="Modell" VerticalAlignment="Center" Margin="12,4,4,4" />
-                <ComboBox x:Name="ModelComboBox" Grid.Row="0" Grid.Column="4" IsEditable="False" />
+                <ComboBox x:Name="ModelComboBox" Grid.Row="0" Grid.Column="4" IsEditable="False" SelectionChanged="ModelComboBox_SelectionChanged" />
                 <Button x:Name="StartBenchmarkButton" Grid.Row="0" Grid.Column="5" Content="Benchmark starten" FontWeight="SemiBold" Click="StartBenchmarkButton_Click" />
                 <Button x:Name="CancelBenchmarkButton" Grid.Row="0" Grid.Column="6" Content="Abbrechen" IsEnabled="False" Click="CancelBenchmarkButton_Click" />
 

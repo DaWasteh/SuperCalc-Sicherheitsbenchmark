@@ -333,6 +333,51 @@ public partial class MainWindow : Window
         }
     }
 
+    private void ModelComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        // SelectionChanged can fire while controls are still being constructed (the FamilyFilter
+        // combo in particular sets IsSelected during InitializeComponent) or before models load.
+        // Guard so we never touch a control that does not exist yet.
+        if (QuantTextBox is null || ModelComboBox is null)
+        {
+            return;
+        }
+
+        var model = ModelComboBox.SelectedItem?.ToString();
+        if (string.IsNullOrWhiteSpace(model))
+        {
+            return;
+        }
+
+        PrefillQuantForModel(model);
+    }
+
+    /// <summary>
+    /// Pre-fills the optional Quant field from the archive so a previously corrected quant
+    /// sticks across runs of the same model family (instead of every run re-landing as
+    /// "unknown-quant"). When the model id already encodes a quant, the field is cleared so
+    /// auto-detection takes over.
+    /// </summary>
+    private void PrefillQuantForModel(string model)
+    {
+        var identity = ModelIdentity.Parse(model);
+        if (identity.QuantWasDetected)
+        {
+            QuantTextBox.Text = string.Empty;
+            return;
+        }
+
+        try
+        {
+            var lastQuant = new ArchiveStore(ArchiveRoot).TryGetLatestQuant(identity.Family);
+            QuantTextBox.Text = lastQuant ?? string.Empty;
+        }
+        catch
+        {
+            // An archive lookup problem must never block selecting a model.
+        }
+    }
+
     private async void StartBenchmarkButton_Click(object sender, RoutedEventArgs e)
     {
         var model = ModelComboBox.SelectedItem?.ToString();
