@@ -39,6 +39,86 @@ internal static partial class TestRunner
         Assert(overridden.GroupKey.Contains("Q5_K_M", StringComparison.Ordinal), "group key should reflect the override");
     }
 
+    private static void ModelIdentityNormalizesServerFtype()
+    {
+        // Every string emitted by llama_ftype_name() (src/llama-model-loader.cpp, PR #25134)
+        // must map to its canonical archive token. Mirrors the C++ switch table verbatim.
+        Assert(ModelIdentity.NormalizeServerFtype("Q8_0") == "Q8_0", "plain Q8_0");
+        Assert(ModelIdentity.NormalizeServerFtype("F16") == "F16", "F16");
+        Assert(ModelIdentity.NormalizeServerFtype("BF16") == "BF16", "BF16");
+        Assert(ModelIdentity.NormalizeServerFtype("all F32") == "F32", "all F32 -> F32");
+        Assert(ModelIdentity.NormalizeServerFtype("Q6_K") == "Q6_K", "Q6_K has no size suffix");
+        Assert(ModelIdentity.NormalizeServerFtype("Q2_K - Medium") == "Q2_K", "Q2_K medium collapses to Q2_K");
+        Assert(ModelIdentity.NormalizeServerFtype("Q3_K - Large") == "Q3_K_L", "Q3_K large -> Q3_K_L");
+        Assert(ModelIdentity.NormalizeServerFtype("Q4_K - Medium") == "Q4_K_M", "Q4_K medium -> Q4_K_M");
+        Assert(ModelIdentity.NormalizeServerFtype("Q4_K - Small") == "Q4_K_S", "Q4_K small -> Q4_K_S");
+        Assert(ModelIdentity.NormalizeServerFtype("Q5_K - Medium") == "Q5_K_M", "Q5_K medium -> Q5_K_M");
+        Assert(ModelIdentity.NormalizeServerFtype("IQ3_XXS - 3.0625 bpw") == "IQ3_XXS", "IQ3_XXS bpw suffix stripped");
+        Assert(ModelIdentity.NormalizeServerFtype("IQ3_S - 3.4375 bpw") == "IQ3_S", "IQ3_S bpw suffix stripped");
+        Assert(ModelIdentity.NormalizeServerFtype("IQ4_XS - 4.25 bpw") == "IQ4_XS", "IQ4_XS bpw suffix stripped");
+        Assert(ModelIdentity.NormalizeServerFtype("IQ1_S - 1.5625 bpw") == "IQ1_S", "IQ1_S bpw suffix stripped");
+        // LLAMA_FTYPE_MOSTLY_IQ3_M is the one ftype whose label ("IQ3_S mix") is not a clean token prefix.
+        Assert(ModelIdentity.NormalizeServerFtype("IQ3_S mix - 3.66 bpw") == "IQ3_M", "IQ3_S mix -> IQ3_M");
+        Assert(ModelIdentity.NormalizeServerFtype("TQ2_0 - 2.06 bpw ternary") == "TQ2_0", "TQ2_0 ternary suffix stripped");
+        Assert(ModelIdentity.NormalizeServerFtype("TQ1_0 - 1.69 bpw ternary") == "TQ1_0", "TQ1_0 ternary suffix stripped");
+        Assert(ModelIdentity.NormalizeServerFtype("MXFP4 MoE") == "MXFP4_MoE", "MXFP4 MoE -> MXFP4_MoE");
+        Assert(ModelIdentity.NormalizeServerFtype("NVFP4") == "NVFP4", "NVFP4");
+
+        // "(guessed) " prefix (PR #25134 prepends it for inferred ftypes) is stripped, the
+        // underlying token is still authoritative.
+        Assert(ModelIdentity.NormalizeServerFtype("(guessed) Q8_0") == "Q8_0", "guessed Q8_0 -> Q8_0");
+        Assert(ModelIdentity.NormalizeServerFtype("(guessed) Q4_K - Medium") == "Q4_K_M", "guessed Q4_K medium -> Q4_K_M");
+
+        // Unknown / unmapped ftypes yield null so callers fall back to name detection.
+        Assert(ModelIdentity.NormalizeServerFtype("unknown, may not work") is null, "unknown ftype -> null");
+        Assert(ModelIdentity.NormalizeServerFtype("(guessed) unknown, may not work") is null, "guessed unknown -> null");
+        Assert(ModelIdentity.NormalizeServerFtype("some-future-quant") is null, "unmapped ftype -> null");
+        Assert(ModelIdentity.NormalizeServerFtype(null) is null, "null -> null");
+        Assert(ModelIdentity.NormalizeServerFtype("   ") is null, "blank -> null");
+    }
+
+    private static void ModelIdentityServerFtypeBeatsNameDetection()
+    {
+        // The authoritative server ftype (read from the GGUF header) outranks the heuristic
+        // name-based guess. Different quants must also produce different group keys.
+        var nameOnly = ModelIdentity.Parse("model-Q4_K_M.gguf");
+        var withServer = ModelIdentity.Parse("model-Q4_K_M.gguf", serverFtype: "Q8_0");
+        Assert(nameOnly.Quant == "Q4_K_M", $"name fallback should be Q4_K_M, got {nameOnly.Quant}");
+        Assert(withServer.Quant == "Q8_0", $"server ftype should win, got {withServer.Quant}");
+        Assert(withServer.QuantWasDetected, "server-reported quant counts as detected");
+        Assert(withServer.QuantSource == QuantSource.Server, $"source should be Server, got {withServer.QuantSource}");
+        Assert(nameOnly.QuantSource == QuantSource.Name, $"name-only source should be Name, got {nameOnly.QuantSource}");
+        Assert(withServer.GroupKey != nameOnly.GroupKey, "server vs name quants must differ in group key");
+        // Family is identical regardless of which quant layer resolved it.
+        Assert(withServer.Family == nameOnly.Family, "family must be stable across quant sources");
+    }
+
+    private static void ModelIdentityManualOverrideBeatsServerFtype()
+    {
+        // Manual correction is the highest precedence so an archived scorecard is never
+        // silently overwritten by an auto-detected (name or server) value.
+        var serverOnly = ModelIdentity.Parse("alias-model", serverFtype: "Q8_0");
+        var manualOverServer = ModelIdentity.Parse("alias-model", quantOverride: "Q5_K_M", serverFtype: "Q8_0");
+        Assert(serverOnly.Quant == "Q8_0", $"server should win without override, got {serverOnly.Quant}");
+        Assert(manualOverServer.Quant == "Q5_K_M", $"manual override must beat server, got {manualOverServer.Quant}");
+        Assert(manualOverServer.QuantSource == QuantSource.Manual, $"source should be Manual, got {manualOverServer.QuantSource}");
+        Assert(manualOverServer.GroupKey.Contains("Q5_K_M", StringComparison.Ordinal), "group key should reflect manual override");
+    }
+
+    private static void ModelIdentityServerFtypeResolvesAliasModels()
+    {
+        // Headline use case: a llama-server alias (e.g. "local-qwen") encodes no quant in its
+        // name, so name detection fails. The server-reported ftype resolves it automatically
+        // and tags the source as Server rather than unknown-quant.
+        var noServer = ModelIdentity.Parse("local-qwen-alias");
+        var withServer = ModelIdentity.Parse("local-qwen-alias", serverFtype: "Q4_K - Medium");
+        Assert(noServer.Quant == ModelIdentity.UnknownQuant, "alias without server should be unknown");
+        Assert(!noServer.QuantWasDetected, "alias without server should not be detected");
+        Assert(withServer.Quant == "Q4_K_M", $"server should resolve alias to Q4_K_M, got {withServer.Quant}");
+        Assert(withServer.QuantWasDetected, "alias with server should be detected");
+        Assert(withServer.QuantSource == QuantSource.Server, $"source should be Server, got {withServer.QuantSource}");
+    }
+
     private static void ArchiveStoreUpdatesEditableIdentityFields()
     {
         var tempRoot = Path.Combine(Path.GetTempPath(), "supercalc-archive-update-test-" + Guid.NewGuid().ToString("N"));

@@ -468,6 +468,13 @@ public sealed class BenchmarkRunResult
     public bool DisableThinking { get; init; }
     public bool AbortOnLoop { get; init; }
     public int? ServerContextSize { get; init; }
+    /// <summary>
+    /// Authoritative quantization file-type name reported by llama-server via
+    /// GET /v1/models data[].meta.ftype (llama.cpp PR #25134, build b9860+), e.g.
+    /// "Q4_K - Medium". null when the server did not report one; ModelIdentity then falls
+    /// back to name-based detection. Transit only — not serialized into the archive.
+    /// </summary>
+    public string? DetectedQuant { get; init; }
     public string SourceFile { get; init; } = string.Empty;
     public string SourceSha256 { get; init; } = string.Empty;
     public string ExpectedSourceSha256 { get; init; } = string.Empty;

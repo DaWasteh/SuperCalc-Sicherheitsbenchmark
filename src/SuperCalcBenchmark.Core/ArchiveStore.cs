@@ -81,7 +81,7 @@ public sealed class ArchiveStore
 
     public static ArchiveRecord BuildRecord(BenchmarkRunResult result, string? quantOverride = null)
     {
-        var identity = ModelIdentity.Parse(result.Model, quantOverride);
+        var identity = ModelIdentity.Parse(result.Model, quantOverride, result.DetectedQuant);
 
         var runs = new List<ArchiveRunScore>();
         if (result.Run1?.Score is not null)

@@ -57,6 +57,23 @@ public sealed class BenchmarkRunner
         progress?.Invoke("Reading server context window...");
         var serverContextSize = await client.GetServerContextSizeAsync(options.ServerUrl, cancellationToken).ConfigureAwait(false);
 
+        // Ask llama-server for the authoritative file type (PR #25134, b9860+) so the archive
+        // no longer has to guess the quant from the model file name. Best-effort: if the
+        // server is unreachable or omits meta.ftype, ModelIdentity falls back to name detection.
+        string? serverFtype = null;
+        try
+        {
+            serverFtype = await client.GetModelFtypeAsync(options.ServerUrl, options.Model, cancellationToken).ConfigureAwait(false);
+            if (!string.IsNullOrWhiteSpace(serverFtype))
+            {
+                progress?.Invoke($"Server reports model file type: {serverFtype}");
+            }
+        }
+        catch
+        {
+            // Quant detection must never block a run; name-based fallback covers this.
+        }
+
         var result = new BenchmarkRunResult
         {
             ToolVersion = ToolVersion,
@@ -75,6 +92,7 @@ public sealed class BenchmarkRunner
             DisableThinking = options.DisableThinking,
             AbortOnLoop = options.AbortOnLoop,
             ServerContextSize = serverContextSize,
+            DetectedQuant = serverFtype,
             SourceFile = options.SourcePath,
             SourceSha256 = source.Sha256,
             ExpectedSourceSha256 = groundTruth.SourceSha256,

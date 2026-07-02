@@ -111,6 +111,114 @@ public sealed class LlamaCppClient : IDisposable
         return null;
     }
 
+    /// <summary>
+    /// Best-effort lookup of the loaded model's file-type (quantization) name as exposed by
+    /// llama-server via GET /v1/models data[].meta.ftype (llama.cpp PR #25134, build b9860+).
+    /// Returns values such as "Q8_0", "Q4_K - Medium", "(guessed) Q8_0" or
+    /// "IQ3_S mix - 3.66 bpw". Returns null when the server is unreachable, the endpoint or
+    /// the meta.ftype field is absent (older builds, OpenAI-compatible gateways without meta),
+    /// or the model id cannot be matched — callers then fall back to name-based detection.
+    /// Never throws.
+    /// </summary>
+    public async Task<string?> GetModelFtypeAsync(string serverUrl, string? modelId, CancellationToken cancellationToken = default)
+    {
+        // /v1/models is the canonical OpenAI-compatible endpoint; /models is the legacy
+        // llama.cpp alias. Try both so the lookup works across builds.
+        var endpoints = new[] { "/v1/models", "/models" };
+
+        foreach (var endpoint in endpoints)
+        {
+            try
+            {
+                using var response = await _httpClient.GetAsync(BuildUri(serverUrl, endpoint), cancellationToken).ConfigureAwait(false);
+                if (!response.IsSuccessStatusCode)
+                {
+                    continue;
+                }
+
+                var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+                var ftype = TryExtractModelFtype(body, modelId);
+                if (!string.IsNullOrWhiteSpace(ftype))
+                {
+                    return ftype;
+                }
+            }
+            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException)
+            {
+                // Best-effort diagnostics only; quant detection must still work without the endpoint.
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Extracts meta.ftype for the requested model id from a /v1/models response body.
+    /// Falls back to the single available entry when the id is blank or cannot be matched
+    /// (typical for single-model llama-server instances that report only one model).
+    /// </summary>
+    private static string? TryExtractModelFtype(string body, string? requestedModelId)
+    {
+        using var document = JsonDocument.Parse(body);
+        var root = document.RootElement;
+
+        if (!root.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        var requested = (requestedModelId ?? string.Empty).Trim();
+
+        JsonElement? fallback = null; // first entry carrying an ftype, used when no id matches
+
+        foreach (var item in data.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
+            var ftype = ReadMetaFtype(item);
+            if (string.IsNullOrWhiteSpace(ftype))
+            {
+                continue;
+            }
+
+            fallback ??= item;
+
+            if (item.TryGetProperty("id", out var idElement) &&
+                idElement.ValueKind == JsonValueKind.String &&
+                string.Equals(idElement.GetString(), requested, StringComparison.OrdinalIgnoreCase))
+            {
+                return ftype;
+            }
+        }
+
+        // No exact id match (e.g. model id is a llama-server alias). If the server reports
+        // exactly one model, or only one carries an ftype, that is unambiguously ours.
+        if (fallback is JsonElement fb &&
+            fb.ValueKind == JsonValueKind.Object)
+        {
+            return ReadMetaFtype(fb);
+        }
+
+        return null;
+    }
+
+    private static string? ReadMetaFtype(JsonElement modelObject)
+    {
+        // meta.ftype is the field PR #25134 adds; older builds and non-llama.cpp servers omit
+        // the whole meta object, in which case there is nothing authoritative to report.
+        if (!modelObject.TryGetProperty("meta", out var meta) ||
+            meta.ValueKind != JsonValueKind.Object ||
+            !meta.TryGetProperty("ftype", out var ftype))
+        {
+            return null;
+        }
+
+        return ftype.ValueKind == JsonValueKind.String ? ftype.GetString() : null;
+    }
+
     public static string BuildChatRequestJsonForDiagnostics(
         string model,
         string systemPrompt,

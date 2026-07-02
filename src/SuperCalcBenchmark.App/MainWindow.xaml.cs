@@ -353,18 +353,53 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Pre-fills the optional Quant field from the archive so a previously corrected quant
-    /// sticks across runs of the same model family (instead of every run re-landing as
-    /// "unknown-quant"). When the model id already encodes a quant, the field is cleared so
-    /// auto-detection takes over.
+    /// Pre-fills the optional Quant field. Quant precedence for the field value:
+    ///   1. If the model id encodes a quant (name-based detection) — leave the field empty;
+    ///      ModelIdentity resolves it automatically at archive time.
+    ///   2. Else if llama-server reports an authoritative file type (PR #25134, /v1/models
+    ///      meta.ftype) — leave the field empty too; the BenchmarkRunner reads it at run
+    ///      time so the resolved quant is tagged <c>QuantSource.Server</c>, not manual.
+    ///      The detected token is surfaced in the log for transparency.
+    ///   3. Else fall back to the last manually corrected quant from the archive for the
+    ///      same model family, so a previously fixed value sticks across runs instead of
+    ///      every run re-landing as "unknown-quant".
+    /// The field is therefore only filled when neither auto-detection path can resolve the
+    /// quant, which keeps manual typing the rare exception.
     /// </summary>
-    private void PrefillQuantForModel(string model)
+    private async void PrefillQuantForModel(string model)
     {
         var identity = ModelIdentity.Parse(model);
         if (identity.QuantWasDetected)
         {
             QuantTextBox.Text = string.Empty;
             return;
+        }
+
+        // Name-based detection failed: ask llama-server for the authoritative file type
+        // (PR #25134). Short timeout so a cold/offline server never freezes model selection.
+        var serverUrl = ServerUrlTextBox.Text.Trim();
+        if (!string.IsNullOrWhiteSpace(serverUrl))
+        {
+            try
+            {
+                using var client = new LlamaCppClient(TimeSpan.FromSeconds(5));
+                var ftype = await client.GetModelFtypeAsync(serverUrl, model).ConfigureAwait(true);
+                var serverQuant = ModelIdentity.NormalizeServerFtype(ftype);
+                if (!string.IsNullOrWhiteSpace(serverQuant))
+                {
+                    // Leave the field empty: the BenchmarkRunner re-fetches the ftype at run
+                    // time and tags the quant as server-detected rather than manual.
+                    QuantTextBox.Text = string.Empty;
+                    AppendLog($"Quant automatisch vom Server erkannt: {serverQuant}" +
+                              (string.Equals(ftype!.Trim(), serverQuant, StringComparison.Ordinal) ? string.Empty : $" (ftype \"{ftype!.Trim()}\")") +
+                              " — Eingabefeld bleibt frei, Korrektur möglich.");
+                    return;
+                }
+            }
+            catch
+            {
+                // Offline/unreachable server: fall through to the archive prefill.
+            }
         }
 
         try

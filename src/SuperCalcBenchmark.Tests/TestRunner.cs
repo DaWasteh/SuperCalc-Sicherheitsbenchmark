@@ -49,6 +49,12 @@ internal static partial class TestRunner
         Run("truth audit scorer detects honest and overclaiming self-assessments", TruthAuditScorerDetectsHonestyAndOverclaims);
         Run("model identity detects quant and family", ModelIdentityDetectsQuantAndFamily);
         Run("model identity honors manual quant override", ModelIdentityHonorsQuantOverride);
+        Run("model identity normalizes server ftype", ModelIdentityNormalizesServerFtype);
+        Run("model identity server ftype beats name detection", ModelIdentityServerFtypeBeatsNameDetection);
+        Run("model identity manual override beats server ftype", ModelIdentityManualOverrideBeatsServerFtype);
+        Run("model identity server ftype resolves alias models", ModelIdentityServerFtypeResolvesAliasModels);
+        Run("llama client extracts server ftype from models endpoint", LlamaClientExtractsServerFtypeFromModelsEndpoint);
+        Run("llama client server ftype is null without meta field", LlamaClientServerFtypeIsNullWithoutMetaField);
         Run("archive store updates editable identity fields", ArchiveStoreUpdatesEditableIdentityFields);
         Run("archive rename updates file name to new family", ArchiveRenameUpdatesFileNameToNewFamily);
         Run("archive store returns latest manual quant for family", ArchiveStoreReturnsLatestManualQuantForFamily);
@@ -1101,6 +1107,37 @@ internal static partial class TestRunner
         };
     }
 
+    private static void LlamaClientExtractsServerFtypeFromModelsEndpoint()
+    {
+        // PR #25134 exposes the loaded model's file type as data[].meta.ftype on /v1/models.
+        // GetModelFtypeAsync must return it verbatim (caller normalizes), matching by id and
+        // falling back to the single entry when the id is a server alias.
+        var handler = new ModelFtypeHandler("Q4_K - Medium");
+        using var client = new LlamaCppClient(TimeSpan.FromSeconds(5), handler);
+        var ftype = client.GetModelFtypeAsync("http://test", "ornith-1.0-35b").GetAwaiter().GetResult();
+        Assert(ftype == "Q4_K - Medium", $"expected raw ftype 'Q4_K - Medium', got '{ftype}'");
+
+        // Unknown id still resolves because the server reports exactly one model.
+        var aliasFtype = client.GetModelFtypeAsync("http://test", "some-alias").GetAwaiter().GetResult();
+        Assert(aliasFtype == "Q4_K - Medium", $"single-model server should resolve even without id match, got '{aliasFtype}'");
+    }
+
+    private static void LlamaClientServerFtypeIsNullWithoutMetaField()
+    {
+        // Older llama.cpp builds and OpenAI-compatible gateways omit the meta object entirely;
+        // GetModelFtypeAsync must return null (not throw) so quant detection falls back gracefully.
+        var noMeta = new ModelFtypeHandler(ftype: null, includeMeta: false);
+        using var clientNoMeta = new LlamaCppClient(TimeSpan.FromSeconds(5), noMeta);
+        Assert(clientNoMeta.GetModelFtypeAsync("http://test", "ornith-1.0-35b").GetAwaiter().GetResult() is null,
+            "missing meta object should yield null");
+
+        // meta present but ftype absent (e.g. a build between b9860 and the field landing): null.
+        var metaNoFtype = new ModelFtypeHandler(ftype: null, includeMeta: true);
+        using var clientMetaNoFtype = new LlamaCppClient(TimeSpan.FromSeconds(5), metaNoFtype);
+        Assert(clientMetaNoFtype.GetModelFtypeAsync("http://test", "ornith-1.0-35b").GetAwaiter().GetResult() is null,
+            "meta without ftype should yield null");
+    }
+
     private sealed class CapturingHandler : HttpMessageHandler
     {
         public string RequestBody { get; private set; } = string.Empty;
@@ -1132,6 +1169,47 @@ internal static partial class TestRunner
                 Content = new StringContent(responseJson, Encoding.UTF8, "application/json")
             };
         }
+    }
+
+    // Serves GET /v1/models with a configurable meta.ftype so GetModelFtypeAsync can be
+    // exercised without a live llama-server. Mirrors the response shape PR #25134 produces.
+    private sealed class ModelFtypeHandler(string? ftype, bool includeMeta = true) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            string body;
+            if (request.RequestUri?.AbsolutePath.EndsWith("/v1/models", StringComparison.Ordinal) == true ||
+                request.RequestUri?.AbsolutePath.EndsWith("/models", StringComparison.Ordinal) == true)
+            {
+                var metaLine = includeMeta
+                    ? (ftype is null ? "" : $",\n            \"meta\": {{ \"n_ctx\": 4096, \"size\": 0{(!string.IsNullOrWhiteSpace(ftype) ? $", \"ftype\": {JsonString(ftype)}" : "")} }}")
+                    : "";
+                body = $$"""
+                {
+                  "object": "list",
+                  "data": [
+                    {
+                      "id": "ornith-1.0-35b",
+                      "object": "model",
+                      "owned_by": "llama_cpp"{{metaLine}}
+                    }
+                  ]
+                }
+                """;
+            }
+            else
+            {
+                body = "{}";
+            }
+
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json")
+            });
+        }
+
+        private static string JsonString(string value)
+            => "\"" + value.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
     }
 
     private enum StreamLoopChannel
