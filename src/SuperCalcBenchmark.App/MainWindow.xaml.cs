@@ -192,14 +192,25 @@ public partial class MainWindow : Window
             return;
         }
 
-        var isDark = theme == BenchmarkTheme.Dark ? 1 : 0;
-        _ = DwmSetWindowAttribute(handle, DwmwaUseImmersiveDarkMode, ref isDark, Marshal.SizeOf<int>());
-        _ = DwmSetWindowAttribute(handle, DwmwaUseImmersiveDarkModeBefore20H1, ref isDark, Marshal.SizeOf<int>());
+        try
+        {
+            var isDark = theme == BenchmarkTheme.Dark ? 1 : 0;
+            _ = DwmSetWindowAttribute(handle, DwmwaUseImmersiveDarkMode, ref isDark, Marshal.SizeOf<int>());
+            _ = DwmSetWindowAttribute(handle, DwmwaUseImmersiveDarkModeBefore20H1, ref isDark, Marshal.SizeOf<int>());
 
-        var captionColor = ColorRef(theme == BenchmarkTheme.Dark ? "#0F172A" : "#F5F7FA");
-        var titleTextColor = ColorRef(theme == BenchmarkTheme.Dark ? "#F8FAFC" : "#111827");
-        _ = DwmSetWindowAttribute(handle, DwmwaCaptionColor, ref captionColor, Marshal.SizeOf<int>());
-        _ = DwmSetWindowAttribute(handle, DwmwaTextColor, ref titleTextColor, Marshal.SizeOf<int>());
+            var captionColor = ColorRef(theme == BenchmarkTheme.Dark ? "#0F172A" : "#F5F7FA");
+            var titleTextColor = ColorRef(theme == BenchmarkTheme.Dark ? "#F8FAFC" : "#111827");
+            _ = DwmSetWindowAttribute(handle, DwmwaCaptionColor, ref captionColor, Marshal.SizeOf<int>());
+            _ = DwmSetWindowAttribute(handle, DwmwaTextColor, ref titleTextColor, Marshal.SizeOf<int>());
+        }
+        catch (DllNotFoundException)
+        {
+            // Wine or stripped-down Windows environments may not expose dwmapi.dll.
+        }
+        catch (EntryPointNotFoundException)
+        {
+            // Older Wine/Windows builds can lack newer DWM attributes.  The app still works.
+        }
     }
 
     private static int ColorRef(string hex)
@@ -1675,24 +1686,11 @@ public partial class MainWindow : Window
     private static string FindRepositoryRoot()
     {
         var candidates = new List<DirectoryInfo>();
-        foreach (var start in new[] { Environment.CurrentDirectory, AppContext.BaseDirectory })
-        {
-            var directory = new DirectoryInfo(start);
-            while (directory is not null)
-            {
-                if (File.Exists(Path.Combine(directory.FullName, "enhanced_calc.cpp")) &&
-                    File.Exists(Path.Combine(directory.FullName, "benchmarks", "supercalc-v3", "ground_truth.json")))
-                {
-                    candidates.Add(directory);
-                }
+        AddRepositoryRootCandidate(candidates, Environment.GetEnvironmentVariable("SUPERCALC_REPOSITORY_ROOT"));
+        AddRepositoryRootCandidate(candidates, Environment.CurrentDirectory);
+        AddRepositoryRootCandidate(candidates, AppContext.BaseDirectory);
 
-                directory = directory.Parent;
-            }
-        }
-
-        var repositoryRoot = candidates.FirstOrDefault(directory =>
-            File.Exists(Path.Combine(directory.FullName, "SuperCalcBenchmark.slnx")) ||
-            Directory.Exists(Path.Combine(directory.FullName, ".git")));
+        var repositoryRoot = candidates.FirstOrDefault(IsRepositoryRoot);
         if (repositoryRoot is not null)
         {
             return repositoryRoot.FullName;
@@ -1700,4 +1698,32 @@ public partial class MainWindow : Window
 
         return candidates.FirstOrDefault()?.FullName ?? Environment.CurrentDirectory;
     }
+
+    private static void AddRepositoryRootCandidate(List<DirectoryInfo> candidates, string? start)
+    {
+        if (string.IsNullOrWhiteSpace(start))
+        {
+            return;
+        }
+
+        var directory = new DirectoryInfo(start);
+        while (directory is not null)
+        {
+            if (IsBenchmarkAssetRoot(directory) &&
+                !candidates.Any(candidate => string.Equals(candidate.FullName, directory.FullName, StringComparison.OrdinalIgnoreCase)))
+            {
+                candidates.Add(directory);
+            }
+
+            directory = directory.Parent;
+        }
+    }
+
+    private static bool IsBenchmarkAssetRoot(DirectoryInfo directory) =>
+        File.Exists(Path.Combine(directory.FullName, "enhanced_calc.cpp")) &&
+        File.Exists(Path.Combine(directory.FullName, "benchmarks", "supercalc-v3", "ground_truth.json"));
+
+    private static bool IsRepositoryRoot(DirectoryInfo directory) =>
+        File.Exists(Path.Combine(directory.FullName, "SuperCalcBenchmark.slnx")) ||
+        Directory.Exists(Path.Combine(directory.FullName, ".git"));
 }

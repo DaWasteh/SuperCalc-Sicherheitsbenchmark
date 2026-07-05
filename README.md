@@ -190,6 +190,27 @@ dotnet build SuperCalcBenchmark.slnx --configuration Release
 .\src\SuperCalcBenchmark.App\bin\Release\net10.0-windows\SuperCalcBenchmark.App.exe
 ```
 
+Ubuntu/Linux GUI workflow (without changing the Windows workflow):
+
+```bash
+# Installs the pinned .NET SDK into ~/.pi/dotnet if needed, builds the native
+# CLI/tests, and publishes a self-contained win-x64 WPF app for Wine.
+./setup_linux.sh
+
+# Starts the published WPF GUI via Wine with the repository root as working
+# directory, so the same ./archive scorecards are visible as on Windows.
+./start_linux.sh
+
+# Optional: open VS Code with DOTNET_ROOT/DOTNET_CLI_HOME set to the local SDK.
+# The script writes an ignored Linux workspace under artifacts/linux-vscode/ so
+# the C# extension uses ~/.pi/dotnet/dotnet instead of a runtime-only fallback.
+./code_linux.sh
+```
+
+On Linux the WPF GUI is still the Windows app, started through Wine.  The CLI and
+validation commands run natively with `~/.pi/dotnet/dotnet`; this avoids relying
+on a writable `~/.dotnet` when the home mount is read-only.
+
 In the app:
 
 1. Start or reload `llama-server` on `http://127.0.0.1:1234`.

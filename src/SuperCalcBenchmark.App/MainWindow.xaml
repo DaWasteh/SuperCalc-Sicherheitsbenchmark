@@ -4,7 +4,12 @@
         Title="SuperCalc Benchmark" Height="860" Width="1240" MinHeight="720" MinWidth="1050"
         WindowStartupLocation="CenterScreen"
         Background="{DynamicResource WindowBackgroundBrush}"
-        Foreground="{DynamicResource TextPrimaryBrush}">
+        Foreground="{DynamicResource TextPrimaryBrush}"
+        UseLayoutRounding="True"
+        SnapsToDevicePixels="True"
+        TextOptions.TextFormattingMode="Display"
+        TextOptions.TextRenderingMode="Auto">
+
     <Grid Margin="14" Background="{DynamicResource WindowBackgroundBrush}">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
