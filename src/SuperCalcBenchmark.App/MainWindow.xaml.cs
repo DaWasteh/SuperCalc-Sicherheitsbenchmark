@@ -65,6 +65,8 @@ public partial class MainWindow : Window
     private const int DwmwaCaptionColor = 35;
     private const int DwmwaTextColor = 36;
 
+    private static readonly string[] ProtectedBenchmarkDataDirectories = ["archive", "artifacts", "results"];
+
     // Live-streaming UI state. Tokens arrive via IProgress and are appended to these
     // text boxes in real time. _activeLivePanel points at whichever run is currently
     // streaming (Run 1, then Run 2, then the automatic Run 3 truth audit).
@@ -298,6 +300,120 @@ public partial class MainWindow : Window
     {
         Loaded -= MainWindow_Loaded;
         await RefreshComparisonAsync(preserveSelection: false);
+    }
+
+    private async void UpdateButton_Click(object sender, RoutedEventArgs e)
+    {
+        var confirmation = MessageBox.Show(this,
+            "Das Update führt im Repository \"git pull --ff-only\" aus.\n\n" +
+            "Vorher werden lokale Benchmarkdaten aus archive/, artifacts/ und results/ nach %LOCALAPPDATA%\\SuperCalcBenchmark\\UpdateBackups gesichert. " +
+            "Es werden weder git reset noch git clean ausgeführt; vorhandene lokale Run-Ordner bleiben unangetastet.\n\n" +
+            "Jetzt Updates ziehen?",
+            "Update ziehen",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Question);
+
+        if (confirmation != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
+        await PullUpdatesAsync();
+    }
+
+    private async Task PullUpdatesAsync()
+    {
+        SetBusy(true, benchmarkRunning: false);
+        StatusTextBlock.Text = "Update läuft...";
+        AppendLog("Update gestartet: lokale Benchmarkdaten schützen, dann git pull --ff-only.");
+
+        try
+        {
+            var result = await Task.Run(RunSafeRepositoryUpdate);
+            AppendUpdateResultLog(result);
+            QueueComparisonRefresh(preserveSelection: true);
+
+            StatusTextBlock.Text = result.HeadChanged
+                ? "Update gezogen. Bitte App nach dem Build/Neustart erneut starten."
+                : "Repository ist bereits aktuell.";
+
+            MessageBox.Show(this,
+                BuildUpdateSummary(result),
+                "Update abgeschlossen",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            StatusTextBlock.Text = "Update fehlgeschlagen.";
+            AppendLog("FEHLER beim Update: " + ex.Message);
+            MessageBox.Show(this,
+                "Update fehlgeschlagen. Es wurde kein reset/clean ausgeführt; lokale Benchmarkdaten bleiben erhalten.\n\n" + ex.Message,
+                "Update fehlgeschlagen",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+        }
+        finally
+        {
+            SetBusy(false, benchmarkRunning: false);
+        }
+    }
+
+    private void AppendUpdateResultLog(SafeUpdateResult result)
+    {
+        AppendLog($"Update Git-Root: {result.RepositoryRoot}");
+        AppendLog(result.HeadChanged
+            ? $"Update gezogen: {result.HeadBefore} → {result.HeadAfter}"
+            : $"Keine neuen Commits ({result.HeadAfter}).");
+
+        if (result.Backup.RelativeFiles.Count > 0)
+        {
+            AppendLog($"Lokale Benchmarkdaten gesichert: {result.Backup.RelativeFiles.Count} Datei(en) → {result.Backup.BackupRoot}");
+            AppendLog($"Lokale Benchmarkdaten nach Pull geprüft: {result.Restore.RestoredMissingFiles} wiederhergestellt, {result.Restore.UnchangedFiles} unverändert, {result.Restore.ConflictCopies.Count} Konfliktkopie(n).");
+            foreach (var conflictCopy in result.Restore.ConflictCopies)
+            {
+                AppendLog("Lokale Daten-Konfliktkopie: " + conflictCopy);
+            }
+        }
+        else
+        {
+            AppendLog("Keine lokalen/geänderten Benchmarkdaten in archive/, artifacts/ oder results/ gefunden.");
+        }
+
+        var gitOutput = string.Join(Environment.NewLine, result.PullOutput.Trim(), result.PullError.Trim()).Trim();
+        foreach (var line in SplitLogLines(gitOutput))
+        {
+            AppendLog("git pull: " + line);
+        }
+    }
+
+    private static string BuildUpdateSummary(SafeUpdateResult result)
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine(result.HeadChanged
+            ? $"Update gezogen: {result.HeadBefore} → {result.HeadAfter}"
+            : $"Keine neuen Commits ({result.HeadAfter}).");
+        builder.AppendLine();
+
+        if (result.Backup.RelativeFiles.Count == 0)
+        {
+            builder.AppendLine("Keine lokalen/geänderten Benchmarkdaten in archive/, artifacts/ oder results/ gefunden.");
+        }
+        else
+        {
+            builder.AppendLine($"Lokale Benchmarkdaten vorher gesichert: {result.Backup.RelativeFiles.Count} Datei(en).");
+            builder.AppendLine(result.Backup.BackupRoot);
+            builder.AppendLine($"Wiederhergestellt: {result.Restore.RestoredMissingFiles}; unverändert: {result.Restore.UnchangedFiles}; Konfliktkopien: {result.Restore.ConflictCopies.Count}.");
+
+            if (result.Restore.ConflictCopies.Count > 0)
+            {
+                builder.AppendLine("Konfliktkopien wurden mit .local-update-* im jeweiligen Datenordner abgelegt.");
+            }
+        }
+
+        builder.AppendLine();
+        builder.AppendLine("Hinweis: Falls Quellcode aktualisiert wurde, die GUI schließen und setup.bat/start.vbs erneut ausführen.");
+        return builder.ToString().TrimEnd();
     }
 
     private async void RefreshModelsButton_Click(object sender, RoutedEventArgs e)
@@ -1634,6 +1750,7 @@ public partial class MainWindow : Window
 
     private void SetBusy(bool busy, bool benchmarkRunning)
     {
+        UpdateButton.IsEnabled = !busy;
         RefreshModelsButton.IsEnabled = !busy;
         StartBenchmarkButton.IsEnabled = !busy;
         ServerUrlTextBox.IsEnabled = !busy;
@@ -1682,6 +1799,360 @@ public partial class MainWindow : Window
             UseShellExecute = true
         });
     }
+
+    private SafeUpdateResult RunSafeRepositoryUpdate()
+    {
+        var rootResult = RunGit(_repositoryRoot, "rev-parse", "--show-toplevel");
+        if (rootResult.ExitCode != 0)
+        {
+            throw new InvalidOperationException("Update ist nur in einem Git-Checkout möglich.\n\n" + CombineProcessOutput(rootResult));
+        }
+
+        var repositoryRoot = Path.GetFullPath(rootResult.StandardOutput.Trim());
+        var headBefore = RunGitOrThrow(repositoryRoot, "rev-parse", "--short", "HEAD").StandardOutput.Trim();
+        var localDataFiles = FindLocalBenchmarkDataFiles(repositoryRoot);
+        var backup = BackupLocalBenchmarkData(repositoryRoot, localDataFiles);
+
+        var pullResult = RunGit(repositoryRoot, "pull", "--ff-only");
+        if (pullResult.ExitCode != 0)
+        {
+            var backupHint = backup.RelativeFiles.Count > 0
+                ? $"\n\nLokale Benchmarkdaten wurden vorher gesichert unter:\n{backup.BackupRoot}"
+                : string.Empty;
+
+            throw new InvalidOperationException("git pull --ff-only ist fehlgeschlagen. Es wurde kein reset/clean ausgeführt." +
+                                                backupHint + "\n\n" + CombineProcessOutput(pullResult));
+        }
+
+        BenchmarkDataRestoreResult restore;
+        try
+        {
+            restore = RestoreLocalBenchmarkData(repositoryRoot, backup);
+        }
+        catch (Exception ex)
+        {
+            var backupHint = backup.RelativeFiles.Count > 0 ? $"\nBackup: {backup.BackupRoot}" : string.Empty;
+            throw new InvalidOperationException("Update wurde gezogen, aber lokale Benchmarkdaten konnten nicht vollständig zurückgeschrieben werden." +
+                                                backupHint + "\n\n" + ex.Message, ex);
+        }
+
+        var headAfter = RunGitOrThrow(repositoryRoot, "rev-parse", "--short", "HEAD").StandardOutput.Trim();
+        return new SafeUpdateResult(repositoryRoot, headBefore, headAfter, pullResult.StandardOutput, pullResult.StandardError, backup, restore);
+    }
+
+    private static IReadOnlyList<string> FindLocalBenchmarkDataFiles(string repositoryRoot)
+    {
+        var statusArguments = new List<string>
+        {
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--ignored=matching",
+            "--untracked-files=all",
+            "--",
+        };
+        statusArguments.AddRange(ProtectedBenchmarkDataDirectories);
+
+        var status = RunGitOrThrow(repositoryRoot, statusArguments.ToArray());
+        var files = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var entries = status.StandardOutput.Split('\0', StringSplitOptions.RemoveEmptyEntries);
+
+        for (var i = 0; i < entries.Length; i++)
+        {
+            var entry = entries[i];
+            if (entry.Length < 4)
+            {
+                continue;
+            }
+
+            var code = entry[..2];
+            var relativePath = entry[3..];
+            AddLocalDataPath(repositoryRoot, relativePath, files);
+
+            if ((code[0] == 'R' || code[0] == 'C') && i + 1 < entries.Length)
+            {
+                AddLocalDataPath(repositoryRoot, entries[++i], files);
+            }
+        }
+
+        return files.OrderBy(path => path, StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    private static void AddLocalDataPath(string repositoryRoot, string relativePath, HashSet<string> files)
+    {
+        var normalized = NormalizeGitRelativePath(relativePath);
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return;
+        }
+
+        var fullPath = Path.Combine(repositoryRoot, normalized);
+        if (Directory.Exists(fullPath))
+        {
+            foreach (var file in Directory.EnumerateFiles(fullPath, "*", SearchOption.AllDirectories))
+            {
+                files.Add(NormalizeRelativePath(Path.GetRelativePath(repositoryRoot, file)));
+            }
+        }
+        else if (File.Exists(fullPath))
+        {
+            files.Add(NormalizeRelativePath(Path.GetRelativePath(repositoryRoot, fullPath)));
+        }
+    }
+
+    private static BenchmarkDataBackup BackupLocalBenchmarkData(string repositoryRoot, IReadOnlyList<string> relativeFiles)
+    {
+        if (relativeFiles.Count == 0)
+        {
+            return new BenchmarkDataBackup(string.Empty, []);
+        }
+
+        var backupRoot = Path.Combine(
+            GetLocalAppDataRoot(),
+            "SuperCalcBenchmark",
+            "UpdateBackups",
+            DateTime.Now.ToString("yyyyMMdd-HHmmss-fff"));
+        var copiedFiles = new List<string>();
+
+        foreach (var relativeFile in relativeFiles)
+        {
+            var source = Path.Combine(repositoryRoot, relativeFile);
+            if (!File.Exists(source))
+            {
+                continue;
+            }
+
+            var destination = Path.Combine(backupRoot, relativeFile);
+            CreateParentDirectory(destination);
+            File.Copy(source, destination, overwrite: false);
+            copiedFiles.Add(relativeFile);
+        }
+
+        return copiedFiles.Count == 0
+            ? new BenchmarkDataBackup(string.Empty, [])
+            : new BenchmarkDataBackup(backupRoot, copiedFiles);
+    }
+
+    private static BenchmarkDataRestoreResult RestoreLocalBenchmarkData(string repositoryRoot, BenchmarkDataBackup backup)
+    {
+        if (backup.RelativeFiles.Count == 0 || string.IsNullOrWhiteSpace(backup.BackupRoot))
+        {
+            return new BenchmarkDataRestoreResult(0, 0, []);
+        }
+
+        var restoredMissingFiles = 0;
+        var unchangedFiles = 0;
+        var conflictCopies = new List<string>();
+        var stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss-fff");
+
+        foreach (var relativeFile in backup.RelativeFiles)
+        {
+            var backupFile = Path.Combine(backup.BackupRoot, relativeFile);
+            if (!File.Exists(backupFile))
+            {
+                continue;
+            }
+
+            var target = Path.Combine(repositoryRoot, relativeFile);
+            CreateParentDirectory(target);
+
+            if (!File.Exists(target))
+            {
+                File.Copy(backupFile, target, overwrite: false);
+                restoredMissingFiles++;
+                continue;
+            }
+
+            if (FilesHaveSameContent(backupFile, target))
+            {
+                unchangedFiles++;
+                continue;
+            }
+
+            var conflictRelativePath = BuildConflictCopyRelativePath(relativeFile, stamp);
+            var conflictPath = EnsureUniqueFilePath(Path.Combine(repositoryRoot, conflictRelativePath));
+            CreateParentDirectory(conflictPath);
+            File.Copy(backupFile, conflictPath, overwrite: false);
+            conflictCopies.Add(NormalizeRelativePath(Path.GetRelativePath(repositoryRoot, conflictPath)));
+        }
+
+        return new BenchmarkDataRestoreResult(restoredMissingFiles, unchangedFiles, conflictCopies);
+    }
+
+    private static ProcessRunResult RunGitOrThrow(string workingDirectory, params string[] arguments)
+    {
+        var result = RunGit(workingDirectory, arguments);
+        if (result.ExitCode != 0)
+        {
+            throw new InvalidOperationException($"git {string.Join(' ', arguments)} fehlgeschlagen:\n\n" + CombineProcessOutput(result));
+        }
+
+        return result;
+    }
+
+    private static ProcessRunResult RunGit(string workingDirectory, params string[] arguments)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "git",
+            WorkingDirectory = workingDirectory,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8
+        };
+
+        foreach (var argument in arguments)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+
+        startInfo.Environment["GIT_TERMINAL_PROMPT"] = "0";
+
+        try
+        {
+            using var process = Process.Start(startInfo) ?? throw new InvalidOperationException("git konnte nicht gestartet werden.");
+            var outputTask = process.StandardOutput.ReadToEndAsync();
+            var errorTask = process.StandardError.ReadToEndAsync();
+
+            if (!process.WaitForExit((int)TimeSpan.FromMinutes(10).TotalMilliseconds))
+            {
+                try
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+                catch
+                {
+                    // Best-effort cleanup after a timeout.
+                }
+
+                throw new TimeoutException($"git {string.Join(' ', arguments)} hat länger als 10 Minuten gedauert und wurde beendet.");
+            }
+
+            Task.WaitAll(outputTask, errorTask);
+            return new ProcessRunResult(process.ExitCode, outputTask.Result, errorTask.Result);
+        }
+        catch (System.ComponentModel.Win32Exception ex)
+        {
+            throw new InvalidOperationException("git konnte nicht gestartet werden. Ist Git installiert und im PATH?", ex);
+        }
+    }
+
+    private static string CombineProcessOutput(ProcessRunResult result)
+    {
+        var combined = string.Join(Environment.NewLine, result.StandardOutput.Trim(), result.StandardError.Trim()).Trim();
+        return string.IsNullOrWhiteSpace(combined) ? $"Exit code {result.ExitCode}" : combined;
+    }
+
+    private static IEnumerable<string> SplitLogLines(string text) =>
+        text.Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+    private static string NormalizeGitRelativePath(string relativePath) =>
+        relativePath.Replace('/', Path.DirectorySeparatorChar).TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+    private static string NormalizeRelativePath(string relativePath) =>
+        relativePath.Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar);
+
+    private static string BuildConflictCopyRelativePath(string relativePath, string stamp)
+    {
+        var directory = Path.GetDirectoryName(relativePath);
+        var fileName = Path.GetFileNameWithoutExtension(relativePath);
+        var extension = Path.GetExtension(relativePath);
+        var conflictFileName = $"{fileName}.local-update-{stamp}{extension}";
+        return string.IsNullOrEmpty(directory) ? conflictFileName : Path.Combine(directory, conflictFileName);
+    }
+
+    private static string EnsureUniqueFilePath(string path)
+    {
+        if (!File.Exists(path))
+        {
+            return path;
+        }
+
+        var directory = Path.GetDirectoryName(path) ?? string.Empty;
+        var fileName = Path.GetFileNameWithoutExtension(path);
+        var extension = Path.GetExtension(path);
+
+        for (var i = 2; ; i++)
+        {
+            var candidate = Path.Combine(directory, $"{fileName}-{i}{extension}");
+            if (!File.Exists(candidate))
+            {
+                return candidate;
+            }
+        }
+    }
+
+    private static bool FilesHaveSameContent(string leftPath, string rightPath)
+    {
+        var leftInfo = new FileInfo(leftPath);
+        var rightInfo = new FileInfo(rightPath);
+        if (!leftInfo.Exists || !rightInfo.Exists || leftInfo.Length != rightInfo.Length)
+        {
+            return false;
+        }
+
+        using var left = File.OpenRead(leftPath);
+        using var right = File.OpenRead(rightPath);
+        var leftBuffer = new byte[81920];
+        var rightBuffer = new byte[81920];
+
+        while (true)
+        {
+            var leftRead = left.Read(leftBuffer, 0, leftBuffer.Length);
+            var rightRead = right.Read(rightBuffer, 0, rightBuffer.Length);
+
+            if (leftRead != rightRead)
+            {
+                return false;
+            }
+
+            if (leftRead == 0)
+            {
+                return true;
+            }
+
+            if (!leftBuffer.AsSpan(0, leftRead).SequenceEqual(rightBuffer.AsSpan(0, rightRead)))
+            {
+                return false;
+            }
+        }
+    }
+
+    private static void CreateParentDirectory(string path)
+    {
+        var directory = Path.GetDirectoryName(path);
+        if (!string.IsNullOrWhiteSpace(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+    }
+
+    private static string GetLocalAppDataRoot()
+    {
+        var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        return string.IsNullOrWhiteSpace(localAppData) ? Path.GetTempPath() : localAppData;
+    }
+
+    private sealed record SafeUpdateResult(
+        string RepositoryRoot,
+        string HeadBefore,
+        string HeadAfter,
+        string PullOutput,
+        string PullError,
+        BenchmarkDataBackup Backup,
+        BenchmarkDataRestoreResult Restore)
+    {
+        public bool HeadChanged => !string.Equals(HeadBefore, HeadAfter, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private sealed record BenchmarkDataBackup(string BackupRoot, IReadOnlyList<string> RelativeFiles);
+
+    private sealed record BenchmarkDataRestoreResult(int RestoredMissingFiles, int UnchangedFiles, IReadOnlyList<string> ConflictCopies);
+
+    private sealed record ProcessRunResult(int ExitCode, string StandardOutput, string StandardError);
 
     private static string FindRepositoryRoot()
     {

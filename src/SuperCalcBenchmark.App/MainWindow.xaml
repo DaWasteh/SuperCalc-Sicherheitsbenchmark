@@ -18,7 +18,7 @@
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <DockPanel Grid.Row="0" Margin="4,0,4,8">
+        <DockPanel Grid.Row="0" Margin="4,0,4,8" LastChildFill="False">
             <StackPanel DockPanel.Dock="Left">
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                     <TextBlock Text="SuperCalc Security Benchmark" FontSize="24" FontWeight="SemiBold" VerticalAlignment="Center" />
@@ -34,7 +34,14 @@
                 </StackPanel>
                 <TextBlock Text="Llama.cpp-Server refreshen, Modell auswählen, Benchmark starten — Run 3 Truth-Audit läuft automatisch mit." Foreground="{DynamicResource TextSecondaryBrush}" />
             </StackPanel>
-            <TextBlock x:Name="DotNetInfoTextBlock" DockPanel.Dock="Right" VerticalAlignment="Center" Foreground="{DynamicResource TextSecondaryBrush}" />
+            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                <Button x:Name="UpdateButton"
+                        Content="Update ziehen"
+                        Margin="0,0,12,0"
+                        Click="UpdateButton_Click"
+                        ToolTip="Führt git pull --ff-only aus. Lokale Benchmarkdaten in archive/, artifacts/ und results/ werden vorher gesichert und nicht überschrieben." />
+                <TextBlock x:Name="DotNetInfoTextBlock" VerticalAlignment="Center" Foreground="{DynamicResource TextSecondaryBrush}" />
+            </StackPanel>
         </DockPanel>
 
         <GroupBox Grid.Row="1" Header="Benchmark starten">
