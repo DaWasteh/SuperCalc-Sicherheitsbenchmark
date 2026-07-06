@@ -80,7 +80,7 @@
                         <CheckBox x:Name="SkipResponseFormatCheckBox" Content="response_format überspringen" IsChecked="True" VerticalAlignment="Center" Margin="16,4,4,4" ToolTip="Kompatibler mit llama-web-ui; JSON wird weiterhin per Parser extrahiert." />
                         <CheckBox x:Name="DisableThinkingCheckBox" Content="Thinking deaktivieren (Debug)" IsChecked="False" VerticalAlignment="Center" Margin="16,4,4,4" />
                         <TextBlock Text="Quant (optional)" VerticalAlignment="Center" Margin="16,4,4,4" />
-                        <TextBox x:Name="QuantTextBox" Width="110" ToolTip="Nur nötig, wenn die Modell-ID den Quant nicht enthält, z.B. Q4_K_M. Wird sonst automatisch erkannt." />
+                        <TextBox x:Name="QuantTextBox" Width="110" ToolTip="Leer lassen für Auto-Erkennung. Nur setzen, wenn Modell-ID/Server den Quant nicht liefern; Refresh Models leert manuelle Werte." />
                         <Button x:Name="PreviewPromptButton" Content="Prompt anzeigen" Margin="16,4,4,4" Click="PreviewPromptButton_Click" ToolTip="Zeigt den generierten Prompt und die erste Request-JSON, ohne den Server aufzurufen." />
                         <TextBlock Text="Output-Ordner optional" VerticalAlignment="Center" Margin="16,4,4,4" />
                         <TextBox x:Name="OutputDirectoryTextBox" Width="320" ToolTip="Leer lassen für %LOCALAPPDATA%\SuperCalcBenchmark\Runs" />

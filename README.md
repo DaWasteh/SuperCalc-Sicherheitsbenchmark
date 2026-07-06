@@ -270,7 +270,7 @@ archive/
       20260621-150188_qwen3-coder-30b-a3b-instruct.json
 ```
 
-The model family and quant are parsed automatically from the llama.cpp model id / GGUF name (`Q4_K_M`, `IQ3_XXS`, `Q8_0`, `F16`, …). When your server reports an alias that does not encode the quant, set it explicitly before the run — **Quant (optional)** in the GUI options, or `--quant Q4_K_M` on the CLI. If a run is already archived as `unknown-quant`, open the JSON scorecard under `archive/` and edit `modelFamily` and/or `quant` manually; `groupKey` and the folder name are recomputed/ignored on load, so you do not have to move files. Then click **Archiv neu laden** or rerun `archive-list`/`compare`. Because every quant of the same model shares a family, you can line up, for example, all `qwen3-coder-30b` quants against each other. The JSON scorecards are committed to the repo so run history travels with any clone; only the generated reports under `archive/_reports/` are git-ignored. Archiving is on by default and writes to `./archive`; pass `--no-archive` (or `--archive <dir>`) to change that.
+The model family and quant are parsed automatically from the llama.cpp model id / GGUF name (`Q4_K_M`, `IQ3_XXS`, `Q8_0`, `F16`, …). When your server reports an alias that does not encode the quant, set it explicitly before the run — **Quant (optional)** in the GUI options, or `--quant Q4_K_M` on the CLI. The GUI clears the Quant field on every **Refresh Models** / model-selection change so a one-off manual override cannot accidentally be reused when the same model family is loaded in another quant. If a run is already archived as `unknown-quant`, open the JSON scorecard under `archive/` and edit `modelFamily` and/or `quant` manually; `groupKey` and the folder name are recomputed/ignored on load, so you do not have to move files. Then click **Archiv neu laden** or rerun `archive-list`/`compare`. Because every quant of the same model shares a family, you can line up, for example, all `qwen3-coder-30b` quants against each other. The JSON scorecards are committed to the repo so run history travels with any clone; only the generated reports under `archive/_reports/` are git-ignored. Archiving is on by default and writes to `./archive`; pass `--no-archive` (or `--archive <dir>`) to change that.
 
 The **Vergleich** tab in the GUI shows one row per model + quant with score, critical recall, evidence fidelity, hallucination rate, stability, Run-2 delta, Run-3 audit/accountability score, median, standard deviation, min/max, precision, recall, F1, and TP/FP/Missed counts. Pick a single model family to compare only its quants, switch between **Durchschnitt** (mean across all runs in a group), **Median**, and **Bester Run**, choose **Primary / Run 1 / Run 2 / Delta**, and click **Diagramme öffnen (HTML)** for a graphical view. For guaranteed model-family/quant corrections, click **Archiv bearbeiten**, edit `modelFamily` and/or `quant` in the JSON scorecards, then reload the archive.
 
@@ -278,7 +278,7 @@ Archive scorecards now use schema v3 (v1/v2 still load) and keep compact diagnos
 
 The generated HTML contains client-side filters/search (family, quant, severity, category, CWE, score/runs/stddev/FP thresholds, official/source-hash/loop/reasoning toggles) and multiple views:
 
-- **main metric bar chart** (score, critical recall, F1, FP-rate, stability, Run2-delta, thinking coverage, accountability, overclaim rate, duration),
+- **main metric bar chart** (score, critical recall, F1, FP-rate, stability, Run2-delta, thinking coverage, accountability, overclaim rate, duration) with min/max error bars where multiple runs exist for the selected bar metric,
 - **severity recall chart** and **vulnerability heatmap** (1.0 full, 0.5 partial, 0.0 missed; delta view highlights improvements/regressions),
 - **Run 1 → Run 2 slope chart**, quality health chart, and optional Denken-vs-Sagen chart,
 - sortable/expandable table with per-run drilldown and CSV export of the currently filtered rows.
@@ -410,6 +410,7 @@ This project is distributed under the [MIT License](LICENSE).
 
 | Version | Date       | Highlights                                                                                       |
 | :-----: | :--------: | ------------------------------------------------------------------------------------------------ |
+| v0.6.2  | 2026-07-06 | GUI clears manual Quant on model refresh/model changes, comparison HTML draws min/max error bars for repeated bar metrics, and Ornith 1.0 9B BF16/Q8 benchmark scorecards are included |
 |  v3.3   | 2026-06-28 | GUI always runs visible Run 3 Truth-Audit; Accountability/Honesty UI + archive metrics; official-v2 scoring, repeats, adjudication, and schema-v3 diagnostics |
 |  v3.2.1 | 2026-06-27 | Archive schema v2; comparison filters by severity/CWE/category, heatmap, Run1/Run2/delta views, stability/quality/parse diagnostics, filtered CSV export |
 |  v3.2   | 2026-06-26 | More tolerant JSON parsing; archive comparison median mode plus min–max uncertainty bars and score distribution columns |

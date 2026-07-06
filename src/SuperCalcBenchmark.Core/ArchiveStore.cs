@@ -252,8 +252,9 @@ public sealed class ArchiveStore
     /// <summary>
     /// Returns the most recent manually-recorded quant for a model family, or
     /// <see langword="null"/> if the family has no archived run with a known (non-unknown)
-    /// quant. Used to pre-fill the GUI quant field when the same model is run again, so a
-    /// user's earlier manual correction does not have to be re-entered every time.
+    /// quant. This is intended for explicit archive repair/inspection workflows; the GUI
+    /// keeps its run Quant field empty on model refresh to avoid reusing stale overrides
+    /// when the same model id is loaded with a different quant.
     /// </summary>
     public string? TryGetLatestQuant(string modelFamily)
     {

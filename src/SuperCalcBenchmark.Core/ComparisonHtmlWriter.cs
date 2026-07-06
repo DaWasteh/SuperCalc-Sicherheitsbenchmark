@@ -262,6 +262,41 @@ public sealed class ComparisonHtmlWriter
   const meta = document.getElementById("meta");
   const content = document.getElementById("content");
   const charts = {};
+  const horizontalErrorBarsPlugin = {
+    id: "horizontalErrorBars",
+    afterDatasetsDraw(chart, _args, pluginOptions) {
+      const xScale = chart.scales?.x;
+      const dataset = chart.data?.datasets?.[0];
+      const ranges = dataset?.errorRanges || [];
+      if (!xScale || !ranges.length) return;
+
+      const meta = chart.getDatasetMeta(0);
+      const ctx = chart.ctx;
+      ctx.save();
+      ctx.strokeStyle = pluginOptions?.color || cssVar("--fg") || "#111827";
+      ctx.lineWidth = pluginOptions?.lineWidth || 1.6;
+      ctx.globalAlpha = pluginOptions?.alpha || 0.92;
+
+      meta.data.forEach((bar, i) => {
+        const range = ranges[i];
+        if (!range || !Number.isFinite(range.min) || !Number.isFinite(range.max) || range.max <= range.min) return;
+        const y = bar.y;
+        const xMin = xScale.getPixelForValue(range.min);
+        const xMax = xScale.getPixelForValue(range.max);
+        const cap = Math.max(5, Math.min(12, (bar.height || 14) * 0.38));
+        ctx.beginPath();
+        ctx.moveTo(xMin, y);
+        ctx.lineTo(xMax, y);
+        ctx.moveTo(xMin, y - cap);
+        ctx.lineTo(xMin, y + cap);
+        ctx.moveTo(xMax, y - cap);
+        ctx.lineTo(xMax, y + cap);
+        ctx.stroke();
+      });
+
+      ctx.restore();
+    }
+  };
   let sortKey = "score";
   let sortDir = -1;
 
@@ -330,7 +365,7 @@ public sealed class ComparisonHtmlWriter
     </div>
     ${hasChart ? `
       <div class="grid two">
-        <div class="card metric-card" data-metric-id="mainMetric">${metricHeader("mainMetric","Hauptmetrik", "barTitle")}<div class="note">Fehlerbalken zeigen Score-Min/Max der Gruppe; Metrik und Run-Sicht sind clientseitig umschaltbar.</div><div class="chart-box"><canvas id="barChart"></canvas></div></div>
+        <div class="card metric-card" data-metric-id="mainMetric">${metricHeader("mainMetric","Hauptmetrik", "barTitle")}<div class="note">Fehlerbalken zeigen Min/Max-Streuung bei Gruppen mit N ≥ 2, sofern die gewählte Balkenmetrik eine Run-Verteilung hat.</div><div class="chart-box"><canvas id="barChart"></canvas></div></div>
         <div class="card metric-card" data-metric-id="severityRecall">${metricHeader("severityRecall","Severity-Recall")}<div class="chart-box"><canvas id="severityChart"></canvas></div></div>
       </div>
       <div class="grid two">
@@ -434,14 +469,49 @@ public sealed class ComparisonHtmlWriter
   }
   function scoreForRunView(s, runView) { if (runView === "run1") return s.run1Score || s.score; if (runView === "run2") return s.run2Score || s.score; if (runView === "delta") return s.run2Delta || 0; return s.score; }
   function metricLabel(st) { return ({score:"Gesamt-Score",criticalRecall:"Critical Recall %",highCriticalRecall:"High+Critical Recall %",f1:"F1 %",fpRate:"FP-Rate %",stability:"Stability %",run2Delta:"Run2-Delta",thinkingCoverage:"Thinking Coverage %",evidenceFidelity:"Evidence Fidelity %",locationAccuracy:"Location Accuracy %",hallucinationRate:"Hallucination Rate %",evaluationConfidence:"Evaluation Confidence %",accountability:"Truth-Audit Accountability",overclaimRate:"Overclaim Rate %",duration:"Duration sec"})[st.metric] || "Metrik"; }
+  function metricErrorRange(s, st) {
+    if ((s.runCount || 0) < 2) return null;
+    const values = metricDistributionValues(s, st).filter(Number.isFinite);
+    let min = values.length >= 2 ? Math.min(...values) : null;
+    let max = values.length >= 2 ? Math.max(...values) : null;
+    if ((min === null || max === null) && st.metric === "score" && Number.isFinite(s.scoreMin) && Number.isFinite(s.scoreMax)) {
+      min = s.scoreMin; max = s.scoreMax;
+    }
+    if (!Number.isFinite(min) || !Number.isFinite(max) || max <= min) return null;
+    return {min, max, label:metricLabel(st)};
+  }
+  function metricDistributionValues(s, st) {
+    const details = s.details || [];
+    if (st.metric === "score") {
+      if (st.runView === "run1") return details.map(d => d.run1Score);
+      if (st.runView === "run2") return details.map(d => d.run2Score);
+      if (st.runView === "delta") return details.map(d => d.run2Delta);
+      return details.map(d => d.score);
+    }
+    if (st.metric === "run2Delta") return details.map(d => d.run2Delta);
+    if (st.metric === "duration") return details.map(d => d.durationSec);
+    return [];
+  }
+  function errorScaleBounds(ranges) {
+    const valid = ranges.filter(r => r && Number.isFinite(r.min) && Number.isFinite(r.max));
+    if (!valid.length) return {};
+    const min = Math.min(...valid.map(r => r.min));
+    const max = Math.max(...valid.map(r => r.max));
+    if (!Number.isFinite(min) || !Number.isFinite(max) || max <= min) return {};
+    const pad = Math.max(1, (max - min) * 0.05);
+    return {suggestedMin:min - pad, suggestedMax:max + pad};
+  }
 
   function renderCharts(rows, axisIdx, st) {
     const metricName = metricLabel(st);
+    const barErrorRanges = rows.map(s => metricErrorRange(s, st));
+    const xScaleBounds = errorScaleBounds(barErrorRanges);
     document.getElementById("barTitle").textContent = metricName;
     updateChart("barChart", {
       type:"bar",
-      data:{ labels:rows.map(s=>s.label), datasets:[{ label:metricName, data:rows.map(s=>metricValue(s,st)), backgroundColor:rows.map(s=>s.color+"cc"), borderColor:rows.map(s=>s.color), borderWidth:1 }]},
-      options:{ indexAxis:"y", responsive:true, maintainAspectRatio:false, scales:{ x:{ beginAtZero: st.runView !== "delta", title:{display:true,text:metricName} }}, plugins:{ legend:{display:false}, tooltip:{callbacks:{afterBody:items=>{ const s=rows[items[0].dataIndex]; return [`Runs: ${s.runCount}`,`Score Median/Mittel: ${fmt(s.scoreMedian)} / ${fmt(s.scoreMean)} · σ ${fmt(s.scoreStdDev)} · IQR ${fmt(s.scoreIqr)}`,`Run1→Run2: ${fmt(s.run1Score)} → ${fmt(s.run2Score)} (${fmtSigned(s.run2Delta)})`]; }}}}}
+      data:{ labels:rows.map(s=>s.label), datasets:[{ label:metricName, data:rows.map(s=>metricValue(s,st)), errorRanges:barErrorRanges, backgroundColor:rows.map(s=>s.color+"cc"), borderColor:rows.map(s=>s.color), borderWidth:1 }]},
+      options:{ indexAxis:"y", responsive:true, maintainAspectRatio:false, scales:{ x:{ beginAtZero: st.runView !== "delta", title:{display:true,text:metricName}, ...xScaleBounds }}, plugins:{ horizontalErrorBars:{color:cssVar("--fg"),lineWidth:1.6}, legend:{display:false}, tooltip:{callbacks:{afterBody:items=>{ const s=rows[items[0].dataIndex]; const range=barErrorRanges[items[0].dataIndex]; const lines=[`Runs: ${s.runCount}`,`Score Median/Mittel: ${fmt(s.scoreMedian)} / ${fmt(s.scoreMean)} · σ ${fmt(s.scoreStdDev)} · IQR ${fmt(s.scoreIqr)}`]; if (range) lines.push(`Fehlerbalken: ${fmt(range.min)}–${fmt(range.max)} (${range.label})`); else if (s.runCount >= 2) lines.push("Fehlerbalken: für diese Metrik nicht verfügbar"); lines.push(`Run1→Run2: ${fmt(s.run1Score)} → ${fmt(s.run2Score)} (${fmtSigned(s.run2Delta)})`); return lines; }}}}},
+      plugins:[horizontalErrorBarsPlugin]
     });
     updateChart("severityChart", { type:"bar", data:{ labels:rows.map(s=>s.label), datasets:[
       {label:"Critical",data:rows.map(s=>s.criticalRecall),backgroundColor:"#dc2626cc"},{label:"High",data:rows.map(s=>s.highRecall),backgroundColor:"#f97316cc"},{label:"Medium",data:rows.map(s=>s.mediumRecall),backgroundColor:"#eab308cc"},{label:"Low",data:rows.map(s=>s.lowRecall),backgroundColor:"#22c55ecc"}]},
@@ -562,6 +632,7 @@ public sealed class ComparisonHtmlWriter
   function uniq(values) { return [...new Set(values.filter(v => v !== null && v !== undefined && v !== ""))].sort((a,b)=>String(a).localeCompare(String(b))); }
   function fmt(v) { return typeof v === "number" && Number.isFinite(v) ? v.toFixed(1) : "n/a"; }
   function fmtSigned(v) { return typeof v === "number" && Number.isFinite(v) ? (v>0?"+":"") + v.toFixed(1) : "n/a"; }
+  function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
   function esc(v) { return String(v ?? "").replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch])); }
   function csv(v) { v = String(v ?? ""); return /[",\n]/.test(v) ? '"' + v.replace(/"/g,'""') + '"' : v; }
   function axisTitle(a) { return `${a.id}${a.title?' — '+a.title:''} · ${a.severity||''} · ${a.category||''} · ${(a.cwe||[]).join('/')}`; }

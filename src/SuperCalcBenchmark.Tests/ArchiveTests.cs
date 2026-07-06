@@ -181,8 +181,9 @@ internal static partial class TestRunner
             Assert(store.TryGetLatestQuant("custom-model") is null, "family with only unknown-quant should return null");
             Assert(store.TryGetLatestQuant("never-archived") is null, "unknown family should return null");
 
-            // After a manual quant correction, the latest known quant must be retrievable so the
-            // GUI can pre-fill it on the next run of the same model.
+            // After a manual quant correction, the latest known quant remains retrievable for
+            // explicit archive repair/inspection tools. The GUI run field intentionally stays
+            // empty on model refresh so stale overrides are not reused for another quant.
             var group = store.LoadGroups().Single();
             store.UpdateIdentity(group.Records, "custom-model", "Q5_K_M");
             Assert(store.TryGetLatestQuant("custom-model") == "Q5_K_M", "latest manually corrected quant should be returned");
@@ -360,12 +361,15 @@ internal static partial class TestRunner
         {
             var store = new ArchiveStore(tempRoot);
             store.Save(FakeResult("Qwen3-Coder-30B-Q4_K_M.gguf", 70, 7, 0, 0, 3, includeReasoning: true));
+            store.Save(FakeResult("Qwen3-Coder-30B-Q4_K_M.gguf", 82, 8, 0, 0, 2));
 
             var report = ComparisonReport.Build(store.LoadGroups(), "supercalc-v3");
             var writer = new ComparisonHtmlWriter();
             var html = writer.BuildHtml(report);
 
             Assert(html.Contains("barChart", StringComparison.Ordinal), "html should contain the bar chart canvas");
+            Assert(html.Contains("horizontalErrorBars", StringComparison.Ordinal), "html should draw uncertainty bars on the main bar chart");
+            Assert(html.Contains("errorRanges", StringComparison.Ordinal), "html should attach min/max ranges to bar datasets");
             Assert(html.Contains("radarChart", StringComparison.Ordinal), "html should contain the radar chart canvas");
             Assert(html.Contains("reasoningChart", StringComparison.Ordinal), "html should include the Denken-vs-Sagen chart when diagnostics exist");
             Assert(html.Contains("heatmap", StringComparison.Ordinal), "html should include the vulnerability heatmap");
@@ -384,9 +388,11 @@ internal static partial class TestRunner
             Assert(doc.RootElement.GetProperty("series").GetArrayLength() == 1, "payload should contain one series");
             Assert(doc.RootElement.TryGetProperty("axis", out _), "payload should expose vulnerability metadata axis");
             var series = doc.RootElement.GetProperty("series")[0];
+            Assert(series.GetProperty("runCount").GetInt32() == 2, "payload should preserve repeated-run count for uncertainty bars");
             Assert(series.TryGetProperty("scoreMedian", out _), "payload should expose scoreMedian for uncertainty tables");
-            Assert(series.TryGetProperty("scoreMin", out _), "payload should expose scoreMin for uncertainty bars");
-            Assert(series.TryGetProperty("scoreMax", out _), "payload should expose scoreMax for uncertainty bars");
+            Assert(series.TryGetProperty("scoreMin", out var scoreMin), "payload should expose scoreMin for uncertainty bars");
+            Assert(series.TryGetProperty("scoreMax", out var scoreMax), "payload should expose scoreMax for uncertainty bars");
+            Assert(scoreMax.GetDouble() > scoreMin.GetDouble(), "fixture should produce a visible min/max uncertainty range");
             Assert(series.TryGetProperty("criticalRecall", out _), "payload should expose severity metrics");
             Assert(series.TryGetProperty("parseSuccessRate", out _), "payload should expose parse/completion health metrics");
             Assert(series.TryGetProperty("evidenceFidelity", out _), "payload should expose evidence fidelity drilldown metrics");

@@ -424,7 +424,9 @@ public partial class MainWindow : Window
     private async Task RefreshModelsAsync()
     {
         SetBusy(true, benchmarkRunning: false);
+        QuantTextBox.Text = string.Empty;
         StatusTextBlock.Text = "Modelle werden geladen...";
+        AppendLog("Quant-Eingabe zurückgesetzt; Refresh nutzt wieder Auto-Erkennung/leeres Feld.");
         AppendLog($"GET {ServerUrlTextBox.Text.Trim().TrimEnd('/')}/v1/models");
 
         try
@@ -476,67 +478,61 @@ public partial class MainWindow : Window
             return;
         }
 
-        PrefillQuantForModel(model);
+        ResetQuantFieldForModel(model);
     }
 
     /// <summary>
-    /// Pre-fills the optional Quant field. Quant precedence for the field value:
-    ///   1. If the model id encodes a quant (name-based detection) — leave the field empty;
-    ///      ModelIdentity resolves it automatically at archive time.
-    ///   2. Else if llama-server reports an authoritative file type (PR #25134, /v1/models
-    ///      meta.ftype) — leave the field empty too; the BenchmarkRunner reads it at run
-    ///      time so the resolved quant is tagged <c>QuantSource.Server</c>, not manual.
-    ///      The detected token is surfaced in the log for transparency.
-    ///   3. Else fall back to the last manually corrected quant from the archive for the
-    ///      same model family, so a previously fixed value sticks across runs instead of
-    ///      every run re-landing as "unknown-quant".
-    /// The field is therefore only filled when neither auto-detection path can resolve the
-    /// quant, which keeps manual typing the rare exception.
+    /// Resets the optional Quant field whenever the selected/refreshed model changes.
+    /// If the model id or llama-server meta.ftype can resolve the quant automatically,
+    /// the field deliberately stays empty so the archived run is tagged as auto/server
+    /// detected instead of a manual override. We also intentionally do not pre-fill from
+    /// older archive corrections: the same model id/family can be reloaded with a different
+    /// quant, and a stale manual value would put the new run into the wrong bucket.
     /// </summary>
-    private async void PrefillQuantForModel(string model)
+    private async void ResetQuantFieldForModel(string model)
     {
+        QuantTextBox.Text = string.Empty;
+
         var identity = ModelIdentity.Parse(model);
         if (identity.QuantWasDetected)
         {
-            QuantTextBox.Text = string.Empty;
             return;
         }
 
         // Name-based detection failed: ask llama-server for the authoritative file type
         // (PR #25134). Short timeout so a cold/offline server never freezes model selection.
         var serverUrl = ServerUrlTextBox.Text.Trim();
-        if (!string.IsNullOrWhiteSpace(serverUrl))
+        if (string.IsNullOrWhiteSpace(serverUrl))
         {
-            try
-            {
-                using var client = new LlamaCppClient(TimeSpan.FromSeconds(5));
-                var ftype = await client.GetModelFtypeAsync(serverUrl, model).ConfigureAwait(true);
-                var serverQuant = ModelIdentity.NormalizeServerFtype(ftype);
-                if (!string.IsNullOrWhiteSpace(serverQuant))
-                {
-                    // Leave the field empty: the BenchmarkRunner re-fetches the ftype at run
-                    // time and tags the quant as server-detected rather than manual.
-                    QuantTextBox.Text = string.Empty;
-                    AppendLog($"Quant automatisch vom Server erkannt: {serverQuant}" +
-                              (string.Equals(ftype!.Trim(), serverQuant, StringComparison.Ordinal) ? string.Empty : $" (ftype \"{ftype!.Trim()}\")") +
-                              " — Eingabefeld bleibt frei, Korrektur möglich.");
-                    return;
-                }
-            }
-            catch
-            {
-                // Offline/unreachable server: fall through to the archive prefill.
-            }
+            return;
         }
 
         try
         {
-            var lastQuant = new ArchiveStore(ArchiveRoot).TryGetLatestQuant(identity.Family);
-            QuantTextBox.Text = lastQuant ?? string.Empty;
+            using var client = new LlamaCppClient(TimeSpan.FromSeconds(5));
+            var ftype = await client.GetModelFtypeAsync(serverUrl, model).ConfigureAwait(true);
+            var serverQuant = ModelIdentity.NormalizeServerFtype(ftype);
+            if (string.IsNullOrWhiteSpace(serverQuant))
+            {
+                return;
+            }
+
+            if (!string.Equals(ModelComboBox.SelectedItem?.ToString(), model, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            var manualText = QuantTextBox.Text.Trim();
+            AppendLog($"Quant automatisch vom Server erkannt: {serverQuant}" +
+                      (string.Equals(ftype!.Trim(), serverQuant, StringComparison.Ordinal) ? string.Empty : $" (ftype \"{ftype!.Trim()}\")") +
+                      (string.IsNullOrWhiteSpace(manualText)
+                          ? " — Eingabefeld bleibt frei, Korrektur möglich."
+                          : $" — manuelle Eingabe \"{manualText}\" bleibt als Override stehen."));
         }
         catch
         {
-            // An archive lookup problem must never block selecting a model.
+            // Offline/unreachable server: keep the field empty and let the user enter a
+            // one-off manual override if auto-detection is unavailable.
         }
     }
 
