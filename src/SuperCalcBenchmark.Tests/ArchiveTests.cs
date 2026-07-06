@@ -374,6 +374,7 @@ internal static partial class TestRunner
             Assert(html.Contains("reasoningChart", StringComparison.Ordinal), "html should include the Denken-vs-Sagen chart when diagnostics exist");
             Assert(html.Contains("heatmap", StringComparison.Ordinal), "html should include the vulnerability heatmap");
             Assert(html.Contains("openMetricModal", StringComparison.Ordinal), "html should include maximizable metric-card modal code");
+            Assert(html.Contains("card.addEventListener(\"click\"", StringComparison.Ordinal), "metric cards should maximize when clicking inside the tile");
             Assert(html.Contains("openHelpPopover", StringComparison.Ordinal), "html should include metric help popover code");
             Assert(html.Contains("aria-modal=\"true\"", StringComparison.Ordinal), "metric overlays should expose ARIA modal attributes");
             Assert(html.Contains("data-help-metric", StringComparison.Ordinal), "metric headings should include help buttons");
@@ -462,6 +463,9 @@ internal static partial class TestRunner
             Assert(Math.Abs(series.AccountabilityScore - 88) < 0.001, $"accountability should aggregate, got {series.AccountabilityScore}");
             var html = new ComparisonHtmlWriter().BuildHtml(report);
             Assert(html.Contains("accountabilityScore", StringComparison.Ordinal), "HTML payload should expose accountability score");
+            Assert(html.Contains("truthAuditChart", StringComparison.Ordinal), "HTML should include a Run 3 truth-audit chart canvas when audit runs exist");
+            Assert(html.Contains("Run 3 Truth-Audit", StringComparison.Ordinal), "HTML should label the truth-audit visualization tile");
+            Assert(html.Contains("Audit Accuracy %", StringComparison.Ordinal), "truth-audit chart should visualize audit accuracy");
             Assert(new ComparisonHtmlWriter().BuildCsv(report).Contains("accountability_score", StringComparison.Ordinal), "CSV should expose accountability score");
         }
         finally

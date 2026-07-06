@@ -205,6 +205,7 @@ public sealed class ComparisonHtmlWriter
   .meta,.note { color:var(--muted); font-size:12px; }
   .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; margin-bottom:18px; box-shadow:0 1px 2px rgba(0,0,0,.04); }
   .card-heading { display:flex; align-items:center; gap:8px; margin:0 0 12px; }
+  .metric-card { cursor:zoom-in; }
   .metric-title { background:transparent; color:var(--fg); border:0; padding:0; font-weight:650; text-align:left; cursor:zoom-in; }
   .metric-help { width:22px; height:22px; border-radius:50%; padding:0; display:inline-flex; align-items:center; justify-content:center; font-weight:700; background:var(--soft); color:var(--accent); border:1px solid var(--line); }
   .overlay-backdrop { position:fixed; inset:0; z-index:50; background:rgba(15,23,42,.58); backdrop-filter:blur(3px); display:flex; align-items:center; justify-content:center; padding:24px; }
@@ -212,7 +213,7 @@ public sealed class ComparisonHtmlWriter
   .overlay-dialog.metric-modal { width:min(1420px,98vw); }
   .overlay-dialog .chart-box { height:min(72vh,760px); }
   .overlay-close { float:right; width:34px; height:34px; border-radius:999px; padding:0; margin-left:10px; }
-  .metric-card.in-modal { margin:0; border:0; box-shadow:none; padding:0; }
+  .metric-card.in-modal { margin:0; border:0; box-shadow:none; padding:0; cursor:default; }
   .grid { display:grid; grid-template-columns:1fr; gap:18px; }
   @media (min-width:1100px) { .grid.two { grid-template-columns:1fr 1fr; } .grid.three { grid-template-columns:repeat(3,1fr); } }
   .chart-box { position:relative; height:420px; }
@@ -313,11 +314,13 @@ public sealed class ComparisonHtmlWriter
   const cwes = uniq(data.axis.flatMap(a => a.cwe || []));
   const hasChart = typeof Chart !== "undefined";
   const hasReasoningStats = data.series.some(s => s.visibleReasoningRuns > 0);
+  const hasTruthAuditStats = data.series.some(s => s.truthAuditRunCount > 0);
   const metricHelp = {
     mainMetric:{title:"Hauptmetrik", body:"Zeigt die aktuell ausgewählte Vergleichsmetrik pro Modell/Quant. Datenbasis sind archivierte Scorecards nach aktivem Run-View und Scoring-Profil. Fehlerbalken und Tooltipps verwenden Score-Verteilung derselben Gruppe; bei wenigen Runs ist die Unsicherheit nur deskriptiv."},
     severityRecall:{title:"Severity-Recall", body:"Zeigt Recall/Credit getrennt nach Severity-Buckets. Full TP zählt 1.0, Partial TP 0.5, missed 0. Die Werte werden über die Vulnerability-Achse der lokalen Ground Truth aggregiert; kleine Buckets können stark schwanken."},
     vulnerabilityRadar:{title:"Einzelwerte je Schwachstelle", body:"Radar über einzelne Ground-Truth-IDs. Jede Achse ist ein Finding-Credit: 1 voll gefunden, 0.5 teilweise, 0 verpasst. Im Delta-Modus sind negative Werte Run-2-Verschlechterungen."},
     run2Delta:{title:"Run 1 → Run 2", body:"Vergleicht Blind-Analyse und Self-Validation. Steigende Linien bedeuten Score-Verbesserung, fallende Linien Over-Pruning oder schlechtere Finalisierung. Truth-Audit wird hier nicht eingerechnet."},
+    truthAudit:{title:"Run 3 Truth-Audit", body:"Visualisiert den non-blind Wahrheitstest: Accountability/Honesty, Audit-Accuracy, Quote-Fidelity sowie Overclaim- und Admission-Raten. Dieser Run sieht die Ground Truth absichtlich und verändert den Blind/Self-Validation-Score nicht."},
     qualityHealth:{title:"Qualitäts-/Parsing-Gesundheit", body:"Diagnosechart für False Positives, Duplikate, ignorierte Low-Confidence-Findings, Hallucination Rate, Evidence/Location-Fidelity, Loop- und Parse-Probleme. Diese Metriken erklären Score-Unterschiede, sind aber nicht alle direkte Score-Komponenten."},
     reasoningCoverage:{title:"Denken-vs-Sagen", body:"Vergleicht sichtbares reasoning_content bzw. <think>-Blöcke mit finalem Output. Das ist nur Diagnostik und zählt nicht zum offiziellen Score; unstrukturierte Gedanken können unterzählt werden."},
     heatmap:{title:"Vulnerability Heatmap", body:"Matrix aus Modell/Quant gegen Ground-Truth-ID. Grün bedeutet erkannt, orange teilweise, rot/verblasst verpasst. Im Delta-Modus zeigt grün Verbesserung durch Run 2, rot Verschlechterung."},
@@ -374,6 +377,9 @@ public sealed class ComparisonHtmlWriter
       </div>
       <div class="grid two">
         <div class="card metric-card" data-metric-id="qualityHealth">${metricHeader("qualityHealth","Qualitäts-/Parsing-Gesundheit")}<div class="chart-box"><canvas id="qualityChart"></canvas></div></div>
+        ${hasTruthAuditStats ? '<div class="card metric-card" data-metric-id="truthAudit">'+metricHeader("truthAudit","Run 3 Truth-Audit")+'<div class="note">Non-blind Accountability/Honesty: höhere grüne Werte sind besser, Overclaim ist niedriger besser. Truth-Audit ändert den Detection-Score nicht.</div><div class="chart-box"><canvas id="truthAuditChart"></canvas></div></div>' : '<div class="card metric-card" data-metric-id="truthAudit">'+metricHeader("truthAudit","Run 3 Truth-Audit")+'<div class="empty">Keine Truth-Audit-Runs in den gefilterten Scorecards.</div></div>'}
+      </div>
+      <div class="grid two">
         ${hasReasoningStats ? '<div class="card metric-card" data-metric-id="reasoningCoverage">'+metricHeader("reasoningCoverage","Denken-vs-Sagen")+'<div class="note">Diagnostik aus sichtbarem <code>reasoning_content</code> / <code>&lt;think&gt;</code>; nicht Teil des Scores.</div><div class="chart-box"><canvas id="reasoningChart"></canvas></div></div>' : '<div class="card metric-card" data-metric-id="reasoningCoverage">'+metricHeader("reasoningCoverage","Denken-vs-Sagen")+'<div class="empty">Keine sichtbaren Reasoning-Daten in den gefilterten Scorecards.</div></div>'}
       </div>` : '<div class="card note">Chart.js konnte nicht geladen werden (keine Internetverbindung?). Heatmap, Filter und Tabelle funktionieren weiterhin offline.</div>'}
     <div class="card metric-card" data-metric-id="heatmap">${metricHeader("heatmap","Vulnerability Heatmap")}<div class="note">0 = verpasst, 0.5 = teilweise, 1 = voll erkannt. Bei Delta: grün = Run 2 besser, rot = schlechter.</div><div id="heatmap" class="heatmap"></div></div>
@@ -523,6 +529,9 @@ public sealed class ComparisonHtmlWriter
     updateChart("slopeChart", { type:"line", data:{ labels:["Run 1","Run 2"], datasets:slopeRows.map(s=>({ label:s.label, data:[s.run1Score,s.run2Score], borderColor:s.color, backgroundColor:s.color, tension:0.15 }))}, options:{ responsive:true, maintainAspectRatio:false, scales:{ y:{ beginAtZero:true, max:100, title:{display:true,text:"Score"}}}, plugins:{legend:{position:"bottom",labels:{boxWidth:12,font:{size:11}}}} }});
     updateChart("qualityChart", { type:"bar", data:{ labels:rows.map(s=>s.label), datasets:[
       {label:"FP",data:rows.map(s=>s.falsePositives),backgroundColor:"#ef4444cc"},{label:"Duplicates",data:rows.map(s=>s.duplicates),backgroundColor:"#f59e0bcc"},{label:"Ignored",data:rows.map(s=>s.ignoredLowConfidence),backgroundColor:"#64748bcc"},{label:"Hallucination %",data:rows.map(s=>s.hallucinationRate),backgroundColor:"#fb7185aa"},{label:"Evidence %",data:rows.map(s=>s.evidenceFidelity),backgroundColor:"#22c55e99"},{label:"Location %",data:rows.map(s=>s.locationAccuracy),backgroundColor:"#14b8a699"},{label:"Loop %",data:rows.map(s=>s.loopRate),backgroundColor:"#a855f7aa"},{label:"Parse fail %",data:rows.map(s=>100-(s.parseSuccessRate||0)),backgroundColor:"#0ea5e9aa"}]}, options:{ indexAxis:"y", responsive:true, maintainAspectRatio:false, scales:{x:{beginAtZero:true}}, plugins:{legend:{position:"bottom"}} }});
+    const auditRows = rows.filter(s => s.truthAuditRunCount > 0);
+    if (hasTruthAuditStats && document.getElementById("truthAuditChart")) updateChart("truthAuditChart", { type:"bar", data:{ labels:auditRows.map(s=>s.label), datasets:[
+      {label:"Accountability",data:auditRows.map(s=>s.accountabilityScore),backgroundColor:"#2563ebcc"},{label:"Audit Accuracy %",data:auditRows.map(s=>s.truthAuditAccuracy),backgroundColor:"#22c55ecc"},{label:"Quote Fidelity %",data:auditRows.map(s=>s.quoteFidelity),backgroundColor:"#14b8a6cc"},{label:"Overclaim %",data:auditRows.map(s=>s.overclaimRate),backgroundColor:"#ef4444aa"},{label:"Miss Admit %",data:auditRows.map(s=>s.missAdmissionRate),backgroundColor:"#a855f7aa"},{label:"FP Admit %",data:auditRows.map(s=>s.falsePositiveAdmissionRate),backgroundColor:"#f59e0baa"}]}, options:{ indexAxis:"y", responsive:true, maintainAspectRatio:false, scales:{x:{min:0,max:100,title:{display:true,text:"Run 3 Audit % / Score"}}}, plugins:{legend:{position:"bottom"}, tooltip:{callbacks:{afterBody:items=>{ const s=auditRows[items[0].dataIndex]; return [`Audit Runs: ${s.truthAuditRunCount}`,`Evidence Laundering: ${fmt(s.evidenceLaunderingCount)}`]; }}}} }});
     if (hasReasoningStats && document.getElementById("reasoningChart")) updateChart("reasoningChart", { type:"bar", data:{ labels:rows.map(s=>s.label), datasets:[{label:"Gedacht TP",data:rows.map(s=>s.thinkingTp),backgroundColor:"#6366f1cc"},{label:"Gesagt TP",data:rows.map(s=>s.outputTp),backgroundColor:"#10b981cc"},{label:"Nur gedacht",data:rows.map(s=>s.thinkingOnlyTp),backgroundColor:"#f59e0bcc"}]}, options:{ indexAxis:"y", responsive:true, maintainAspectRatio:false, scales:{x:{beginAtZero:true}}, plugins:{legend:{position:"bottom"}} }});
   }
 
@@ -554,6 +563,12 @@ public sealed class ComparisonHtmlWriter
   }
 
   function wireMetricInteractions() {
+    document.querySelectorAll(".metric-card").forEach(card => card.addEventListener("click", ev => {
+      if (card.classList.contains("in-modal")) return;
+      const target = ev.target;
+      if (target?.closest?.("button,a,input,select,textarea,label,summary,details,th,[data-no-modal]")) return;
+      openMetricModal(card.getAttribute("data-metric-id"));
+    }));
     document.querySelectorAll("[data-modal-metric]").forEach(btn => btn.addEventListener("click", ev => { ev.stopPropagation(); openMetricModal(btn.getAttribute("data-modal-metric")); }));
     document.querySelectorAll("[data-help-metric]").forEach(btn => btn.addEventListener("click", ev => { ev.stopPropagation(); openHelpPopover(btn.getAttribute("data-help-metric")); }));
   }

@@ -276,11 +276,11 @@ The **Vergleich** tab in the GUI shows one row per model + quant with score, cri
 
 Archive scorecards now use schema v3 (v1/v2 still load) and keep compact diagnostics that were previously available only in `run.json`: score version metadata, finish reason, loop flag, parse mode/warnings, response/request/prompt/reasoning character counts, per-run durations, duplicates, ignored-low-confidence counts, and rich per-vulnerability status. Truth-audit runs are archived separately as `runKind="truth_audit"` with `groundTruthVisibleToModel=true`; comparison treats their Accountability/Honesty metrics separately and does not let them raise the primary detection score. Archive scorecards still do **not** copy prompts or raw model responses; those remain referenced only via `runDirectory`.
 
-The generated HTML contains client-side filters/search (family, quant, severity, category, CWE, score/runs/stddev/FP thresholds, official/source-hash/loop/reasoning toggles) and multiple views:
+The generated HTML contains client-side filters/search (family, quant, severity, category, CWE, score/runs/stddev/FP thresholds, official/source-hash/loop/reasoning toggles) and multiple views. Metric tiles can be maximized by clicking anywhere inside the tile (the ? buttons keep opening the contextual help):
 
 - **main metric bar chart** (score, critical recall, F1, FP-rate, stability, Run2-delta, thinking coverage, accountability, overclaim rate, duration) with min/max error bars where multiple runs exist for the selected bar metric,
 - **severity recall chart** and **vulnerability heatmap** (1.0 full, 0.5 partial, 0.0 missed; delta view highlights improvements/regressions),
-- **Run 1 → Run 2 slope chart**, quality health chart, and optional Denken-vs-Sagen chart,
+- **Run 1 → Run 2 slope chart**, quality health chart, **Run 3 Truth-Audit chart**, and optional Denken-vs-Sagen chart,
 - sortable/expandable table with per-run drilldown and CSV export of the currently filtered rows.
 
 The same report is available from the CLI and is written as a self-contained `comparison.html` (Chart.js from CDN, tables still work offline) alongside a `comparison.csv` for spreadsheets:
@@ -410,6 +410,7 @@ This project is distributed under the [MIT License](LICENSE).
 
 | Version | Date       | Highlights                                                                                       |
 | :-----: | :--------: | ------------------------------------------------------------------------------------------------ |
+| v0.6.3  | 2026-07-06 | HTML metric tiles maximize from any non-control click, adds a Run 3 Truth-Audit visualization tile, and includes the latest Ornith 1.0 9B Q8 benchmark scorecard |
 | v0.6.2  | 2026-07-06 | GUI clears manual Quant on model refresh/model changes, comparison HTML draws min/max error bars for repeated bar metrics, and Ornith 1.0 9B BF16/Q8 benchmark scorecards are included |
 |  v3.3   | 2026-06-28 | GUI always runs visible Run 3 Truth-Audit; Accountability/Honesty UI + archive metrics; official-v2 scoring, repeats, adjudication, and schema-v3 diagnostics |
 |  v3.2.1 | 2026-06-27 | Archive schema v2; comparison filters by severity/CWE/category, heatmap, Run1/Run2/delta views, stability/quality/parse diagnostics, filtered CSV export |
