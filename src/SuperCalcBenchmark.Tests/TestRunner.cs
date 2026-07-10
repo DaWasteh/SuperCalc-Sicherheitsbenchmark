@@ -16,6 +16,7 @@ internal static partial class TestRunner
         Console.OutputEncoding = System.Text.Encoding.UTF8;
 
         Run("ground truth validates", GroundTruthValidates);
+        Run("WPF app exits when the main window closes", WpfAppExitsWithMainWindow);
         Run("ground truth v2 aliases and anchors load", GroundTruthV2AliasesAndAnchorsLoad);
         Run("scoring ledger records evidence fidelity", ScoringLedgerRecordsEvidenceFidelity);
         Run("parser handles valid JSON", ParserHandlesValidJson);
@@ -106,6 +107,17 @@ internal static partial class TestRunner
         Assert(result.VulnerabilityCount == 20, "supercalc-v3 should contain 20 vulnerabilities");
         Assert(result.Issues.All(i => !string.Equals(i.Severity, "Error", StringComparison.OrdinalIgnoreCase)),
             string.Join(Environment.NewLine, result.Issues.Select(i => $"[{i.Severity}] {i.Message}")));
+    }
+
+    private static void WpfAppExitsWithMainWindow()
+    {
+        var document = System.Xml.Linq.XDocument.Load(
+            Path.Combine("src", "SuperCalcBenchmark.App", "App.xaml"));
+        var shutdownMode = (string?)document.Root?.Attribute("ShutdownMode");
+
+        Assert(
+            string.Equals(shutdownMode, "OnMainWindowClose", StringComparison.Ordinal),
+            "App.xaml must use ShutdownMode=OnMainWindowClose so Wine cannot keep the app alive after its main window closes");
     }
 
     private static void GroundTruthV2AliasesAndAnchorsLoad()
