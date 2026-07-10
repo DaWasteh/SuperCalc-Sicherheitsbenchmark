@@ -3,6 +3,7 @@
     <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
+    <ApplicationIcon>..\assets\SuperCalc.ico</ApplicationIcon>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
@@ -11,6 +12,8 @@
     <ProjectReference Include="..\SuperCalcBenchmark.Core\SuperCalcBenchmark.Core.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <Resource Include="..\assets\SuperCalc.png" Link="assets\SuperCalc.png" />
+    <Content Include="..\assets\SuperCalc.ico" Link="assets\SuperCalc.ico" />
     <Content Include="..\..\enhanced_calc.cpp" Link="enhanced_calc.cpp" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="..\..\benchmarks\supercalc-v3\**\*" Link="benchmarks\supercalc-v3\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
