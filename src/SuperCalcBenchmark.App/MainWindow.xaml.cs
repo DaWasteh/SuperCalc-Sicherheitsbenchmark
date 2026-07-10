@@ -83,7 +83,7 @@ public partial class MainWindow : Window
         SourceInitialized += MainWindow_SourceInitialized;
         ApplyTheme(BenchmarkTheme.Light);
         _repositoryRoot = FindRepositoryRoot();
-        DotNetInfoTextBlock.Text = $".NET {Environment.Version.Major} | {_repositoryRoot}";
+        DotNetInfoTextBlock.Text = $"v{ReleaseUpdater.GetCurrentVersion()} | .NET {Environment.Version.Major} | {_repositoryRoot}";
         ShowRawOutputPlaceholder(Run1RawPanel, "Noch kein Run-1-Output. Nach dem Benchmark siehst du hier Prompt, Thinking, Output und Raw API Response.");
         ShowRawOutputPlaceholder(Run2RawPanel, "Noch kein Run-2-Output. Nach dem Benchmark siehst du hier Prompt, Thinking, Output und Raw API Response.");
         ShowRawOutputPlaceholder(Run3RawPanel, "Noch kein Run-3-Output. Run 3 läuft automatisch nach Run 2 als Truth-Audit / Ehrlichkeitstest.");
@@ -304,6 +304,15 @@ public partial class MainWindow : Window
 
     private async void UpdateButton_Click(object sender, RoutedEventArgs e)
     {
+        // Two update paths: a git checkout keeps using git pull --ff-only, the
+        // standalone release EXE (no .git anywhere above) updates itself from the
+        // latest GitHub release ZIP.
+        if (!ReleaseUpdater.IsRunningFromGitCheckout(_repositoryRoot))
+        {
+            await RunReleaseUpdateAsync();
+            return;
+        }
+
         var confirmation = MessageBox.Show(this,
             "Das Update führt im Repository \"git pull --ff-only\" aus.\n\n" +
             "Vorher werden lokale Benchmarkdaten aus archive/, artifacts/ und results/ nach %LOCALAPPDATA%\\SuperCalcBenchmark\\UpdateBackups gesichert. " +
@@ -319,6 +328,97 @@ public partial class MainWindow : Window
         }
 
         await PullUpdatesAsync();
+    }
+
+    private async Task RunReleaseUpdateAsync()
+    {
+        SetBusy(true, benchmarkRunning: false);
+        StatusTextBlock.Text = "Suche nach Updates...";
+        var currentVersion = ReleaseUpdater.GetCurrentVersion();
+        AppendLog($"Update-Prüfung (Standalone): installierte Version v{currentVersion}, frage GitHub-Releases ab...");
+
+        try
+        {
+            var latest = await ReleaseUpdater.GetLatestReleaseAsync(CancellationToken.None);
+            if (latest is null)
+            {
+                StatusTextBlock.Text = "Kein App-Release gefunden.";
+                AppendLog("Kein App-Release mit win-x64-ZIP gefunden: " + ReleaseUpdater.ReleasesPageUrl);
+                MessageBox.Show(this,
+                    "Auf GitHub wurde kein App-Release mit einem win-x64-ZIP gefunden.\n\n" + ReleaseUpdater.ReleasesPageUrl,
+                    "Update-Prüfung",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+                return;
+            }
+
+            AppendLog($"Neueste Release-Version: v{latest.Version} ({latest.TagName}, Asset {latest.AssetName}).");
+
+            if (latest.Version <= currentVersion)
+            {
+                StatusTextBlock.Text = $"App ist aktuell (v{currentVersion}).";
+                MessageBox.Show(this,
+                    $"Du nutzt bereits die neueste Version (v{currentVersion}).",
+                    "Kein Update nötig",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+                return;
+            }
+
+            var confirmation = MessageBox.Show(this,
+                $"Update verfügbar: v{currentVersion} → v{latest.Version}\n\n" +
+                $"Das Update ({ReleaseUpdater.FormatSize(latest.AssetSize)}) wird heruntergeladen. Danach startet die App neu. " +
+                "Lokale Benchmarkdaten in archive/, artifacts/ und results/ neben der EXE werden nicht angetastet.\n\n" +
+                "Jetzt herunterladen und installieren?",
+                "Update verfügbar",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question);
+
+            if (confirmation != MessageBoxResult.Yes)
+            {
+                StatusTextBlock.Text = "Update abgebrochen.";
+                return;
+            }
+
+            ReleaseUpdater.EnsureApplicationDirectoryWritable();
+
+            StatusTextBlock.Text = $"Update auf v{latest.Version} wird heruntergeladen...";
+            var progress = new Progress<string>(AppendLog);
+            var staged = await ReleaseUpdater.DownloadAndStageAsync(latest, progress, CancellationToken.None);
+
+            var restart = MessageBox.Show(this,
+                $"Update v{latest.Version} ist bereit.\n\n" +
+                "Die App wird jetzt beendet, die neuen Dateien werden eingespielt und die App startet automatisch neu.",
+                "Update installieren",
+                MessageBoxButton.OKCancel,
+                MessageBoxImage.Information);
+
+            if (restart != MessageBoxResult.OK)
+            {
+                StatusTextBlock.Text = "Update heruntergeladen, Installation abgebrochen.";
+                AppendLog("Installation abgebrochen. Vorbereitetes Update liegt unter: " + staged.PayloadDirectory);
+                return;
+            }
+
+            AppendLog("Updater gestartet, App wird beendet...");
+            ReleaseUpdater.LaunchUpdaterAndPrepareShutdown(staged);
+            Application.Current.Shutdown();
+        }
+        catch (Exception ex)
+        {
+            StatusTextBlock.Text = "Update fehlgeschlagen.";
+            AppendLog("FEHLER beim Release-Update: " + ex.Message);
+            MessageBox.Show(this,
+                "Das Update konnte nicht geladen werden. Du kannst das neueste Release auch manuell herunterladen:\n" +
+                ReleaseUpdater.ReleasesPageUrl + "\n\n" + ex.Message,
+                "Update fehlgeschlagen",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+        }
+        finally
+        {
+            SetBusy(false, benchmarkRunning: false);
+        }
     }
 
     private async Task PullUpdatesAsync()

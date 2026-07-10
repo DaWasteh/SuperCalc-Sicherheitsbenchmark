@@ -101,6 +101,19 @@ The benchmark contains **20 documented vulnerabilities** distributed across four
 
 ## Quick Start
 
+### Fertige Windows-App herunterladen (empfohlen, keine Entwickler-Tools nötig)
+
+Für alle, die den Benchmark nur **nutzen** wollen, gibt es die GUI als fertige Standalone-EXE — ohne Git, ohne .NET SDK, ohne Installation:
+
+1. Neuestes Release öffnen: <https://github.com/DaWasteh/SuperCalc-Sicherheitsbenchmark/releases/latest>
+2. `SuperCalcBenchmark-win-x64-vX.Y.Z.zip` herunterladen und **komplett** in einen Ordner entpacken (z. B. Dokumente). EXE und die Ordner daneben (`benchmarks/`, `enhanced_calc.cpp`) müssen zusammenbleiben.
+3. `SuperCalcBenchmark.App.exe` doppelklicken.
+4. Einen lokalen [llama.cpp](https://github.com/ggml-org/llama.cpp) `llama-server` mit Modell auf `http://127.0.0.1:1234` starten, dann in der App **Refresh Models** → Modell wählen → **Benchmark starten**.
+
+**Updates:** Der Button **„Update ziehen"** oben rechts prüft die GitHub-Releases, lädt die neue Version herunter und startet die App automatisch neu. In einem Git-Checkout führt derselbe Button stattdessen `git pull --ff-only` aus. In beiden Fällen bleiben lokale Benchmarkdaten in `archive/`, `artifacts/` und `results/` unangetastet.
+
+Ergebnisse und Scorecards landen im Ordner `archive/` neben der EXE.
+
 ### Prerequisites
 
 - Windows 11 native: MSVC 2022/2026 or Clang-cl with C++20 support
@@ -189,6 +202,41 @@ dotnet run --project src/SuperCalcBenchmark.App
 dotnet build SuperCalcBenchmark.slnx --configuration Release
 .\src\SuperCalcBenchmark.App\bin\Release\net10.0-windows\SuperCalcBenchmark.App.exe
 ```
+
+### Standalone-EXE bauen (portable, self-contained)
+
+Die GUI lässt sich als portable Standalone-EXE mit eingebettetem Icon bauen — identisch zu dem, was der Release-Workflow veröffentlicht. Das Ergebnis läuft ohne installiertes .NET:
+
+```powershell
+# Komfort-Skript (aus dem Repository-Root):
+.\publish.bat
+
+# Oder direkt:
+dotnet publish src/SuperCalcBenchmark.App/SuperCalcBenchmark.App.csproj `
+  --configuration Release `
+  --runtime win-x64 `
+  --self-contained true `
+  -p:PublishSingleFile=true `
+  -p:IncludeNativeLibrariesForSelfExtract=true `
+  --output artifacts/standalone/SuperCalcBenchmark-win-x64
+```
+
+Der Ausgabeordner `artifacts/standalone/SuperCalcBenchmark-win-x64/` enthält die einzelne `SuperCalcBenchmark.App.exe` (~140 MB, .NET-Runtime eingebettet) plus die Benchmark-Assets `benchmarks/` und `enhanced_calc.cpp`, die neben der EXE liegen müssen. Der komplette Ordner ist portabel und kann beliebig kopiert oder gezippt werden.
+
+Die Version der EXE kommt zentral aus `Directory.Build.props` (`<Version>`); der Release-Workflow überschreibt sie mit der Version des Git-Tags.
+
+### Release veröffentlichen (Maintainer)
+
+Der Workflow [`.github/workflows/release.yml`](.github/workflows/release.yml) baut die Standalone-EXE, führt vorher die Tests und die Ground-Truth-Validierung aus und erstellt automatisch ein GitHub-Release mit dem ZIP und einer Schritt-für-Schritt-Anleitung für nicht-technische Nutzer:
+
+```powershell
+# 1. Version in Directory.Build.props anheben (z. B. auf 0.6.6) und committen.
+# 2. Passenden Tag setzen und pushen — das löst den Release-Workflow aus:
+git tag v0.6.6
+git push origin v0.6.6
+```
+
+Das Release erscheint als „Latest release" unter <https://github.com/DaWasteh/SuperCalc-Sicherheitsbenchmark/releases> mit dem Asset `SuperCalcBenchmark-win-x64-vX.Y.Z.zip`. Der **„Update ziehen"**-Button der Standalone-App findet neue Versionen anhand dieser Tags (`vX.Y.Z`) und des Asset-Namens. Die automatischen „SuperCalc Comparison"-Releases aus `pages.yml` (Vergleichs-HTML) werden weiterhin bei jedem Push auf `main` erstellt, sind aber nicht mehr als „Latest" markiert, damit Endnutzer immer zuerst die App sehen; das GitHub-Pages-Deployment der Vergleichsseite ist davon unberührt. Ein manueller `workflow_dispatch`-Lauf von `release.yml` baut das ZIP nur als Artefakt (Dry-Run) ohne Release.
 
 Ubuntu/Linux GUI workflow (without changing the Windows workflow):
 
@@ -336,6 +384,7 @@ supercalc-security-benchmark/
 ├── benchmark-result-template.md   # Community result template
 ├── build_and_test.sh              # Automated compilation & sanitizer validation
 ├── setup.bat                      # Clean Release build for the Windows GUI
+├── publish.bat                    # Portable standalone EXE (self-contained single-file)
 ├── start.vbs                      # No-console launcher for the latest Release GUI
 ├── global.json                    # Pins local .NET SDK selection to .NET 10
 ├── SuperCalcBenchmark.slnx        # .NET 10 solution
@@ -362,7 +411,9 @@ supercalc-security-benchmark/
 ├── CONTRIBUTING.md
 └── .github/
     └── workflows/
-        └── ci.yml
+        ├── ci.yml                 # Build, tests, CodeQL, docs checks
+        ├── pages.yml              # Comparison HTML → GitHub Pages + comparison zip release
+        └── release.yml            # Tag vX.Y.Z → standalone EXE release for end users
 ```
 
 ---
@@ -410,6 +461,7 @@ This project is distributed under the [MIT License](LICENSE).
 
 | Version | Date       | Highlights                                                                                       |
 | :-----: | :--------: | ------------------------------------------------------------------------------------------------ |
+| v0.6.5  | 2026-07-10 | Standalone-EXE distribution: self-contained single-file publish (`publish.bat`), release workflow on `vX.Y.Z` tags with end-user ZIP, and the in-app update button now self-updates the standalone EXE from GitHub releases (git checkouts keep using `git pull --ff-only`) |
 | v0.6.3  | 2026-07-06 | HTML metric tiles maximize from any non-control click, adds a Run 3 Truth-Audit visualization tile, and includes the latest Ornith 1.0 9B Q8 benchmark scorecard |
 | v0.6.2  | 2026-07-06 | GUI clears manual Quant on model refresh/model changes, comparison HTML draws min/max error bars for repeated bar metrics, and Ornith 1.0 9B BF16/Q8 benchmark scorecards are included |
 |  v3.3   | 2026-06-28 | GUI always runs visible Run 3 Truth-Audit; Accountability/Honesty UI + archive metrics; official-v2 scoring, repeats, adjudication, and schema-v3 diagnostics |

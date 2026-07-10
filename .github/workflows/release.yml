@@ -1,0 +1,130 @@
+name: Release Standalone App
+
+# Creates a user-facing release with the standalone Windows EXE.
+#
+# Trigger: push a three-part version tag, e.g.
+#   git tag v0.6.5 && git push origin v0.6.5
+#
+# The tag version is stamped into the EXE (-p:Version), which the in-app
+# "Update ziehen" button compares against the latest GitHub release.
+# workflow_dispatch runs a dry-run build (artifact only, no release).
+#
+# Note: pages.yml keeps creating "SuperCalc Comparison vNNN" auto-releases for
+# the comparison HTML; those use --latest=false so this app release stays the
+# repository's "Latest release" for non-technical users.
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & Release (win-x64)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Derive version from tag
+        id: version
+        shell: pwsh
+        run: |
+          if ("${{ github.ref_type }}" -eq "tag") {
+            $version = "${{ github.ref_name }}".TrimStart("v")
+          } else {
+            # Dry run (workflow_dispatch): take the version from Directory.Build.props.
+            $props = [xml](Get-Content Directory.Build.props)
+            $version = ($props.Project.PropertyGroup.Version | Where-Object { $_ }) | Select-Object -First 1
+          }
+          if (-not ($version -match '^\d+\.\d+\.\d+$')) {
+            Write-Error "Ungueltige Version: '$version'. Tags muessen dem Muster vX.Y.Z folgen."
+            exit 1
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          Write-Host "Release-Version: $version"
+
+      - name: Run benchmark tool tests
+        run: dotnet run --project src/SuperCalcBenchmark.Tests --configuration Release
+
+      - name: Validate hidden ground truth
+        run: dotnet run --project src/SuperCalcBenchmark.Cli --configuration Release -- validate
+
+      - name: Publish standalone GUI (self-contained single-file)
+        run: >
+          dotnet publish src/SuperCalcBenchmark.App/SuperCalcBenchmark.App.csproj
+          --configuration Release
+          --runtime win-x64
+          --self-contained true
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:Version=${{ steps.version.outputs.version }}
+          --output publish/SuperCalcBenchmark-win-x64
+
+      - name: Add quick-start note for non-technical users
+        shell: pwsh
+        run: |
+          @'
+          SuperCalc Security Benchmark - Schnellstart
+          ===========================================
+
+          1. Diesen Ordner an einen beliebigen Ort entpacken (z. B. Dokumente).
+             Wichtig: EXE und die Ordner daneben zusammen lassen.
+          2. SuperCalcBenchmark.App.exe doppelklicken. Es ist keine Installation
+             und kein .NET notwendig.
+          3. llama-server (llama.cpp) mit einem Modell auf http://127.0.0.1:1234
+             starten, in der App "Refresh Models" klicken, Modell waehlen,
+             "Benchmark starten".
+          4. Updates: Button "Update ziehen" oben rechts in der App.
+
+          Ergebnisse/Scorecards landen im Ordner "archive" neben der EXE und
+          werden bei Updates nie ueberschrieben.
+          '@ | Set-Content -Encoding UTF8 publish/SuperCalcBenchmark-win-x64/LIESMICH.txt
+
+      - name: Create ZIP archive
+        shell: pwsh
+        run: |
+          $zip = "SuperCalcBenchmark-win-x64-v${{ steps.version.outputs.version }}.zip"
+          Compress-Archive -Path publish/SuperCalcBenchmark-win-x64/* -DestinationPath $zip
+          "ARCHIVE=$zip" >> $env:GITHUB_ENV
+
+      - name: Upload build artifact (dry run / debugging)
+        uses: actions/upload-artifact@v7
+        with:
+          name: SuperCalcBenchmark-win-x64-v${{ steps.version.outputs.version }}
+          path: publish/SuperCalcBenchmark-win-x64/
+          if-no-files-found: error
+
+      - name: Create GitHub Release
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $notes = @'
+          ## SuperCalc Security Benchmark – Standalone-App für Windows
+
+          **So einfach geht es (keine Entwickler-Tools nötig):**
+
+          1. Unten `SuperCalcBenchmark-win-x64-v${{ steps.version.outputs.version }}.zip` herunterladen.
+          2. ZIP komplett in einen Ordner entpacken (z. B. Dokumente).
+          3. `SuperCalcBenchmark.App.exe` doppelklicken – fertig. Kein .NET, keine Installation.
+          4. Voraussetzung für Benchmarks: ein lokaler [llama.cpp](https://github.com/ggml-org/llama.cpp) `llama-server` mit geladenem Modell auf `http://127.0.0.1:1234`.
+          5. Zukünftige Updates holt die App selbst: Button **„Update ziehen"** oben rechts.
+
+          Eigene Benchmark-Ergebnisse werden im Ordner `archive` neben der EXE gespeichert und bleiben bei Updates erhalten.
+          '@
+          gh release create "${{ github.ref_name }}" `
+            "$env:ARCHIVE" `
+            --repo "${{ github.repository }}" `
+            --title "SuperCalc Benchmark ${{ github.ref_name }}" `
+            --notes $notes `
+            --latest

@@ -41,7 +41,7 @@
                         Content="Update ziehen"
                         Margin="0,0,12,0"
                         Click="UpdateButton_Click"
-                        ToolTip="Führt git pull --ff-only aus. Lokale Benchmarkdaten in archive/, artifacts/ und results/ werden vorher gesichert und nicht überschrieben." />
+                        ToolTip="Git-Checkout: führt git pull --ff-only aus. Standalone-EXE: lädt das neueste GitHub-Release herunter und startet die App neu. Lokale Benchmarkdaten in archive/, artifacts/ und results/ werden nie überschrieben." />
                 <TextBlock x:Name="DotNetInfoTextBlock" VerticalAlignment="Center" Foreground="{DynamicResource TextSecondaryBrush}" />
             </StackPanel>
         </DockPanel>
