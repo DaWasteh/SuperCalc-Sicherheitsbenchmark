@@ -305,9 +305,14 @@ public sealed class ComparisonReport
     private static PairMetrics BuildPairMetrics(IReadOnlyList<ArchiveRecord> records, ComparisonAggregate aggregate, string? scoringProfile)
     {
         var pairs = records
-            .Where(r => r.Runs.Count >= 2)
-            .Select(r => (Run1: r.Runs[0], Run2: r.Runs[1]))
-            .Where(pair => MatchesProfile(pair.Run1, scoringProfile) && MatchesProfile(pair.Run2, scoringProfile))
+            .Select(r => SelectDetectionRuns(r))
+            .Where(pair => pair.Run1 is not null
+                           && pair.Run2 is not null
+                           && !pair.Run1.IsDegenerate
+                           && !pair.Run2.IsDegenerate
+                           && MatchesProfile(pair.Run1, scoringProfile)
+                           && MatchesProfile(pair.Run2, scoringProfile))
+            .Select(pair => (Run1: pair.Run1!, Run2: pair.Run2!))
             .ToList();
         if (pairs.Count == 0)
         {
@@ -354,6 +359,32 @@ public sealed class ComparisonReport
     private static bool MatchesProfile(ArchiveRunScore run, string? scoringProfile)
         => string.IsNullOrWhiteSpace(scoringProfile)
            || string.Equals(run.ScoringProfile, scoringProfile, StringComparison.OrdinalIgnoreCase);
+
+    private static (ArchiveRunScore? Run1, ArchiveRunScore? Run2) SelectDetectionRuns(ArchiveRecord record)
+    {
+        var detectionRuns = record.Runs
+            .Where(run => !string.Equals(run.RunKind, "truth_audit", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        var run1 = detectionRuns.FirstOrDefault(run =>
+                       string.Equals(run.RunKind, "blind_analysis", StringComparison.OrdinalIgnoreCase)
+                       || IsNamedRun(run, 1))
+                   ?? detectionRuns.FirstOrDefault();
+        var run2 = detectionRuns.FirstOrDefault(run =>
+                       string.Equals(run.RunKind, "self_validation", StringComparison.OrdinalIgnoreCase)
+                       || IsNamedRun(run, 2));
+        if (run2 is null && detectionRuns.Count >= 2)
+        {
+            run2 = detectionRuns.FirstOrDefault(run => !ReferenceEquals(run, run1));
+        }
+
+        return (run1, run2);
+    }
+
+    private static bool IsNamedRun(ArchiveRunScore run, int number)
+    {
+        var normalized = run.RunName.Replace(" ", string.Empty, StringComparison.Ordinal);
+        return string.Equals(normalized, $"Run{number}", StringComparison.OrdinalIgnoreCase);
+    }
 
     private static TruthAuditAggregate BuildTruthAuditMetrics(IReadOnlyList<ArchiveRecord> records, ComparisonAggregate aggregate)
     {
@@ -608,8 +639,7 @@ public sealed class ComparisonReport
 
         public static ComparisonSample? TryCreate(ArchiveRecord record, ComparisonRunView view, string? scoringProfile)
         {
-            var run1 = record.Runs.Count >= 1 ? record.Runs[0] : null;
-            var run2 = record.Runs.Count >= 2 ? record.Runs[1] : null;
+            var (run1, run2) = SelectDetectionRuns(record);
             var selected = view switch
             {
                 ComparisonRunView.Run1 => run1,
@@ -623,7 +653,13 @@ public sealed class ComparisonReport
                 return null;
             }
 
-            if (view == ComparisonRunView.Delta && (run1 is null || run2 is null || !MatchesProfile(run1, scoringProfile) || !MatchesProfile(run2, scoringProfile)))
+            if (view == ComparisonRunView.Delta
+                && (run1 is null
+                    || run2 is null
+                    || run1.IsDegenerate
+                    || run2.IsDegenerate
+                    || !MatchesProfile(run1, scoringProfile)
+                    || !MatchesProfile(run2, scoringProfile)))
             {
                 return null;
             }

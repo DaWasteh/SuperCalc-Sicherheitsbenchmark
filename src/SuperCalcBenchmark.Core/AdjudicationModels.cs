@@ -83,20 +83,20 @@ public static class AdjudicationApplier
             switch (decision)
             {
                 case "accept_full":
-                    finding.Classification = FindingClassification.FullTruePositive;
-                    finding.MatchedVulnerabilityId = item.MatchedVulnerabilityId;
-                    finding.MatchedVulnerabilityTitle = score.Vulnerabilities.FirstOrDefault(v => string.Equals(v.Id, item.MatchedVulnerabilityId, StringComparison.OrdinalIgnoreCase))?.Title;
-                    finding.Points = profile.Points.FullTp;
-                    finding.Duplicate = false;
-                    finding.FalsePositiveCategory = string.Empty;
-                    finding.Reason = AppendAdjudication(finding.Reason, item);
-                    finding.AdjudicationReason = item.Reason;
-                    break;
                 case "accept_partial":
-                    finding.Classification = FindingClassification.PartialTruePositive;
-                    finding.MatchedVulnerabilityId = item.MatchedVulnerabilityId;
-                    finding.MatchedVulnerabilityTitle = score.Vulnerabilities.FirstOrDefault(v => string.Equals(v.Id, item.MatchedVulnerabilityId, StringComparison.OrdinalIgnoreCase))?.Title;
-                    finding.Points = profile.Points.PartialTp;
+                    var target = score.Vulnerabilities.FirstOrDefault(v =>
+                        string.Equals(v.Id, item.MatchedVulnerabilityId, StringComparison.OrdinalIgnoreCase));
+                    if (target is null)
+                    {
+                        break;
+                    }
+
+                    finding.Classification = decision == "accept_full"
+                        ? FindingClassification.FullTruePositive
+                        : FindingClassification.PartialTruePositive;
+                    finding.MatchedVulnerabilityId = target.Id;
+                    finding.MatchedVulnerabilityTitle = target.Title;
+                    finding.Points = decision == "accept_full" ? profile.Points.FullTp : profile.Points.PartialTp;
                     finding.Duplicate = false;
                     finding.FalsePositiveCategory = string.Empty;
                     finding.Reason = AppendAdjudication(finding.Reason, item);
@@ -138,6 +138,27 @@ public static class AdjudicationApplier
             Exploitability = v.Exploitability,
             Difficulty = v.Difficulty
         }).ToList();
+
+        foreach (var group in findings
+                     .Where(f => f.Classification is FindingClassification.FullTruePositive or FindingClassification.PartialTruePositive)
+                     .Where(f => !string.IsNullOrWhiteSpace(f.MatchedVulnerabilityId))
+                     .GroupBy(f => f.MatchedVulnerabilityId!, StringComparer.OrdinalIgnoreCase))
+        {
+            var winner = group
+                .OrderByDescending(f => f.Classification == FindingClassification.FullTruePositive)
+                .ThenByDescending(f => f.MatchScore)
+                .ThenBy(f => f.FindingIndex)
+                .First();
+            foreach (var duplicate in group.Where(f => !ReferenceEquals(f, winner)))
+            {
+                duplicate.Classification = FindingClassification.Duplicate;
+                duplicate.Points = profile.Points.Duplicate;
+                duplicate.Duplicate = true;
+                duplicate.FalsePositiveCategory = string.Empty;
+                duplicate.Reason = (duplicate.Reason ?? string.Empty).TrimEnd()
+                                   + $" Duplicate after adjudication; finding {winner.FindingIndex} already represents {group.Key}.";
+            }
+        }
 
         foreach (var vulnerability in vulnerabilities)
         {

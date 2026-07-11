@@ -3,7 +3,7 @@ name: Release Standalone App
 # Creates a user-facing release with the standalone Windows EXE.
 #
 # Trigger: push a three-part version tag, e.g.
-#   git tag v0.6.5 && git push origin v0.6.5
+#   git tag vX.Y.Z && git push origin vX.Y.Z
 #
 # The tag version is stamped into the EXE (-p:Version), which the in-app
 # "Update ziehen" button compares against the latest GitHub release.

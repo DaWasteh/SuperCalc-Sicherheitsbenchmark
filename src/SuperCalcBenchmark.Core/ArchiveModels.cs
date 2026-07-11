@@ -726,7 +726,14 @@ public sealed class ArchiveRunScore
             ComputedAt = CompletedAt ?? record?.CompletedAt ?? DateTimeOffset.MinValue;
         }
 
-        OfficialComparable = OfficialComparable || (!IsAdjudicated && ScoringProfiles.IsOfficialComparableProfile(ScoringProfile) && (record?.SourceHashMatches ?? true));
+        var eligibleForOfficialComparison = !IsAdjudicated
+                                            && ScoringProfiles.IsOfficialComparableProfile(ScoringProfile)
+                                            && (record?.SourceHashMatches ?? true)
+                                            && string.Equals(record?.BenchmarkProfile ?? "official", "official", StringComparison.OrdinalIgnoreCase)
+                                            && !IsDegenerate
+                                            && !GroundTruthVisibleToModel
+                                            && !string.Equals(RunKind, "truth_audit", StringComparison.OrdinalIgnoreCase);
+        OfficialComparable = eligibleForOfficialComparison;
     }
 
     private static string CreditToStatus(double credit) => credit >= 0.99 ? "full" : credit > 0 ? "partial" : "missed";

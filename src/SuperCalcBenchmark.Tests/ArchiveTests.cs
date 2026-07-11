@@ -461,6 +461,9 @@ internal static partial class TestRunner
             var series = report.Series.Single();
             Assert(series.TruthAuditRunCount == 1, "comparison should aggregate truth-audit run count");
             Assert(Math.Abs(series.AccountabilityScore - 88) < 0.001, $"accountability should aggregate, got {series.AccountabilityScore}");
+            Assert(series.Run2Score == 0 && series.Run2ScoreDelta == 0, "Run 3 truth audit must not be misclassified as Run 2 self-validation");
+            var run2Report = ComparisonReport.Build(store.LoadGroups(), "supercalc-v3", runView: ComparisonRunView.Run2);
+            Assert(run2Report.IsEmpty, "Run 2 view must be empty when a record contains only Run 1 and Run 3");
             var html = new ComparisonHtmlWriter().BuildHtml(report);
             Assert(html.Contains("accountabilityScore", StringComparison.Ordinal), "HTML payload should expose accountability score");
             Assert(html.Contains("truthAuditChart", StringComparison.Ordinal), "HTML should include a Run 3 truth-audit chart canvas when audit runs exist");
@@ -525,7 +528,9 @@ internal static partial class TestRunner
             var run1 = record.Runs.Single(r => r.RunName == "Run 1");
             var run2 = record.Runs.Single(r => r.RunName == "Run 2");
             Assert(run2.ManuallyStopped && run2.IsDegenerate, "aborted Run 2 must be flagged degenerate");
+            Assert(!run2.OfficialComparable, "aborted Run 2 must remain non-comparable after archive reload");
             Assert(!run1.IsDegenerate, "complete Run 1 must not be degenerate");
+            Assert(run1.OfficialComparable, "complete official Run 1 should remain comparable after archive reload");
 
             Assert(record.PrimaryRun?.RunName == "Run 1", $"aborted Run 2 must not headline; got {record.PrimaryRun?.RunName}");
             Assert(Math.Abs((record.PrimaryRun?.ScorePercent ?? -1) - 29) < 0.001, $"headline must be Run 1's 29, got {record.PrimaryRun?.ScorePercent}");
@@ -536,6 +541,9 @@ internal static partial class TestRunner
             var report = ComparisonReport.Build(store.LoadGroups(), "supercalc-v3");
             var series = report.Series.Single();
             Assert(Math.Abs(series.ScorePercent - 29) < 0.001, $"default comparison view must show 29, not the aborted 0; got {series.ScorePercent}");
+            Assert(series.Run2Score == 0 && series.Run2ScoreDelta == 0, "an aborted Run 2 must not contribute self-validation improvement metrics");
+            var deltaReport = ComparisonReport.Build(store.LoadGroups(), "supercalc-v3", runView: ComparisonRunView.Delta);
+            Assert(deltaReport.IsEmpty, "delta view must exclude records whose Run 2 is degenerate");
         }
         finally
         {

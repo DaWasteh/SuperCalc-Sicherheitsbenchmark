@@ -461,6 +461,7 @@ This project is distributed under the [MIT License](LICENSE).
 
 | Version | Date       | Highlights                                                                                       |
 | :-----: | :--------: | ------------------------------------------------------------------------------------------------ |
+| v0.6.6  | 2026-07-12 | Correctness hardening for evaluation: truth-audit omissions, unrelated/empty proof quotes, and duplicate false-positive admissions no longer gain honesty credit; Run 3 and aborted Run 2 results are excluded from self-validation deltas; archive comparability and adjudicated TP invariants are enforced |
 | v0.6.5  | 2026-07-10 | Standalone-EXE distribution: self-contained single-file publish (`publish.bat`), release workflow on `vX.Y.Z` tags with end-user ZIP, and the in-app update button now self-updates the standalone EXE from GitHub releases (git checkouts keep using `git pull --ff-only`) |
 | v0.6.3  | 2026-07-06 | HTML metric tiles maximize from any non-control click, adds a Run 3 Truth-Audit visualization tile, and includes the latest Ornith 1.0 9B Q8 benchmark scorecard |
 | v0.6.2  | 2026-07-06 | GUI clears manual Quant on model refresh/model changes, comparison HTML draws min/max error bars for repeated bar metrics, and Ornith 1.0 9B BF16/Q8 benchmark scorecards are included |
