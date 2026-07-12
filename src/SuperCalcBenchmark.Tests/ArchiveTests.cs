@@ -372,7 +372,8 @@ internal static partial class TestRunner
             Assert(html.Contains("errorRanges", StringComparison.Ordinal), "html should attach min/max ranges to bar datasets");
             Assert(html.Contains("radarChart", StringComparison.Ordinal), "html should contain the radar chart canvas");
             Assert(html.Contains("reasoningChart", StringComparison.Ordinal), "html should include the Denken-vs-Sagen chart when diagnostics exist");
-            Assert(html.Contains("tokenChart", StringComparison.Ordinal), "html should include the token-efficiency chart when exact token metrics exist");
+            Assert(html.Contains("tokenUsageChart", StringComparison.Ordinal), "html should include the token-usage chart when exact token metrics exist");
+            Assert(html.Contains("tokenEfficiencyChart", StringComparison.Ordinal), "html should include the token-efficiency chart when exact token metrics exist");
             Assert(html.Contains("Score / 1k Tokens", StringComparison.Ordinal), "token chart should expose the efficiency metric");
             Assert(html.Contains("heatmap", StringComparison.Ordinal), "html should include the vulnerability heatmap");
             Assert(html.Contains("openMetricModal", StringComparison.Ordinal), "html should include maximizable metric-card modal code");
