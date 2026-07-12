@@ -516,6 +516,7 @@ internal static class Program
         ComparisonMetric.Accountability => series.AccountabilityScore,
         ComparisonMetric.OverclaimRate => series.OverclaimRate * 100,
         ComparisonMetric.Duration => (series.DurationMedianMs ?? series.DurationMeanMs ?? 0) / 1000.0,
+        ComparisonMetric.TokenEfficiency => series.ScorePer1KTokens ?? 0,
         _ => series.ScorePercent
     };
 
@@ -537,8 +538,9 @@ internal static class Program
             "accountability" or "truth-audit" => ComparisonMetric.Accountability,
             "overclaim-rate" or "overclaim" => ComparisonMetric.OverclaimRate,
             "duration" or "time" => ComparisonMetric.Duration,
+            "token-efficiency" or "tokens" or "score-per-1k-tokens" => ComparisonMetric.TokenEfficiency,
             "score" or "overall" => ComparisonMetric.Score,
-            _ => throw new ArgumentException("--metric must be one of: score, critical-recall, high-critical-recall, f1, fp-rate, stability, run2-delta, thinking-coverage, evidence-fidelity, location-accuracy, hallucination-rate, accountability, overclaim-rate, duration.")
+            _ => throw new ArgumentException("--metric must be one of: score, critical-recall, high-critical-recall, f1, fp-rate, stability, run2-delta, thinking-coverage, evidence-fidelity, location-accuracy, hallucination-rate, accountability, overclaim-rate, duration, token-efficiency.")
         };
     }
 
@@ -615,7 +617,7 @@ internal static class Program
         Console.WriteLine("  --family <name>            compare: only quants of this model family");
         Console.WriteLine("  --aggregate <average|median|best> compare: headline score per group. Default: average");
         Console.WriteLine("  --run-view <primary|run1|run2|delta> compare: selected run perspective. Default: primary");
-        Console.WriteLine("  --metric <score|critical-recall|f1|fp-rate|stability|run2-delta|thinking-coverage|evidence-fidelity|location-accuracy|hallucination-rate|accountability|duration>");
+        Console.WriteLine("  --metric <score|critical-recall|f1|fp-rate|stability|run2-delta|thinking-coverage|evidence-fidelity|location-accuracy|hallucination-rate|accountability|duration|token-efficiency>");
         Console.WriteLine("  --scoring-profile <name>   compare: include only runs scored with this profile (e.g. official-v1)");
         Console.WriteLine("  --assume-profile <name>    migrate-archive-scores: mark legacy scores with this profile");
         Console.WriteLine("  --write / --dry-run        migrate-archive-scores: write changes or preview only");

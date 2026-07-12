@@ -318,6 +318,7 @@
                             <ComboBoxItem Content="Evidence Fidelity" />
                             <ComboBoxItem Content="Hallucination" />
                             <ComboBoxItem Content="Accountability" />
+                            <ComboBoxItem Content="Tokeneffizienz" />
                         </ComboBox>
                         <Button x:Name="OpenComparisonButton" Content="Diagramme öffnen (HTML)" Margin="16,4,4,4" Click="OpenComparisonButton_Click" IsEnabled="False" ToolTip="Erzeugt interaktive Vergleichsdiagramme als HTML und öffnet sie im Browser." />
                         <Button x:Name="OpenArchiveFolderButton" Content="Archiv bearbeiten" Click="OpenArchiveFolderButton_Click" ToolTip="Öffnet die Scorecard-JSONs. modelFamily/quant können manuell korrigiert werden; danach Archiv neu laden." />
@@ -378,6 +379,10 @@
                             <DataGridTextColumn Header="Hallucination" Binding="{Binding HallucinationRate, StringFormat=P1}" IsReadOnly="True" Width="Auto" />
                             <DataGridTextColumn Header="Audit" Binding="{Binding AccountabilityScore, StringFormat=0.##}" IsReadOnly="True" Width="Auto" />
                             <DataGridTextColumn Header="Run2 Δ" Binding="{Binding Run2Delta, StringFormat=0.##}" IsReadOnly="True" Width="Auto" />
+                            <DataGridTextColumn Header="Think Tok" Binding="{Binding ReasoningTokens, StringFormat=0.#}" IsReadOnly="True" Width="Auto" />
+                            <DataGridTextColumn Header="Out Tok" Binding="{Binding OutputTokens, StringFormat=0.#}" IsReadOnly="True" Width="Auto" />
+                            <DataGridTextColumn Header="Gesamt Tok" Binding="{Binding CompletionTokens, StringFormat=0.#}" IsReadOnly="True" Width="Auto" />
+                            <DataGridTextColumn Header="Score/1k Tok" Binding="{Binding ScorePer1KTokens, StringFormat=0.##}" IsReadOnly="True" Width="Auto" />
                             <DataGridTextColumn Header="Median" Binding="{Binding ScoreMedian, StringFormat=0.##}" IsReadOnly="True" Width="Auto" />
                             <DataGridTextColumn Header="σ" Binding="{Binding ScoreStdDev, StringFormat=0.##}" IsReadOnly="True" Width="Auto" />
                             <DataGridTextColumn Header="Min" Binding="{Binding ScoreMin, StringFormat=0.##}" IsReadOnly="True" Width="Auto" />

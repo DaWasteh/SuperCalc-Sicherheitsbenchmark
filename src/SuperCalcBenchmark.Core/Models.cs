@@ -359,6 +359,8 @@ public sealed record ChatCompletionResult
     public string RawResponse { get; init; } = string.Empty;
     public string RequestJson { get; init; } = string.Empty;
     public string FinishReason { get; init; } = string.Empty;
+    public int? PromptTokens { get; init; }
+    public int? CompletionTokens { get; init; }
     public bool LoopDetected { get; init; }
     public string LoopDiagnosticsSummary { get; init; } = string.Empty;
     public bool ManuallyStopped { get; init; }
@@ -433,6 +435,12 @@ public sealed class BenchmarkRunArtifacts
     public string RawResponse { get; init; } = string.Empty;
     public string RequestJson { get; init; } = string.Empty;
     public string FinishReason { get; init; } = string.Empty;
+    /// <summary>Exact model-tokenizer counts. Null means the server did not expose token counting.</summary>
+    public int? PromptTokens { get; init; }
+    public int? ResponseTokens { get; init; }
+    public int? ReasoningTokens { get; init; }
+    /// <summary>Authoritative generated-token total from llama.cpp usage, or the visible channel sum as fallback.</summary>
+    public int? CompletionTokens { get; init; }
     public bool LoopDetected { get; init; }
     public string LoopDiagnosticsSummary { get; init; } = string.Empty;
     public bool ManuallyStopped { get; init; }
@@ -448,7 +456,7 @@ public sealed class BenchmarkRunArtifacts
 
 public sealed class BenchmarkRunResult
 {
-    public string ToolVersion { get; init; } = "0.6.6";
+    public string ToolVersion { get; init; } = "0.6.7";
     public string BenchmarkId { get; init; } = string.Empty;
     public string BenchmarkProfile { get; init; } = "official";
     public DateTimeOffset StartedAt { get; init; }

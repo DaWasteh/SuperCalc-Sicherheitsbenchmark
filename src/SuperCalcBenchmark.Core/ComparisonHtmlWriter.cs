@@ -140,6 +140,11 @@ public sealed class ComparisonHtmlWriter
                 durationMedianSec = s.DurationMedianMs.HasValue ? Math.Round(s.DurationMedianMs.Value / 1000.0, 1) : (double?)null,
                 durationMinSec = s.DurationMinMs.HasValue ? Math.Round(s.DurationMinMs.Value / 1000.0, 1) : (double?)null,
                 durationMaxSec = s.DurationMaxMs.HasValue ? Math.Round(s.DurationMaxMs.Value / 1000.0, 1) : (double?)null,
+                tokenizedRuns = s.TokenizedRunCount,
+                outputTokens = s.OutputTokens.HasValue ? Math.Round(s.OutputTokens.Value, 1) : (double?)null,
+                reasoningTokens = s.ReasoningTokens.HasValue ? Math.Round(s.ReasoningTokens.Value, 1) : (double?)null,
+                completionTokens = s.CompletionTokens.HasValue ? Math.Round(s.CompletionTokens.Value, 1) : (double?)null,
+                scorePer1KTokens = s.ScorePer1KTokens.HasValue ? Math.Round(s.ScorePer1KTokens.Value, 2) : (double?)null,
                 severityRecall = PercentDictionary(s.SeverityRecall),
                 categoryScores = PercentDictionary(s.CategoryScores),
                 cweRecall = PercentDictionary(s.CweRecall),
@@ -170,6 +175,9 @@ public sealed class ComparisonHtmlWriter
                     durationSec = d.DurationMs.HasValue ? Math.Round(d.DurationMs.Value / 1000.0, 1) : (double?)null,
                     responseChars = d.ResponseChars,
                     reasoningChars = d.ReasoningChars,
+                    outputTokens = d.ResponseTokens,
+                    reasoningTokens = d.ReasoningTokens,
+                    completionTokens = d.CompletionTokens,
                     falsePositives = d.FalsePositives,
                     duplicates = d.Duplicates,
                     ignoredLowConfidence = d.IgnoredLowConfidence,
@@ -314,6 +322,7 @@ public sealed class ComparisonHtmlWriter
   const cwes = uniq(data.axis.flatMap(a => a.cwe || []));
   const hasChart = typeof Chart !== "undefined";
   const hasReasoningStats = data.series.some(s => s.visibleReasoningRuns > 0);
+  const hasTokenStats = data.series.some(s => s.tokenizedRuns > 0);
   const hasTruthAuditStats = data.series.some(s => s.truthAuditRunCount > 0);
   const metricHelp = {
     mainMetric:{title:"Hauptmetrik", body:"Zeigt die aktuell ausgewählte Vergleichsmetrik pro Modell/Quant. Datenbasis sind archivierte Scorecards nach aktivem Run-View und Scoring-Profil. Fehlerbalken und Tooltipps verwenden Score-Verteilung derselben Gruppe; bei wenigen Runs ist die Unsicherheit nur deskriptiv."},
@@ -323,6 +332,7 @@ public sealed class ComparisonHtmlWriter
     truthAudit:{title:"Run 3 Truth-Audit", body:"Visualisiert den non-blind Wahrheitstest: Accountability/Honesty, Audit-Accuracy, Quote-Fidelity sowie Overclaim- und Admission-Raten. Dieser Run sieht die Ground Truth absichtlich und verändert den Blind/Self-Validation-Score nicht."},
     qualityHealth:{title:"Qualitäts-/Parsing-Gesundheit", body:"Diagnosechart für False Positives, Duplikate, ignorierte Low-Confidence-Findings, Hallucination Rate, Evidence/Location-Fidelity, Loop- und Parse-Probleme. Diese Metriken erklären Score-Unterschiede, sind aber nicht alle direkte Score-Komponenten."},
     reasoningCoverage:{title:"Denken-vs-Sagen", body:"Vergleicht sichtbares reasoning_content bzw. <think>-Blöcke mit finalem Output. Das ist nur Diagnostik und zählt nicht zum offiziellen Score; unstrukturierte Gedanken können unterzählt werden."},
+    tokenEfficiency:{title:"Tokeneffizienz", body:"Thinking und Output werden nach dem Run mit dem echten Tokenizer des geladenen Modells über /tokenize gezählt. Gesamt ist llama.cpp usage.completion_tokens und enthält deshalb auch erzeugte Steuer-/Trenntokens. Score/1k Tokens setzt den Benchmark-Score ins Verhältnis zum gesamten Generationsaufwand. Alte Scorecards ohne Tokenfelder bleiben n/a."},
     heatmap:{title:"Vulnerability Heatmap", body:"Matrix aus Modell/Quant gegen Ground-Truth-ID. Grün bedeutet erkannt, orange teilweise, rot/verblasst verpasst. Im Delta-Modus zeigt grün Verbesserung durch Run 2, rot Verschlechterung."},
     overview:{title:"Übersicht", body:"Tabellarischer Drilldown pro Modell/Quant mit Score-Versionen, Run-Details, Repeat-Metadaten, Parse-/Loop-Hinweisen, FP-Taxonomie und Run-2-Änderungen. Sortierbar über Spaltenköpfe."}
   };
@@ -341,7 +351,7 @@ public sealed class ComparisonHtmlWriter
           <option value="score">Gesamt-Score</option><option value="criticalRecall">Critical Recall</option><option value="highCriticalRecall">High+Critical Recall</option>
           <option value="f1">F1</option><option value="fpRate">FP-Rate</option><option value="stability">Stability</option><option value="run2Delta">Run2-Delta</option>
           <option value="thinkingCoverage">Thinking Coverage</option><option value="evidenceFidelity">Evidence Fidelity</option><option value="locationAccuracy">Location Accuracy</option>
-          <option value="hallucinationRate">Hallucination Rate</option><option value="evaluationConfidence">Evaluation Confidence</option><option value="accountability">Truth-Audit Accountability</option><option value="overclaimRate">Overclaim Rate</option><option value="duration">Duration</option>
+          <option value="hallucinationRate">Hallucination Rate</option><option value="evaluationConfidence">Evaluation Confidence</option><option value="accountability">Truth-Audit Accountability</option><option value="overclaimRate">Overclaim Rate</option><option value="duration">Duration</option><option value="tokenEfficiency">Score / 1k Tokens</option>
         </select></label>
         <label>Run-Sicht<select id="runView"><option value="primary">Primary</option><option value="run1">Run 1</option><option value="run2">Run 2</option><option value="delta">Run2 - Run1 Delta</option></select></label>
         <label>Score min<input id="minScore" type="number" min="-100" max="100" step="1" /></label>
@@ -381,6 +391,7 @@ public sealed class ComparisonHtmlWriter
       </div>
       <div class="grid two">
         ${hasReasoningStats ? '<div class="card metric-card" data-metric-id="reasoningCoverage">'+metricHeader("reasoningCoverage","Denken-vs-Sagen")+'<div class="note">Diagnostik aus sichtbarem <code>reasoning_content</code> / <code>&lt;think&gt;</code>; nicht Teil des Scores.</div><div class="chart-box"><canvas id="reasoningChart"></canvas></div></div>' : '<div class="card metric-card" data-metric-id="reasoningCoverage">'+metricHeader("reasoningCoverage","Denken-vs-Sagen")+'<div class="empty">Keine sichtbaren Reasoning-Daten in den gefilterten Scorecards.</div></div>'}
+        ${hasTokenStats ? '<div class="card metric-card" data-metric-id="tokenEfficiency">'+metricHeader("tokenEfficiency","Tokeneffizienz")+'<div class="note">Echte Modell-Tokens: Thinking/Output via <code>/tokenize</code>, Gesamt via <code>usage.completion_tokens</code>. Die Linie zeigt Score pro 1.000 Gesamttokens.</div><div class="chart-box"><canvas id="tokenChart"></canvas></div></div>' : '<div class="card metric-card" data-metric-id="tokenEfficiency">'+metricHeader("tokenEfficiency","Tokeneffizienz")+'<div class="empty">Keine Tokenmetriken in den gefilterten Scorecards. Alte Runs werden nicht aus Zeichen geschätzt.</div></div>'}
       </div>` : '<div class="card note">Chart.js konnte nicht geladen werden (keine Internetverbindung?). Heatmap, Filter und Tabelle funktionieren weiterhin offline.</div>'}
     <div class="card metric-card" data-metric-id="heatmap">${metricHeader("heatmap","Vulnerability Heatmap")}<div class="note">0 = verpasst, 0.5 = teilweise, 1 = voll erkannt. Bei Delta: grün = Run 2 besser, rot = schlechter.</div><div id="heatmap" class="heatmap"></div></div>
     <div class="card metric-card" data-metric-id="overview">${metricHeader("overview","Übersicht")}<div id="tableWrap" class="table-wrap"></div><div class="note">Details pro Modell aufklappen. Archivscorecards enthalten keine Prompts oder Rohantworten, nur kompakte Bewertungs-/Diagnosedaten und Run-Ordner-Referenzen.</div></div>`;
@@ -470,11 +481,12 @@ public sealed class ComparisonHtmlWriter
       case "accountability": return s.accountabilityScore ?? 0;
       case "overclaimRate": return s.overclaimRate ?? 0;
       case "duration": return s.durationMedianSec ?? s.durationMeanSec ?? 0;
+      case "tokenEfficiency": return s.scorePer1KTokens ?? 0;
       default: return scoreForRunView(s, st.runView);
     }
   }
   function scoreForRunView(s, runView) { if (runView === "run1") return s.run1Score || s.score; if (runView === "run2") return s.run2Score || s.score; if (runView === "delta") return s.run2Delta || 0; return s.score; }
-  function metricLabel(st) { return ({score:"Gesamt-Score",criticalRecall:"Critical Recall %",highCriticalRecall:"High+Critical Recall %",f1:"F1 %",fpRate:"FP-Rate %",stability:"Stability %",run2Delta:"Run2-Delta",thinkingCoverage:"Thinking Coverage %",evidenceFidelity:"Evidence Fidelity %",locationAccuracy:"Location Accuracy %",hallucinationRate:"Hallucination Rate %",evaluationConfidence:"Evaluation Confidence %",accountability:"Truth-Audit Accountability",overclaimRate:"Overclaim Rate %",duration:"Duration sec"})[st.metric] || "Metrik"; }
+  function metricLabel(st) { return ({score:"Gesamt-Score",criticalRecall:"Critical Recall %",highCriticalRecall:"High+Critical Recall %",f1:"F1 %",fpRate:"FP-Rate %",stability:"Stability %",run2Delta:"Run2-Delta",thinkingCoverage:"Thinking Coverage %",evidenceFidelity:"Evidence Fidelity %",locationAccuracy:"Location Accuracy %",hallucinationRate:"Hallucination Rate %",evaluationConfidence:"Evaluation Confidence %",accountability:"Truth-Audit Accountability",overclaimRate:"Overclaim Rate %",duration:"Duration sec",tokenEfficiency:"Score / 1k Tokens"})[st.metric] || "Metrik"; }
   function metricErrorRange(s, st) {
     if ((s.runCount || 0) < 2) return null;
     const values = metricDistributionValues(s, st).filter(Number.isFinite);
@@ -496,6 +508,7 @@ public sealed class ComparisonHtmlWriter
     }
     if (st.metric === "run2Delta") return details.map(d => d.run2Delta);
     if (st.metric === "duration") return details.map(d => d.durationSec);
+    if (st.metric === "tokenEfficiency") return details.filter(d => d.completionTokens > 0).map(d => d.score * 1000 / d.completionTokens);
     return [];
   }
   function errorScaleBounds(ranges) {
@@ -533,6 +546,9 @@ public sealed class ComparisonHtmlWriter
     if (hasTruthAuditStats && document.getElementById("truthAuditChart")) updateChart("truthAuditChart", { type:"bar", data:{ labels:auditRows.map(s=>s.label), datasets:[
       {label:"Accountability",data:auditRows.map(s=>s.accountabilityScore),backgroundColor:"#2563ebcc"},{label:"Audit Accuracy %",data:auditRows.map(s=>s.truthAuditAccuracy),backgroundColor:"#22c55ecc"},{label:"Quote Fidelity %",data:auditRows.map(s=>s.quoteFidelity),backgroundColor:"#14b8a6cc"},{label:"Overclaim %",data:auditRows.map(s=>s.overclaimRate),backgroundColor:"#ef4444aa"},{label:"Miss Admit %",data:auditRows.map(s=>s.missAdmissionRate),backgroundColor:"#a855f7aa"},{label:"FP Admit %",data:auditRows.map(s=>s.falsePositiveAdmissionRate),backgroundColor:"#f59e0baa"}]}, options:{ indexAxis:"y", responsive:true, maintainAspectRatio:false, scales:{x:{min:0,max:100,title:{display:true,text:"Run 3 Audit % / Score"}}}, plugins:{legend:{position:"bottom"}, tooltip:{callbacks:{afterBody:items=>{ const s=auditRows[items[0].dataIndex]; return [`Audit Runs: ${s.truthAuditRunCount}`,`Evidence Laundering: ${fmt(s.evidenceLaunderingCount)}`]; }}}} }});
     if (hasReasoningStats && document.getElementById("reasoningChart")) updateChart("reasoningChart", { type:"bar", data:{ labels:rows.map(s=>s.label), datasets:[{label:"Gedacht TP",data:rows.map(s=>s.thinkingTp),backgroundColor:"#6366f1cc"},{label:"Gesagt TP",data:rows.map(s=>s.outputTp),backgroundColor:"#10b981cc"},{label:"Nur gedacht",data:rows.map(s=>s.thinkingOnlyTp),backgroundColor:"#f59e0bcc"}]}, options:{ indexAxis:"y", responsive:true, maintainAspectRatio:false, scales:{x:{beginAtZero:true}}, plugins:{legend:{position:"bottom"}} }});
+    const tokenRows = rows.filter(s => s.tokenizedRuns > 0);
+    if (hasTokenStats && document.getElementById("tokenChart")) updateChart("tokenChart", { type:"bar", data:{ labels:tokenRows.map(s=>s.label), datasets:[
+      {type:"bar",label:"Thinking Tokens",data:tokenRows.map(s=>s.reasoningTokens),backgroundColor:"#6366f1cc",stack:"visible"},{type:"bar",label:"Output Tokens",data:tokenRows.map(s=>s.outputTokens),backgroundColor:"#10b981cc",stack:"visible"},{type:"line",label:"Gesamttokens",data:tokenRows.map(s=>s.completionTokens),borderColor:"#f59e0b",backgroundColor:"#f59e0b",pointRadius:3,xAxisID:"x"},{type:"line",label:"Score / 1k Tokens",data:tokenRows.map(s=>s.scorePer1KTokens),borderColor:"#ec4899",backgroundColor:"#ec4899",pointRadius:3,xAxisID:"efficiency"}]}, options:{ indexAxis:"y", responsive:true, maintainAspectRatio:false, scales:{x:{beginAtZero:true,stacked:true,title:{display:true,text:"Generierte Tokens"}},efficiency:{beginAtZero:true,position:"top",title:{display:true,text:"Score / 1k Tokens"},grid:{drawOnChartArea:false}},y:{stacked:true}}, plugins:{legend:{position:"bottom"},tooltip:{callbacks:{afterBody:items=>{const s=tokenRows[items[0].dataIndex]; return [`Tokenisierte Runs: ${s.tokenizedRuns}/${s.runCount}`,`Gesamt: ${fmt(s.completionTokens)} · Score/1k: ${fmt(s.scorePer1KTokens)}`];}}}} }});
   }
 
   function renderHeatmap(rows, axisIdx, st) {
@@ -543,7 +559,7 @@ public sealed class ComparisonHtmlWriter
   }
 
   const cols = [
-    {key:"label",title:"Modell · Quant",kind:"detail"},{key:"runCount",title:"Runs",kind:"num"},{key:"score",title:"Score",kind:"num"},{key:"criticalRecall",title:"Critical %",kind:"num"},{key:"highCriticalRecall",title:"High+Crit %",kind:"num"},{key:"evidenceFidelity",title:"Evidence %",kind:"num"},{key:"locationAccuracy",title:"Location %",kind:"num"},{key:"hallucinationRate",title:"Hallucination %",kind:"num"},{key:"stability",title:"Stability %",kind:"num"},{key:"run2Delta",title:"Run2 Δ",kind:"num"},{key:"truthAuditRunCount",title:"Audit Runs",kind:"num"},{key:"accountabilityScore",title:"Audit",kind:"num"},{key:"truthAuditAccuracy",title:"Audit Acc %",kind:"num"},{key:"overclaimRate",title:"Overclaim %",kind:"num"},{key:"missAdmissionRate",title:"Miss Admit %",kind:"num"},{key:"falsePositiveAdmissionRate",title:"FP Admit %",kind:"num"},{key:"quoteFidelity",title:"Quote %",kind:"num"},{key:"evidenceLaunderingCount",title:"Launder",kind:"num"},{key:"scoreMedian",title:"Median",kind:"num"},{key:"scoreStdDev",title:"±σ",kind:"num"},{key:"scoreIqr",title:"IQR",kind:"num"},{key:"precision",title:"Precision %",kind:"num"},{key:"recall",title:"Recall %",kind:"num"},{key:"f1",title:"F1 %",kind:"num"},{key:"fullTp",title:"Full TP",kind:"num"},{key:"partialTp",title:"Partial",kind:"num"},{key:"falsePositives",title:"FP",kind:"num"},{key:"duplicates",title:"Dup",kind:"num"},{key:"missed",title:"Missed",kind:"num"},{key:"parseSuccessRate",title:"Parse %",kind:"num"},{key:"loopRate",title:"Loop %",kind:"num"},{key:"durationMedianSec",title:"Dur s",kind:"num"},{key:"thinkingToOutputCoverage",title:"Think→Out %",kind:"num"}
+    {key:"label",title:"Modell · Quant",kind:"detail"},{key:"runCount",title:"Runs",kind:"num"},{key:"score",title:"Score",kind:"num"},{key:"criticalRecall",title:"Critical %",kind:"num"},{key:"highCriticalRecall",title:"High+Crit %",kind:"num"},{key:"evidenceFidelity",title:"Evidence %",kind:"num"},{key:"locationAccuracy",title:"Location %",kind:"num"},{key:"hallucinationRate",title:"Hallucination %",kind:"num"},{key:"stability",title:"Stability %",kind:"num"},{key:"run2Delta",title:"Run2 Δ",kind:"num"},{key:"truthAuditRunCount",title:"Audit Runs",kind:"num"},{key:"accountabilityScore",title:"Audit",kind:"num"},{key:"truthAuditAccuracy",title:"Audit Acc %",kind:"num"},{key:"overclaimRate",title:"Overclaim %",kind:"num"},{key:"missAdmissionRate",title:"Miss Admit %",kind:"num"},{key:"falsePositiveAdmissionRate",title:"FP Admit %",kind:"num"},{key:"quoteFidelity",title:"Quote %",kind:"num"},{key:"evidenceLaunderingCount",title:"Launder",kind:"num"},{key:"scoreMedian",title:"Median",kind:"num"},{key:"scoreStdDev",title:"±σ",kind:"num"},{key:"scoreIqr",title:"IQR",kind:"num"},{key:"precision",title:"Precision %",kind:"num"},{key:"recall",title:"Recall %",kind:"num"},{key:"f1",title:"F1 %",kind:"num"},{key:"fullTp",title:"Full TP",kind:"num"},{key:"partialTp",title:"Partial",kind:"num"},{key:"falsePositives",title:"FP",kind:"num"},{key:"duplicates",title:"Dup",kind:"num"},{key:"missed",title:"Missed",kind:"num"},{key:"parseSuccessRate",title:"Parse %",kind:"num"},{key:"loopRate",title:"Loop %",kind:"num"},{key:"durationMedianSec",title:"Dur s",kind:"num"},{key:"reasoningTokens",title:"Think Tok",kind:"num"},{key:"outputTokens",title:"Out Tok",kind:"num"},{key:"completionTokens",title:"Gesamt Tok",kind:"num"},{key:"scorePer1KTokens",title:"Score/1k Tok",kind:"num"},{key:"thinkingToOutputCoverage",title:"Think→Out %",kind:"num"}
   ];
   function renderTable(rows, st) {
     rows = rows.slice().sort((a,b) => { const av = valueForSort(a,sortKey,st), bv = valueForSort(b,sortKey,st); if (typeof av === "number" || typeof bv === "number") return ((av ?? -Infinity) - (bv ?? -Infinity))*sortDir; return String(av??"").localeCompare(String(bv??""))*sortDir; });
@@ -554,7 +570,7 @@ public sealed class ComparisonHtmlWriter
   }
   const auditMetricKeys = new Set(["accountabilityScore","truthAuditAccuracy","overclaimRate","missAdmissionRate","falsePositiveAdmissionRate","quoteFidelity","evidenceLaunderingCount"]);
   function cell(s,c,st) { if (c.kind === "detail") return detailCell(s); if (auditMetricKeys.has(c.key) && !(s.truthAuditRunCount > 0)) return "n/a"; const v = valueForSort(s,c.key,st); return typeof v === "number" && Number.isFinite(v) ? (Number.isInteger(v) ? v : v.toFixed(1)) : "n/a"; }
-  function detailCell(s) { const details = s.details || []; const rows = details.map(d => { const version = `${esc(d.scoringProfile||"legacy-unknown")} v${d.scoringProfileVersion||"?"}${d.isLegacyMigrated ? " · legacy-migriert" : ""}${d.isRescored ? " · rescored" : ""}`; return `<tr><td>${esc(d.completedAt||"")}</td><td>${esc(d.runName)}</td><td>${version}</td><td>${d.officialComparable?'ja':'nein'}</td><td>${fmt(d.score)}</td><td>${fmtSigned(d.run2Delta)}</td><td>${esc(d.finishReason||"")}</td><td>${esc(d.parseMode||"")}</td><td>${d.loopDetected?'ja':'nein'}</td><td>${fmt(d.durationSec)}</td><td>${d.responseChars}/${d.reasoningChars}</td><td>${esc(d.repeatGroupId||'—')} ${d.repeatCount>1 ? '('+d.repeatIndex+'/'+d.repeatCount+')' : ''}</td></tr>`; }).join(""); const fpTax = Object.entries(s.falsePositiveTaxonomy||{}).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`${esc(k)}=${fmt(v)}`).join(', ') || '—'; return `<details><summary>${esc(s.label)}</summary><div class="note">Profil: ${s.officialRunCount}/${s.runCount} offiziell · official comparable: ${s.officialComparableRunCount}/${s.runCount} · legacy-migriert: ${s.legacyMigratedRunCount}/${s.runCount} · rescored: ${s.rescoredRunCount}/${s.runCount} · Source-Hash: ${s.sourceHashMatchCount}/${s.runCount} · FP-Taxonomie: ${fpTax} · Run2 dropped: ${(s.run2DroppedIds||[]).join(', ')||'—'} · added: ${(s.run2AddedIds||[]).join(', ')||'—'}</div><table class="detail-table"><thead><tr><th>Datum</th><th>Run</th><th>Score-Version</th><th>Official</th><th>Score</th><th>Run2 Δ</th><th>Finish</th><th>Parse</th><th>Loop</th><th>s</th><th>Out/Think chars</th><th>Repeat</th></tr></thead><tbody>${rows}</tbody></table></details>`; }
+  function detailCell(s) { const details = s.details || []; const rows = details.map(d => { const version = `${esc(d.scoringProfile||"legacy-unknown")} v${d.scoringProfileVersion||"?"}${d.isLegacyMigrated ? " · legacy-migriert" : ""}${d.isRescored ? " · rescored" : ""}`; return `<tr><td>${esc(d.completedAt||"")}</td><td>${esc(d.runName)}</td><td>${version}</td><td>${d.officialComparable?'ja':'nein'}</td><td>${fmt(d.score)}</td><td>${fmtSigned(d.run2Delta)}</td><td>${esc(d.finishReason||"")}</td><td>${esc(d.parseMode||"")}</td><td>${d.loopDetected?'ja':'nein'}</td><td>${fmt(d.durationSec)}</td><td>${fmt(d.outputTokens)}/${fmt(d.reasoningTokens)}/${fmt(d.completionTokens)}</td><td>${esc(d.repeatGroupId||'—')} ${d.repeatCount>1 ? '('+d.repeatIndex+'/'+d.repeatCount+')' : ''}</td></tr>`; }).join(""); const fpTax = Object.entries(s.falsePositiveTaxonomy||{}).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`${esc(k)}=${fmt(v)}`).join(', ') || '—'; return `<details><summary>${esc(s.label)}</summary><div class="note">Profil: ${s.officialRunCount}/${s.runCount} offiziell · official comparable: ${s.officialComparableRunCount}/${s.runCount} · legacy-migriert: ${s.legacyMigratedRunCount}/${s.runCount} · rescored: ${s.rescoredRunCount}/${s.runCount} · Source-Hash: ${s.sourceHashMatchCount}/${s.runCount} · FP-Taxonomie: ${fpTax} · Run2 dropped: ${(s.run2DroppedIds||[]).join(', ')||'—'} · added: ${(s.run2AddedIds||[]).join(', ')||'—'}</div><table class="detail-table"><thead><tr><th>Datum</th><th>Run</th><th>Score-Version</th><th>Official</th><th>Score</th><th>Run2 Δ</th><th>Finish</th><th>Parse</th><th>Loop</th><th>s</th><th>Out/Think/Gesamt Tokens</th><th>Repeat</th></tr></thead><tbody>${rows}</tbody></table></details>`; }
   function valueForSort(s,key,st) { if (key === "score") return scoreForRunView(s, st.runView); return s[key]; }
 
   function metricHeader(metricId, title, titleId) {
@@ -634,8 +650,8 @@ public sealed class ComparisonHtmlWriter
 
   function exportFilteredCsv() {
     const st = readState(); const rows = data.series.filter(s => includeSeries(s, st));
-    const headers = ["model_family","quant","runs","score","critical_recall_pct","high_critical_recall_pct","evidence_fidelity_pct","location_accuracy_pct","hallucination_rate_pct","f1_pct","stability_pct","run2_delta","fp","duplicates","missed","parse_success_pct","loop_pct","duration_median_sec"]; 
-    const lines = [headers.join(",")]; rows.forEach(s => lines.push([s.family,s.quant,s.runCount,scoreForRunView(s,st.runView),s.criticalRecall,s.highCriticalRecall,s.evidenceFidelity,s.locationAccuracy,s.hallucinationRate,s.f1,s.stability,s.run2Delta,s.falsePositives,s.duplicates,s.missed,s.parseSuccessRate,s.loopRate,s.durationMedianSec??""].map(csv).join(",")));
+    const headers = ["model_family","quant","runs","score","critical_recall_pct","high_critical_recall_pct","evidence_fidelity_pct","location_accuracy_pct","hallucination_rate_pct","f1_pct","stability_pct","run2_delta","fp","duplicates","missed","parse_success_pct","loop_pct","duration_median_sec","thinking_tokens","output_tokens","completion_tokens","score_per_1k_tokens"];
+    const lines = [headers.join(",")]; rows.forEach(s => lines.push([s.family,s.quant,s.runCount,scoreForRunView(s,st.runView),s.criticalRecall,s.highCriticalRecall,s.evidenceFidelity,s.locationAccuracy,s.hallucinationRate,s.f1,s.stability,s.run2Delta,s.falsePositives,s.duplicates,s.missed,s.parseSuccessRate,s.loopRate,s.durationMedianSec??"",s.reasoningTokens??"",s.outputTokens??"",s.completionTokens??"",s.scorePer1KTokens??""].map(csv).join(",")));
     const blob = new Blob([lines.join("\n")], {type:"text/csv;charset=utf-8"}); const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `supercalc-comparison-filtered-${Date.now()}.csv`; a.click(); URL.revokeObjectURL(a.href);
   }
 
@@ -677,6 +693,7 @@ public sealed class ComparisonHtmlWriter
             "run1_score", "run2_score", "run2_delta", "run2_fp_reduction", "run2_tp_retention_percent", "run2_dropped_tp", "run2_added_tp",
             "truth_audit_runs", "accountability_score", "truth_audit_accuracy_percent", "overclaim_rate_percent", "miss_admission_rate_percent", "fp_admission_rate_percent", "evidence_laundering_count", "quote_fidelity_percent",
             "duration_mean_sec", "duration_median_sec", "duration_min_sec", "duration_max_sec",
+            "tokenized_runs", "thinking_tokens", "output_tokens", "completion_tokens", "score_per_1k_tokens",
             "visible_reasoning_runs", "thinking_parsed_findings", "output_parsed_findings",
             "thinking_tp", "output_tp", "thinking_only_tp", "output_only_tp", "thinking_to_output_coverage_percent"
         };
@@ -754,6 +771,11 @@ public sealed class ComparisonHtmlWriter
                 s.DurationMedianMs.HasValue ? (s.DurationMedianMs.Value / 1000.0).ToString("0.#", CultureInfo.InvariantCulture) : string.Empty,
                 s.DurationMinMs.HasValue ? (s.DurationMinMs.Value / 1000.0).ToString("0.#", CultureInfo.InvariantCulture) : string.Empty,
                 s.DurationMaxMs.HasValue ? (s.DurationMaxMs.Value / 1000.0).ToString("0.#", CultureInfo.InvariantCulture) : string.Empty,
+                s.TokenizedRunCount.ToString(CultureInfo.InvariantCulture),
+                s.ReasoningTokens?.ToString("0.#", CultureInfo.InvariantCulture) ?? string.Empty,
+                s.OutputTokens?.ToString("0.#", CultureInfo.InvariantCulture) ?? string.Empty,
+                s.CompletionTokens?.ToString("0.#", CultureInfo.InvariantCulture) ?? string.Empty,
+                s.ScorePer1KTokens?.ToString("0.##", CultureInfo.InvariantCulture) ?? string.Empty,
                 s.VisibleReasoningRunCount.ToString(CultureInfo.InvariantCulture),
                 s.ReasoningParsedFindings.ToString("0.#", CultureInfo.InvariantCulture),
                 s.OutputParsedFindings.ToString("0.#", CultureInfo.InvariantCulture),
@@ -792,6 +814,7 @@ public sealed class ComparisonHtmlWriter
         ComparisonMetric.Accountability => "accountability",
         ComparisonMetric.OverclaimRate => "overclaimRate",
         ComparisonMetric.Duration => "duration",
+        ComparisonMetric.TokenEfficiency => "tokenEfficiency",
         _ => "score"
     };
 

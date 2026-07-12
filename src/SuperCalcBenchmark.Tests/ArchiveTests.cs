@@ -372,6 +372,8 @@ internal static partial class TestRunner
             Assert(html.Contains("errorRanges", StringComparison.Ordinal), "html should attach min/max ranges to bar datasets");
             Assert(html.Contains("radarChart", StringComparison.Ordinal), "html should contain the radar chart canvas");
             Assert(html.Contains("reasoningChart", StringComparison.Ordinal), "html should include the Denken-vs-Sagen chart when diagnostics exist");
+            Assert(html.Contains("tokenChart", StringComparison.Ordinal), "html should include the token-efficiency chart when exact token metrics exist");
+            Assert(html.Contains("Score / 1k Tokens", StringComparison.Ordinal), "token chart should expose the efficiency metric");
             Assert(html.Contains("heatmap", StringComparison.Ordinal), "html should include the vulnerability heatmap");
             Assert(html.Contains("openMetricModal", StringComparison.Ordinal), "html should include maximizable metric-card modal code");
             Assert(html.Contains("card.addEventListener(\"click\"", StringComparison.Ordinal), "metric cards should maximize when clicking inside the tile");
@@ -402,6 +404,8 @@ internal static partial class TestRunner
             Assert(series.TryGetProperty("thinkingTp", out _), "payload should expose Denken/Gedacht TP statistics");
             Assert(series.TryGetProperty("outputTp", out _), "payload should expose Sagen/Gesagt TP statistics");
             Assert(series.GetProperty("visibleReasoningRuns").GetInt32() == 1, "payload should count visible reasoning runs");
+            Assert(series.GetProperty("completionTokens").GetDouble() == 1502, "payload should expose aggregate generated tokens");
+            Assert(series.GetProperty("scorePer1KTokens").GetDouble() > 0, "payload should expose token efficiency");
 
             var csv = writer.BuildCsv(report);
             Assert(csv.Contains("model_family", StringComparison.Ordinal), "csv should have a header row");
@@ -409,6 +413,8 @@ internal static partial class TestRunner
             Assert(csv.Contains("thinking_tp", StringComparison.Ordinal), "csv should include Denken-vs-Sagen columns");
             Assert(csv.Contains("hallucination_rate_percent", StringComparison.Ordinal), "csv should include hallucination metric columns");
             Assert(csv.Contains("fp_taxonomy", StringComparison.Ordinal), "csv should include FP taxonomy columns");
+            Assert(csv.Contains("completion_tokens", StringComparison.Ordinal), "csv should include exact token metrics");
+            Assert(csv.Contains("score_per_1k_tokens", StringComparison.Ordinal), "csv should include token efficiency");
         }
         finally
         {
@@ -597,6 +603,11 @@ internal static partial class TestRunner
             Assert(run.VulnerabilityResults.Count == 3, "v1 vulnerabilityCredit should synthesize v2 vulnerabilityResults");
             Assert(run.VulnerabilityResults.Single(v => v.Id == "SC-V3-002").Status == "partial", "partial credit should synthesize partial status");
             Assert(run.ParseMode == "unknown", "missing v1 parse mode should normalize to unknown");
+            Assert(run.PromptTokens is null && run.ResponseTokens is null && run.ReasoningTokens is null && run.CompletionTokens is null,
+                "legacy scorecards must keep missing token metrics as n/a instead of estimating from characters");
+            var legacyReport = ComparisonReport.Build(new ArchiveStore(tempRoot).LoadGroups(), "supercalc-v3");
+            Assert(legacyReport.Series.Single().TokenizedRunCount == 0, "legacy-only comparison series should report zero tokenized runs");
+            Assert(legacyReport.Series.Single().ScorePer1KTokens is null, "legacy-only comparison series should keep token efficiency unavailable");
         }
         finally
         {
@@ -624,6 +635,10 @@ internal static partial class TestRunner
                 RawResponse = "{\"raw\":true}",
                 RequestJson = "{\"request\":true}",
                 FinishReason = "length",
+                PromptTokens = 123,
+                ResponseTokens = 0,
+                ReasoningTokens = 3,
+                CompletionTokens = 4,
                 LoopDetected = true,
                 LoopDiagnosticsSummary = "repeated reasoning",
                 UsedResponseFormat = true,
@@ -647,6 +662,10 @@ internal static partial class TestRunner
             Assert(run.ParseMode == "markdown_json", "parse mode should be archived");
             Assert(run.DurationMs >= 2000, "per-run duration should be archived");
             Assert(run.PromptChars == "prompt".Length, "prompt character count should be archived without storing the prompt");
+            Assert(run.PromptTokens == 123, "exact prompt tokens should be archived");
+            Assert(run.ResponseTokens == 0, "exact output tokens should be archived");
+            Assert(run.ReasoningTokens == 3, "exact reasoning tokens should be archived");
+            Assert(run.CompletionTokens == 4, "authoritative completion total should be archived");
             Assert(run.VulnerabilityResults.Count == FakeVulnIds.Length, "v2 scorecards should include rich vulnerability results");
         }
         finally
@@ -905,7 +924,18 @@ internal static partial class TestRunner
             ExpectedSourceSha256 = "deadbeef",
             SourceHashMatches = true,
             OutputDirectory = string.Empty,
-            Run1 = new BenchmarkRunArtifacts { RunName = "Run 1", StartedAt = now, CompletedAt = now, Score = score, ReasoningDisclosure = reasoningDisclosure }
+            Run1 = new BenchmarkRunArtifacts
+            {
+                RunName = "Run 1",
+                StartedAt = now,
+                CompletedAt = now,
+                PromptTokens = 12_000,
+                ResponseTokens = 1_000,
+                ReasoningTokens = 500,
+                CompletionTokens = 1_502,
+                Score = score,
+                ReasoningDisclosure = reasoningDisclosure
+            }
         };
     }
 

@@ -28,6 +28,7 @@ internal static partial class TestRunner
         Run("official timeout covers slow reasoning budget", OfficialTimeoutCoversSlowReasoningBudget);
         Run("llama client leaves thinking enabled by default", LlamaClientLeavesThinkingEnabledByDefault);
         Run("llama client disables Qwen thinking when requested", LlamaClientDisablesQwenThinkingWhenRequested);
+        Run("llama client reports exact tokenizer and usage counts", LlamaClientReportsExactTokenCounts);
         Run("loop detector flags repeated reasoning", LoopDetectorFlagsRepeatedReasoning);
         Run("loop detector flags runaway security bullet cycle", LoopDetectorFlagsRunawaySecurityBulletCycle);
         Run("loop detector ignores bounded finding list", LoopDetectorIgnoresBoundedFindingList);
@@ -420,6 +421,24 @@ internal static partial class TestRunner
         Assert(result.UsedThinkingControl, "result should record thinking-control usage");
         Assert(result.AssistantContent == "{\"ok\":true}", "assistant content should be extracted");
         Assert(result.ReasoningContent == "not used", "reasoning_content should be captured for diagnostics");
+    }
+
+    private static void LlamaClientReportsExactTokenCounts()
+    {
+        var handler = new CapturingHandler();
+        using var client = new LlamaCppClient(TimeSpan.FromSeconds(5), handler);
+        var count = client.CountTokensAsync("http://unit.test", "Qwen3.5-4B", "tokenize me").GetAwaiter().GetResult();
+        Assert(count == 3, $"expected exact /tokenize array length 3, got {count}");
+
+        var result = client.CreateChatCompletionAsync(
+            "http://unit.test",
+            "Qwen3.5-4B",
+            "system",
+            "user",
+            new BenchmarkOptions { Model = "Qwen3.5-4B", MaxTokens = 16 }).GetAwaiter().GetResult();
+        Assert(result.PromptTokens == 11, $"expected prompt usage 11, got {result.PromptTokens}");
+        Assert(result.CompletionTokens == 7, $"expected completion usage 7, got {result.CompletionTokens}");
+        Assert(handler.RequestBody.Contains("\"include_usage\": true", StringComparison.Ordinal), "streaming request should request final usage metrics");
     }
 
     private static void LoopDetectorFlagsRepeatedReasoning()
@@ -1266,6 +1285,14 @@ internal static partial class TestRunner
                 ? string.Empty
                 : await request.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
 
+            if (request.RequestUri?.AbsolutePath.EndsWith("/tokenize", StringComparison.Ordinal) == true)
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("{\"tokens\":[101,202,303]}", Encoding.UTF8, "application/json")
+                };
+            }
+
             const string responseJson = """
             {
               "choices": [
@@ -1278,7 +1305,12 @@ internal static partial class TestRunner
                     "reasoning_content": "not used"
                   }
                 }
-              ]
+              ],
+              "usage": {
+                "prompt_tokens": 11,
+                "completion_tokens": 7,
+                "total_tokens": 18
+              }
             }
             """;
 

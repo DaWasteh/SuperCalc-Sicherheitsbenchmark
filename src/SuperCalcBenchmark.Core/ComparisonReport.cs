@@ -90,6 +90,10 @@ public sealed class ComparisonReport
             var duplicateTotal = samples.Sum(s => Math.Max(0, s.Run.Duplicates));
             var ignoredTotal = samples.Sum(s => Math.Max(0, s.Run.IgnoredLowConfidence));
             var fpTotal = samples.Sum(s => Math.Max(0, s.Run.FalsePositives));
+            var outputTokens = AggregateNullableMetric(samples, s => s.Run.ResponseTokens, aggregate, bestSample);
+            var reasoningTokens = AggregateNullableMetric(samples, s => s.Run.ReasoningTokens, aggregate, bestSample);
+            var completionTokens = AggregateNullableMetric(samples, s => s.Run.CompletionTokens, aggregate, bestSample);
+            var scorePer1KTokens = completionTokens > 0 ? score * 1000.0 / completionTokens.Value : (double?)null;
 
             series.Add(new ComparisonSeries
             {
@@ -181,6 +185,11 @@ public sealed class ComparisonReport
                 DurationMedianMs = durationValues.Count == 0 ? null : Median(durationValues),
                 DurationMinMs = durationValues.Count == 0 ? null : durationValues.Min(),
                 DurationMaxMs = durationValues.Count == 0 ? null : durationValues.Max(),
+                OutputTokens = outputTokens,
+                ReasoningTokens = reasoningTokens,
+                CompletionTokens = completionTokens,
+                ScorePer1KTokens = scorePer1KTokens,
+                TokenizedRunCount = samples.Count(s => s.Run.CompletionTokens.HasValue),
                 Details = samples.Select(s => ComparisonRunDetail.FromSample(s)).OrderByDescending(d => d.CompletedAt).ToList()
             });
         }
@@ -217,6 +226,7 @@ public sealed class ComparisonReport
         ComparisonMetric.Accountability => series.AccountabilityScore,
         ComparisonMetric.OverclaimRate => series.OverclaimRate,
         ComparisonMetric.Duration => series.DurationMedianMs ?? series.DurationMeanMs ?? 0,
+        ComparisonMetric.TokenEfficiency => series.ScorePer1KTokens ?? 0,
         _ => series.ScorePercent
     };
 
@@ -247,6 +257,26 @@ public sealed class ComparisonReport
         }
 
         var values = samples.Select(selector).ToList();
+        return aggregate == ComparisonAggregate.Median ? Median(values) : values.Average();
+    }
+
+    private static double? AggregateNullableMetric(
+        IReadOnlyList<ComparisonSample> samples,
+        Func<ComparisonSample, int?> selector,
+        ComparisonAggregate aggregate,
+        ComparisonSample bestSample)
+    {
+        if (aggregate == ComparisonAggregate.Best)
+        {
+            return selector(bestSample);
+        }
+
+        var values = samples.Select(selector).Where(v => v.HasValue).Select(v => (double)v!.Value).ToList();
+        if (values.Count == 0)
+        {
+            return null;
+        }
+
         return aggregate == ComparisonAggregate.Median ? Median(values) : values.Average();
     }
 
@@ -742,7 +772,8 @@ public enum ComparisonMetric
     EvaluationConfidence,
     Accountability,
     OverclaimRate,
-    Duration
+    Duration,
+    TokenEfficiency
 }
 
 public sealed class ComparisonSeries
@@ -851,6 +882,12 @@ public sealed class ComparisonSeries
     public double? DurationMinMs { get; init; }
     public double? DurationMaxMs { get; init; }
 
+    public int TokenizedRunCount { get; init; }
+    public double? OutputTokens { get; init; }
+    public double? ReasoningTokens { get; init; }
+    public double? CompletionTokens { get; init; }
+    public double? ScorePer1KTokens { get; init; }
+
     public List<ComparisonRunDetail> Details { get; init; } = [];
 }
 
@@ -882,6 +919,9 @@ public sealed class ComparisonRunDetail
     public long? DurationMs { get; init; }
     public int ResponseChars { get; init; }
     public int ReasoningChars { get; init; }
+    public int? ResponseTokens { get; init; }
+    public int? ReasoningTokens { get; init; }
+    public int? CompletionTokens { get; init; }
     public int FalsePositives { get; init; }
     public int Duplicates { get; init; }
     public int IgnoredLowConfidence { get; init; }
@@ -922,6 +962,9 @@ public sealed class ComparisonRunDetail
             DurationMs = sample.Run.DurationMs,
             ResponseChars = sample.Run.ResponseChars,
             ReasoningChars = sample.Run.ReasoningChars,
+            ResponseTokens = sample.Run.ResponseTokens,
+            ReasoningTokens = sample.Run.ReasoningTokens,
+            CompletionTokens = sample.Run.CompletionTokens,
             FalsePositives = sample.Run.FalsePositives,
             Duplicates = sample.Run.Duplicates,
             IgnoredLowConfidence = sample.Run.IgnoredLowConfidence,

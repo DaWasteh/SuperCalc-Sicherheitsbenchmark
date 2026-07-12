@@ -205,9 +205,11 @@ public sealed class ReportWriter
             builder.AppendLine($"| Loop abort reason | {EscapePipe(artifacts.LoopDiagnosticsSummary)} |");
         }
         builder.AppendLine($"| Duration | {FormatDuration(artifacts.DurationMs)} |");
-        builder.AppendLine($"| Prompt chars | {artifacts.Prompt.Length} |");
-        builder.AppendLine($"| Assistant content chars | {artifacts.Response.Length} |");
-        builder.AppendLine($"| Reasoning content chars | {artifacts.ReasoningContent.Length} |");
+        builder.AppendLine($"| User prompt chars | {artifacts.Prompt.Length:N0} |");
+        builder.AppendLine($"| Input prompt tokens | {FormatTokenCount(artifacts.PromptTokens)} |");
+        builder.AppendLine($"| Assistant output tokens | {FormatTokenCount(artifacts.ResponseTokens)} |");
+        builder.AppendLine($"| Thinking/reasoning tokens | {FormatTokenCount(artifacts.ReasoningTokens)} |");
+        builder.AppendLine($"| Total generated tokens | {FormatTokenCount(artifacts.CompletionTokens)} |");
         builder.AppendLine($"| Used response_format | {artifacts.UsedResponseFormat} |");
         builder.AppendLine($"| Retried without response_format | {artifacts.RetriedWithoutResponseFormat} |");
         builder.AppendLine($"| Sent Qwen thinking disable hint | {artifacts.UsedThinkingControl} |");
@@ -226,6 +228,11 @@ public sealed class ReportWriter
         }
 
         builder.AppendLine();
+        if (artifacts.ResponseTokens.HasValue || artifacts.ReasoningTokens.HasValue || artifacts.CompletionTokens.HasValue)
+        {
+            builder.AppendLine("> Token counts are exact model-tokenizer values, not character estimates. `Total generated tokens` comes from llama.cpp `usage.completion_tokens` and can exceed Thinking + Output because generated control, separator, or EOS tokens are not visible in either text channel.");
+            builder.AppendLine();
+        }
         if (artifacts.ReasoningDisclosure.HasVisibleReasoning)
         {
             builder.AppendLine("> `Denken-vs-Sagen` is diagnostic only and is not included in the 100-point benchmark score. It uses the same hidden-ground-truth matcher on visible `reasoning_content` / inline `<think>` blocks, so unstructured thinking can be undercounted.");
@@ -432,6 +439,8 @@ public sealed class ReportWriter
 
         return builder.ToString();
     }
+
+    private static string FormatTokenCount(int? value) => value.HasValue ? value.Value.ToString("N0") : "n/a";
 
     private static string FormatMaxTokens(int maxTokens) => maxTokens < 0 ? "-1 (server max/unbounded)" : maxTokens.ToString(System.Globalization.CultureInfo.InvariantCulture);
 

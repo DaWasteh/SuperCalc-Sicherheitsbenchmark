@@ -81,6 +81,41 @@ public sealed class LlamaCppClient : IDisposable
             $"Could not fetch models from '{serverUrl}'. Is llama-server running on that URL? Errors: {string.Join(" | ", errors.Select(e => e.Message))}");
     }
 
+    public async Task<int?> CountTokensAsync(string serverUrl, string model, string text, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return 0;
+        }
+
+        var requestJson = JsonSerializer.Serialize(new
+        {
+            model,
+            content = text,
+            add_special = false,
+            parse_special = true
+        }, JsonOptions);
+        using var content = new StringContent(requestJson, Encoding.UTF8, "application/json");
+        using var response = await _httpClient.PostAsync(BuildUri(serverUrl, "/tokenize"), content, cancellationToken).ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode)
+        {
+            return null;
+        }
+
+        var responseText = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            using var document = JsonDocument.Parse(responseText);
+            return document.RootElement.TryGetProperty("tokens", out var tokens) && tokens.ValueKind == JsonValueKind.Array
+                ? tokens.GetArrayLength()
+                : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
     public async Task<int?> GetServerContextSizeAsync(string serverUrl, CancellationToken cancellationToken = default)
     {
         var endpoints = new[] { "/props", "/v1/models", "/slots" };
@@ -388,6 +423,8 @@ public sealed class LlamaCppClient : IDisposable
         if (stream)
         {
             request["stream"] = true;
+            // llama.cpp emits exact usage in the final SSE chunk when requested.
+            request["stream_options"] = new { include_usage = true };
         }
 
         // Only send max_tokens when it is a real positive budget. A value of -1
@@ -444,6 +481,8 @@ public sealed class LlamaCppClient : IDisposable
                     AssistantContent = extracted.AssistantContent,
                     ReasoningContent = extracted.ReasoningContent,
                     FinishReason = extracted.FinishReason,
+                    PromptTokens = extracted.PromptTokens,
+                    CompletionTokens = extracted.CompletionTokens,
                     RawResponse = responseText,
                     RequestJson = requestJson,
                     UsedResponseFormat = requestJson.Contains("response_format", StringComparison.Ordinal),
@@ -477,6 +516,8 @@ public sealed class LlamaCppClient : IDisposable
         var rawBuilder = new StringBuilder();
         var nonSseBuilder = new StringBuilder();
         var finishReason = string.Empty;
+        int? promptTokens = null;
+        int? completionTokens = null;
         var loopDetected = false;
         var loopDiagnosticsSummary = string.Empty;
         var loopState = new StreamLoopState();
@@ -546,7 +587,7 @@ public sealed class LlamaCppClient : IDisposable
 
                 rawBuilder.AppendLine(payload);
 
-                finishReason = ConsumeStreamChunk(payload, contentBuilder, reasoningBuilder, finishReason, streamProgress);
+                finishReason = ConsumeStreamChunk(payload, contentBuilder, reasoningBuilder, finishReason, streamProgress, ref promptTokens, ref completionTokens);
                 if (abortOnLoop && loopState.TryDetect(contentBuilder, out var diagnosticsSummary))
                 {
                     loopDetected = true;
@@ -567,7 +608,9 @@ public sealed class LlamaCppClient : IDisposable
                 finishReason,
                 loopDetected,
                 loopDiagnosticsSummary,
-                manuallyStopped: true), string.Empty);
+                manuallyStopped: true,
+                promptTokens: promptTokens,
+                completionTokens: completionTokens), string.Empty);
         }
         catch (Exception ex) when (ex is IOException or HttpRequestException or JsonException)
         {
@@ -590,6 +633,8 @@ public sealed class LlamaCppClient : IDisposable
                     AssistantContent = extracted.AssistantContent,
                     ReasoningContent = extracted.ReasoningContent,
                     FinishReason = extracted.FinishReason,
+                    PromptTokens = extracted.PromptTokens,
+                    CompletionTokens = extracted.CompletionTokens,
                     RawResponse = fallbackText.TrimEnd(),
                     RequestJson = requestJson,
                     UsedResponseFormat = requestJson.Contains("response_format", StringComparison.Ordinal),
@@ -612,7 +657,9 @@ public sealed class LlamaCppClient : IDisposable
             finishReason,
             loopDetected,
             loopDiagnosticsSummary,
-            manuallyStopped: false), string.Empty);
+            manuallyStopped: false,
+            promptTokens: promptTokens,
+            completionTokens: completionTokens), string.Empty);
     }
 
     private static ChatCompletionResult BuildStreamingResult(
@@ -623,13 +670,17 @@ public sealed class LlamaCppClient : IDisposable
         string finishReason,
         bool loopDetected,
         string loopDiagnosticsSummary,
-        bool manuallyStopped)
+        bool manuallyStopped,
+        int? promptTokens,
+        int? completionTokens)
     {
         return new ChatCompletionResult
         {
             AssistantContent = contentBuilder.ToString(),
             ReasoningContent = reasoningBuilder.ToString(),
             FinishReason = manuallyStopped ? ManualAbortFinishReason : finishReason,
+            PromptTokens = promptTokens,
+            CompletionTokens = completionTokens,
             LoopDetected = loopDetected,
             LoopDiagnosticsSummary = loopDiagnosticsSummary,
             ManuallyStopped = manuallyStopped,
@@ -680,7 +731,9 @@ public sealed class LlamaCppClient : IDisposable
         StringBuilder contentBuilder,
         StringBuilder reasoningBuilder,
         string finishReason,
-        IProgress<ChatStreamDelta>? streamProgress)
+        IProgress<ChatStreamDelta>? streamProgress,
+        ref int? promptTokens,
+        ref int? completionTokens)
     {
         JsonDocument document;
         try
@@ -696,6 +749,7 @@ public sealed class LlamaCppClient : IDisposable
         using (document)
         {
             var root = document.RootElement;
+            ReadUsage(root, ref promptTokens, ref completionTokens);
             if (!root.TryGetProperty("choices", out var choices) ||
                 choices.ValueKind != JsonValueKind.Array ||
                 choices.GetArrayLength() == 0)
@@ -747,10 +801,13 @@ public sealed class LlamaCppClient : IDisposable
         return finishReason;
     }
 
-    private static (string AssistantContent, string ReasoningContent, string FinishReason) ExtractChatMessageContent(string responseText)
+    private static (string AssistantContent, string ReasoningContent, string FinishReason, int? PromptTokens, int? CompletionTokens) ExtractChatMessageContent(string responseText)
     {
         using var document = JsonDocument.Parse(responseText);
         var root = document.RootElement;
+        int? promptTokens = null;
+        int? completionTokens = null;
+        ReadUsage(root, ref promptTokens, ref completionTokens);
 
         if (root.TryGetProperty("choices", out var choices) && choices.ValueKind == JsonValueKind.Array && choices.GetArrayLength() > 0)
         {
@@ -770,22 +827,40 @@ public sealed class LlamaCppClient : IDisposable
 
                 if (!string.IsNullOrEmpty(assistantContent) || !string.IsNullOrEmpty(reasoningContent) || message.TryGetProperty("content", out _))
                 {
-                    return (assistantContent, reasoningContent, finishReason);
+                    return (assistantContent, reasoningContent, finishReason, promptTokens, completionTokens);
                 }
             }
 
             if (firstChoice.TryGetProperty("text", out var text))
             {
-                return (ReadElementAsString(text), string.Empty, finishReason);
+                return (ReadElementAsString(text), string.Empty, finishReason, promptTokens, completionTokens);
             }
         }
 
         if (root.TryGetProperty("content", out var directContent))
         {
-            return (ReadElementAsString(directContent), string.Empty, string.Empty);
+            return (ReadElementAsString(directContent), string.Empty, string.Empty, promptTokens, completionTokens);
         }
 
         throw new InvalidOperationException("The response does not contain choices[0].message.content or reasoning_content.");
+    }
+
+    private static void ReadUsage(JsonElement root, ref int? promptTokens, ref int? completionTokens)
+    {
+        if (!root.TryGetProperty("usage", out var usage) || usage.ValueKind != JsonValueKind.Object)
+        {
+            return;
+        }
+
+        if (usage.TryGetProperty("prompt_tokens", out var prompt) && prompt.TryGetInt32(out var parsedPrompt))
+        {
+            promptTokens = parsedPrompt;
+        }
+
+        if (usage.TryGetProperty("completion_tokens", out var completion) && completion.TryGetInt32(out var parsedCompletion))
+        {
+            completionTokens = parsedCompletion;
+        }
     }
 
     private static string ReadElementAsString(JsonElement element)

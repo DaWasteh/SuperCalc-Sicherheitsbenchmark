@@ -1010,7 +1010,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        _liveStatusBlock.Text = $"Streamt... Thinking: {_liveReasoningChars:N0} chars | Output: {_liveContentChars:N0} chars";
+        _liveStatusBlock.Text = "Streamt... exakte Tokenzahlen werden nach Abschluss mit dem Modell-Tokenizer ermittelt.";
     }
 
     private void OnRunCompleted(BenchmarkRunArtifacts artifacts)
@@ -1395,6 +1395,7 @@ public partial class MainWindow : Window
             "Evidence Fidelity" => ComparisonMetric.EvidenceFidelity,
             "Hallucination" => ComparisonMetric.HallucinationRate,
             "Accountability" => ComparisonMetric.Accountability,
+            "Tokeneffizienz" => ComparisonMetric.TokenEfficiency,
             _ => ComparisonMetric.Score
         };
 
@@ -1440,6 +1441,10 @@ public partial class MainWindow : Window
         public double HallucinationRate { get; init; }
         public double AccountabilityScore { get; init; }
         public double Run2Delta { get; init; }
+        public double? ReasoningTokens { get; init; }
+        public double? OutputTokens { get; init; }
+        public double? CompletionTokens { get; init; }
+        public double? ScorePer1KTokens { get; init; }
         public double ScoreMedian { get; init; }
         public double ScoreStdDev { get; init; }
         public double ScoreMin { get; init; }
@@ -1466,6 +1471,10 @@ public partial class MainWindow : Window
             HallucinationRate = series.HallucinationRate,
             AccountabilityScore = series.AccountabilityScore,
             Run2Delta = series.Run2ScoreDelta,
+            ReasoningTokens = series.ReasoningTokens,
+            OutputTokens = series.OutputTokens,
+            CompletionTokens = series.CompletionTokens,
+            ScorePer1KTokens = series.ScorePer1KTokens,
             ScoreMedian = series.ScoreMedian,
             ScoreStdDev = series.ScoreStdDev,
             ScoreMin = series.ScoreMin,
@@ -1519,7 +1528,7 @@ public partial class MainWindow : Window
         var details = $"TP: {score.FullTruePositives} full + {score.PartialTruePositives} partial | " +
                       $"FP: {score.FalsePositives} | FN: {score.Missed}\n" +
                       $"Precision: {score.Precision:P1} | Recall: {score.Recall:P1} | F1: {score.F1:P1}\n" +
-                      $"Finish: {artifacts.FinishReason} | Content: {artifacts.Response.Length} chars | Reasoning: {artifacts.ReasoningContent.Length} chars\n" +
+                      $"Finish: {artifacts.FinishReason} | Output: {FormatTokens(artifacts.ResponseTokens)} | Thinking: {FormatTokens(artifacts.ReasoningTokens)} | Gesamt: {FormatTokens(artifacts.CompletionTokens)}\n" +
                       $"Denken-vs-Sagen: {FormatReasoningDisclosure(artifacts.ReasoningDisclosure)}";
 
         if (artifacts.ManuallyStopped)
@@ -1540,7 +1549,7 @@ public partial class MainWindow : Window
         var audit = artifacts.TruthAudit;
         if (audit is null)
         {
-            return $"Truth-Audit ohne auswertbare Audit-Daten. Finish: {artifacts.FinishReason} | Output: {artifacts.Response.Length} chars | Reasoning: {artifacts.ReasoningContent.Length} chars";
+            return $"Truth-Audit ohne auswertbare Audit-Daten. Finish: {artifacts.FinishReason} | Output: {FormatTokens(artifacts.ResponseTokens)} | Thinking: {FormatTokens(artifacts.ReasoningTokens)} | Gesamt: {FormatTokens(artifacts.CompletionTokens)}";
         }
 
         var details = $"Auditiert: {audit.AuditedRunName} ({audit.AuditedRunScorePercent:0.##}/100, {audit.AuditedRunScoreProfile})\n" +
@@ -1548,7 +1557,7 @@ public partial class MainWindow : Window
                       $"Miss-Admission: {audit.MissAdmissionRate:P1} | FP-Admission: {audit.FalsePositiveAdmissionRate:P1} | Overclaim: {audit.OverclaimRate:P1}\n" +
                       $"Quote-Fidelity: {audit.QuoteFidelity:P1} | Evidence-Laundering: {audit.EvidenceLaunderingCount} | Widersprüche: {audit.ContradictionCount}\n" +
                       $"Tatsächlich verpasst: {audit.ActualMissedCount} | tatsächliche False Positives: {audit.ActualFalsePositiveCount}\n" +
-                      $"Finish: {artifacts.FinishReason} | Content: {artifacts.Response.Length} chars | Reasoning: {artifacts.ReasoningContent.Length} chars\n" +
+                      $"Finish: {artifacts.FinishReason} | Output: {FormatTokens(artifacts.ResponseTokens)} | Thinking: {FormatTokens(artifacts.ReasoningTokens)} | Gesamt: {FormatTokens(artifacts.CompletionTokens)}\n" +
                       "Non-blind: Ground Truth ist in Run 3 absichtlich sichtbar; dieser Run verändert den Blind/Self-Validation-Score nicht.";
 
         if (!string.IsNullOrWhiteSpace(audit.SelectionReason))
@@ -1649,14 +1658,14 @@ public partial class MainWindow : Window
             isExpanded: false,
             backgroundBrushKey: CodeBackgroundBrushKey));
         panel.Children.Add(CreateTextExpander(
-            $"assistant message.content — OUTPUT ({artifacts.Response.Length:N0} chars)",
+            $"assistant message.content — OUTPUT ({FormatTokens(artifacts.ResponseTokens)})",
             artifacts.Response,
             OutputTextBrushKey,
             FontStyles.Normal,
             isExpanded: true,
             backgroundBrushKey: OutputBackgroundBrushKey));
         panel.Children.Add(CreateTextExpander(
-            $"assistant message.reasoning_content — THINKING ({artifacts.ReasoningContent.Length:N0} chars)",
+            $"assistant message.reasoning_content — THINKING ({FormatTokens(artifacts.ReasoningTokens)})",
             artifacts.ReasoningContent,
             ReasoningTextBrushKey,
             FontStyles.Italic,
@@ -1695,7 +1704,8 @@ public partial class MainWindow : Window
             || (string.IsNullOrWhiteSpace(artifacts.Response) && !string.IsNullOrWhiteSpace(artifacts.ReasoningContent));
 
         var builder = new StringBuilder();
-        builder.AppendLine($"Finish: {EmptyFallback(artifacts.FinishReason)} | Output: {artifacts.Response.Length:N0} chars | Thinking: {artifacts.ReasoningContent.Length:N0} chars");
+        builder.AppendLine($"Finish: {EmptyFallback(artifacts.FinishReason)} | Output: {FormatTokens(artifacts.ResponseTokens)} | Thinking: {FormatTokens(artifacts.ReasoningTokens)} | Gesamt: {FormatTokens(artifacts.CompletionTokens)}");
+        builder.AppendLine("Tokenquelle: Thinking/Output = Modell-/tokenize; Gesamt = llama.cpp usage (inkl. unsichtbarer Steuer-/EOS-Tokens).");
         builder.AppendLine($"Manueller Stop: {artifacts.ManuallyStopped}");
         builder.AppendLine($"Loop-Abbruch: {artifacts.LoopDetected} {artifacts.LoopDiagnosticsSummary}");
         builder.AppendLine($"response_format: {artifacts.UsedResponseFormat} | retry ohne response_format: {artifacts.RetriedWithoutResponseFormat} | thinking-disable hint: {artifacts.UsedThinkingControl}");
@@ -1810,6 +1820,8 @@ public partial class MainWindow : Window
             Content = richTextBox
         };
     }
+
+    private static string FormatTokens(int? value) => value.HasValue ? $"{value.Value:N0} Tokens" : "n/a";
 
     private static string EmptyFallback(string value) => string.IsNullOrWhiteSpace(value) ? "<empty>" : value;
 

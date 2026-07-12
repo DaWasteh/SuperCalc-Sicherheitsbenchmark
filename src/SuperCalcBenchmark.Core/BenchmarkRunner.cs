@@ -1,8 +1,10 @@
+using System.Text.Json;
+
 namespace SuperCalcBenchmark.Core;
 
 public sealed class BenchmarkRunner
 {
-    private const string ToolVersion = "0.6.6";
+    private const string ToolVersion = "0.6.7";
 
     private readonly GroundTruthStore _groundTruthStore;
     private readonly PromptBuilder _promptBuilder;
@@ -126,6 +128,7 @@ public sealed class BenchmarkRunner
 
         progress?.Invoke("Parsing and scoring Run 1...");
         var run1Content = SplitThinkingContent(run1Completion.AssistantContent, run1Completion.ReasoningContent);
+        var run1Tokens = await CountCompletionTokensAsync(client, options.ServerUrl, options.Model, run1Content, run1Completion, cancellationToken).ConfigureAwait(false);
         var run1Parse = _responseParser.Parse(run1Content.OutputContent);
         var run1Score = _scoringEngine.Score(
             "Run 1",
@@ -155,6 +158,10 @@ public sealed class BenchmarkRunner
             RawResponse = run1Completion.RawResponse,
             RequestJson = run1Completion.RequestJson,
             FinishReason = run1Completion.FinishReason,
+            PromptTokens = run1Completion.PromptTokens,
+            ResponseTokens = run1Tokens.Output,
+            ReasoningTokens = run1Tokens.Reasoning,
+            CompletionTokens = run1Tokens.Total,
             LoopDetected = run1Completion.LoopDetected,
             LoopDiagnosticsSummary = run1Completion.LoopDiagnosticsSummary,
             ManuallyStopped = run1Completion.ManuallyStopped,
@@ -197,6 +204,7 @@ public sealed class BenchmarkRunner
 
         progress?.Invoke("Parsing and scoring Run 2...");
         var run2Content = SplitThinkingContent(run2Completion.AssistantContent, run2Completion.ReasoningContent);
+        var run2Tokens = await CountCompletionTokensAsync(client, options.ServerUrl, options.Model, run2Content, run2Completion, cancellationToken).ConfigureAwait(false);
         var run2Parse = _responseParser.Parse(run2Content.OutputContent);
         var run2Score = _scoringEngine.Score(
             "Run 2",
@@ -226,6 +234,10 @@ public sealed class BenchmarkRunner
             RawResponse = run2Completion.RawResponse,
             RequestJson = run2Completion.RequestJson,
             FinishReason = run2Completion.FinishReason,
+            PromptTokens = run2Completion.PromptTokens,
+            ResponseTokens = run2Tokens.Output,
+            ReasoningTokens = run2Tokens.Reasoning,
+            CompletionTokens = run2Tokens.Total,
             LoopDetected = run2Completion.LoopDetected,
             LoopDiagnosticsSummary = run2Completion.LoopDiagnosticsSummary,
             ManuallyStopped = run2Completion.ManuallyStopped,
@@ -272,6 +284,7 @@ public sealed class BenchmarkRunner
 
             progress?.Invoke("Parsing and scoring Run 3 truth audit...");
             var run3Content = SplitThinkingContent(run3Completion.AssistantContent, run3Completion.ReasoningContent);
+            var run3Tokens = await CountCompletionTokensAsync(client, options.ServerUrl, options.Model, run3Content, run3Completion, cancellationToken).ConfigureAwait(false);
             var truthAuditResponse = _truthAuditParser.Parse(run3Content.OutputContent);
             var truthAudit = _truthAuditScoringEngine.Score(
                 truthAuditResponse,
@@ -294,6 +307,10 @@ public sealed class BenchmarkRunner
                 RawResponse = run3Completion.RawResponse,
                 RequestJson = run3Completion.RequestJson,
                 FinishReason = run3Completion.FinishReason,
+                PromptTokens = run3Completion.PromptTokens,
+                ResponseTokens = run3Tokens.Output,
+                ReasoningTokens = run3Tokens.Reasoning,
+                CompletionTokens = run3Tokens.Total,
                 LoopDetected = run3Completion.LoopDetected,
                 LoopDiagnosticsSummary = run3Completion.LoopDiagnosticsSummary,
                 ManuallyStopped = run3Completion.ManuallyStopped,
@@ -372,6 +389,7 @@ public sealed class BenchmarkRunner
 
         progress?.Invoke("Parsing and scoring Run 3 truth audit...");
         var run3Content = SplitThinkingContent(run3Completion.AssistantContent, run3Completion.ReasoningContent);
+        var run3Tokens = await CountCompletionTokensAsync(client, options.ServerUrl, options.Model, run3Content, run3Completion, cancellationToken).ConfigureAwait(false);
         var truthAuditResponse = _truthAuditParser.Parse(run3Content.OutputContent);
         var truthAudit = _truthAuditScoringEngine.Score(
             truthAuditResponse,
@@ -394,6 +412,10 @@ public sealed class BenchmarkRunner
             RawResponse = run3Completion.RawResponse,
             RequestJson = run3Completion.RequestJson,
             FinishReason = run3Completion.FinishReason,
+            PromptTokens = run3Completion.PromptTokens,
+            ResponseTokens = run3Tokens.Output,
+            ReasoningTokens = run3Tokens.Reasoning,
+            CompletionTokens = run3Tokens.Total,
             LoopDetected = run3Completion.LoopDetected,
             LoopDiagnosticsSummary = run3Completion.LoopDiagnosticsSummary,
             ManuallyStopped = run3Completion.ManuallyStopped,
@@ -552,6 +574,32 @@ public sealed class BenchmarkRunner
         }
 
         return AdjudicationApplier.ApplyFromFile(score, options.AdjudicationPath);
+    }
+
+    private static async Task<(int? Output, int? Reasoning, int? Total)> CountCompletionTokensAsync(
+        LlamaCppClient client,
+        string serverUrl,
+        string model,
+        (string OutputContent, string ReasoningContent) content,
+        ChatCompletionResult completion,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var outputTask = client.CountTokensAsync(serverUrl, model, content.OutputContent, cancellationToken);
+            var reasoningTask = client.CountTokensAsync(serverUrl, model, content.ReasoningContent, cancellationToken);
+            await Task.WhenAll(outputTask, reasoningTask).ConfigureAwait(false);
+
+            var output = await outputTask.ConfigureAwait(false);
+            var reasoning = await reasoningTask.ConfigureAwait(false);
+            var visibleTotal = output.HasValue && reasoning.HasValue ? output.Value + reasoning.Value : (int?)null;
+            return (output, reasoning, completion.CompletionTokens ?? visibleTotal);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or IOException or JsonException)
+        {
+            // Token metrics are diagnostics and must never invalidate an otherwise valid benchmark run.
+            return (null, null, completion.CompletionTokens);
+        }
     }
 
     private static (string OutputContent, string ReasoningContent) SplitThinkingContent(string assistantContent, string reasoningContent)

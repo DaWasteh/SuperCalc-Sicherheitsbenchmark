@@ -390,6 +390,18 @@ public sealed class ArchiveRunScore
     [JsonPropertyName("manuallyStopped")]
     public bool ManuallyStopped { get; set; }
 
+    [JsonPropertyName("promptTokens")]
+    public int? PromptTokens { get; set; }
+
+    [JsonPropertyName("responseTokens")]
+    public int? ResponseTokens { get; set; }
+
+    [JsonPropertyName("reasoningTokens")]
+    public int? ReasoningTokens { get; set; }
+
+    [JsonPropertyName("completionTokens")]
+    public int? CompletionTokens { get; set; }
+
     [JsonPropertyName("responseChars")]
     public int ResponseChars { get; set; }
 
@@ -514,6 +526,10 @@ public sealed class ArchiveRunScore
         run.LoopDetected = artifacts.LoopDetected;
         run.LoopDiagnosticsSummary = artifacts.LoopDiagnosticsSummary ?? string.Empty;
         run.ManuallyStopped = artifacts.ManuallyStopped;
+        run.PromptTokens = artifacts.PromptTokens;
+        run.ResponseTokens = artifacts.ResponseTokens;
+        run.ReasoningTokens = artifacts.ReasoningTokens;
+        run.CompletionTokens = artifacts.CompletionTokens;
         run.ResponseChars = artifacts.Response?.Length ?? 0;
         run.ReasoningChars = artifacts.ReasoningContent?.Length ?? 0;
         run.RawResponseChars = artifacts.RawResponse?.Length ?? 0;
