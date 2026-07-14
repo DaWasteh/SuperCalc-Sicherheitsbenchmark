@@ -22,6 +22,7 @@ public partial class MainWindow : Window
     private CancellationTokenSource? _run2ManualStop;
     private CancellationTokenSource? _run3ManualStop;
     private int _activeRunNumber;
+    private bool _stopAfterCurrentPassRequested;
     private BenchmarkRunResult? _lastResult;
     private BenchmarkTheme _currentTheme = BenchmarkTheme.Light;
 
@@ -666,14 +667,21 @@ public partial class MainWindow : Window
         }
 
         _benchmarkCancellation = new CancellationTokenSource();
+        _stopAfterCurrentPassRequested = false;
         SetBusy(true, benchmarkRunning: true);
+        SoftStopButton.IsEnabled = totalPasses > 1;
         var completedPasses = 0;
+        var softStopped = false;
 
         try
         {
             for (var pass = 1; pass <= totalPasses; pass++)
             {
                 _benchmarkCancellation.Token.ThrowIfCancellationRequested();
+
+                // Countdown im (während des Laufs ausgegrauten) Durchläufe-Feld:
+                // zeigt, wie viele Durchläufe inklusive des aktuellen noch anstehen.
+                RepeatCountTextBox.Text = (totalPasses - pass + 1).ToString();
 
                 // Manual per-run stop tokens are per pass: stopping Run 1 in pass 3
                 // must not affect Run 1 of pass 4.
@@ -723,14 +731,28 @@ public partial class MainWindow : Window
                 AppendLog(totalPasses > 1
                     ? $"Durchlauf {pass}/{totalPasses} abgeschlossen."
                     : "Benchmark abgeschlossen.");
+
+                if (_stopAfterCurrentPassRequested && pass < totalPasses)
+                {
+                    softStopped = true;
+                    AppendLog($"Soft-Stopp: Durchlauf {pass}/{totalPasses} regulär beendet, {totalPasses - pass} ausstehende(r) Durchlauf/Durchläufe übersprungen.");
+                    break;
+                }
             }
 
-            StatusTextBlock.Text = totalPasses > 1
-                ? $"Alle {totalPasses} Benchmark-Durchläufe abgeschlossen."
-                : "Benchmark abgeschlossen.";
-            if (totalPasses > 1)
+            if (softStopped)
             {
-                AppendLog($"Alle {totalPasses} Durchläufe abgeschlossen.");
+                StatusTextBlock.Text = $"Benchmark per Soft-Stopp beendet ({completedPasses}/{totalPasses} Durchläufe abgeschlossen).";
+            }
+            else
+            {
+                StatusTextBlock.Text = totalPasses > 1
+                    ? $"Alle {totalPasses} Benchmark-Durchläufe abgeschlossen."
+                    : "Benchmark abgeschlossen.";
+                if (totalPasses > 1)
+                {
+                    AppendLog($"Alle {totalPasses} Durchläufe abgeschlossen.");
+                }
             }
         }
         catch (OperationCanceledException)
@@ -757,6 +779,8 @@ public partial class MainWindow : Window
             _benchmarkCancellation = null;
             DisposeManualStopTokens();
             _activeRunNumber = 0;
+            _stopAfterCurrentPassRequested = false;
+            RepeatCountTextBox.Text = totalPasses.ToString();
             SetBusy(false, benchmarkRunning: false);
         }
     }
@@ -775,9 +799,24 @@ public partial class MainWindow : Window
     {
         _benchmarkCancellation?.Cancel();
         CancelBenchmarkButton.IsEnabled = false;
+        SoftStopButton.IsEnabled = false;
         SetManualAbortButtons(run1Enabled: false, run2Enabled: false);
         StatusTextBlock.Text = "Abbruch angefordert...";
         AppendLog("Abbruch angefordert...");
+    }
+
+    private void SoftStopButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_benchmarkCancellation is null || _stopAfterCurrentPassRequested)
+        {
+            return;
+        }
+
+        _stopAfterCurrentPassRequested = true;
+        SoftStopButton.IsEnabled = false;
+        var message = "Soft-Stopp angefordert: aktueller Durchlauf läuft zu Ende und wird archiviert, ausstehende Durchläufe werden übersprungen.";
+        StatusTextBlock.Text = message;
+        AppendLog(message);
     }
 
     private void AbortRun1Button_Click(object sender, RoutedEventArgs e)
@@ -1919,6 +1958,7 @@ public partial class MainWindow : Window
         CancelBenchmarkButton.IsEnabled = benchmarkRunning;
         if (!benchmarkRunning)
         {
+            SoftStopButton.IsEnabled = false;
             SetManualAbortButtons(run1Enabled: false, run2Enabled: false);
         }
     }

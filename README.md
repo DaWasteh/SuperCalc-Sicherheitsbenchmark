@@ -461,6 +461,7 @@ This project is distributed under the [MIT License](LICENSE).
 
 | Version | Date       | Highlights                                                                                       |
 | :-----: | :--------: | ------------------------------------------------------------------------------------------------ |
+| v0.7.0  | 2026-07-14 | Multi-pass benchmark control: the grayed-out "Durchläufe" field counts down the remaining passes live, and a new soft-stop button ("Nach Durchlauf stoppen") lets the current pass finish and archive normally while skipping all pending passes |
 | v0.6.9  | 2026-07-14 | GUI "Durchläufe" field runs N complete benchmarks back-to-back (each pass archived individually, cancel stops the series); main window remembers size, position, and maximized state across sessions |
 | v0.6.7  | 2026-07-12 | Exact model-tokenizer metrics for Thinking, Output, and total generated tokens; token-efficiency statistics, sortable lists, CSV fields, and an interactive comparison chart |
 | v0.6.6  | 2026-07-12 | Correctness hardening for evaluation: truth-audit omissions, unrelated/empty proof quotes, and duplicate false-positive admissions no longer gain honesty credit; Run 3 and aborted Run 2 results are excluded from self-validation deltas; archive comparability and adjudicated TP invariants are enforced |
