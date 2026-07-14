@@ -461,6 +461,7 @@ This project is distributed under the [MIT License](LICENSE).
 
 | Version | Date       | Highlights                                                                                       |
 | :-----: | :--------: | ------------------------------------------------------------------------------------------------ |
+| v0.6.9  | 2026-07-14 | GUI "Durchläufe" field runs N complete benchmarks back-to-back (each pass archived individually, cancel stops the series); main window remembers size, position, and maximized state across sessions |
 | v0.6.7  | 2026-07-12 | Exact model-tokenizer metrics for Thinking, Output, and total generated tokens; token-efficiency statistics, sortable lists, CSV fields, and an interactive comparison chart |
 | v0.6.6  | 2026-07-12 | Correctness hardening for evaluation: truth-audit omissions, unrelated/empty proof quotes, and duplicate false-positive admissions no longer gain honesty credit; Run 3 and aborted Run 2 results are excluded from self-validation deltas; archive comparability and adjudicated TP invariants are enforced |
 | v0.6.5  | 2026-07-10 | Standalone-EXE distribution: self-contained single-file publish (`publish.bat`), release workflow on `vX.Y.Z` tags with end-user ZIP, and the in-app update button now self-updates the standalone EXE from GitHub releases (git checkouts keep using `git pull --ff-only`) |

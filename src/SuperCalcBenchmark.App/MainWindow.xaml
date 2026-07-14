@@ -60,6 +60,8 @@
                     <ColumnDefinition Width="2*" />
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
 
                 <TextBlock Grid.Row="0" Grid.Column="0" Text="Server" VerticalAlignment="Center" Margin="4" />
@@ -68,10 +70,12 @@
 
                 <TextBlock Grid.Row="0" Grid.Column="3" Text="Modell" VerticalAlignment="Center" Margin="12,4,4,4" />
                 <ComboBox x:Name="ModelComboBox" Grid.Row="0" Grid.Column="4" IsEditable="False" SelectionChanged="ModelComboBox_SelectionChanged" />
-                <Button x:Name="StartBenchmarkButton" Grid.Row="0" Grid.Column="5" Content="Benchmark starten" FontWeight="SemiBold" Click="StartBenchmarkButton_Click" />
-                <Button x:Name="CancelBenchmarkButton" Grid.Row="0" Grid.Column="6" Content="Abbrechen" IsEnabled="False" Click="CancelBenchmarkButton_Click" />
+                <TextBlock Grid.Row="0" Grid.Column="5" Text="Durchläufe" VerticalAlignment="Center" Margin="12,4,4,4" />
+                <TextBox x:Name="RepeatCountTextBox" Grid.Row="0" Grid.Column="6" Text="1" Width="52" VerticalAlignment="Center" ToolTip="Anzahl kompletter Benchmark-Durchläufe (je Run 1 + Run 2 + Run 3) direkt hintereinander. Jeder Durchlauf wird einzeln archiviert — z.B. 30 für kleine Modelle über Nacht." />
+                <Button x:Name="StartBenchmarkButton" Grid.Row="0" Grid.Column="7" Content="Benchmark starten" FontWeight="SemiBold" Click="StartBenchmarkButton_Click" />
+                <Button x:Name="CancelBenchmarkButton" Grid.Row="0" Grid.Column="8" Content="Abbrechen" IsEnabled="False" Click="CancelBenchmarkButton_Click" ToolTip="Bricht den laufenden Durchlauf ab; weitere geplante Durchläufe werden ebenfalls gestoppt." />
 
-                <Expander Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="7" Header="Optionen" Margin="4,8,4,0" IsExpanded="False">
+                <Expander Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="9" Header="Optionen" Margin="4,8,4,0" IsExpanded="False">
                     <WrapPanel Margin="0,8,0,0">
                         <TextBlock Text="Max Tokens (-1=max)" VerticalAlignment="Center" Margin="4" />
                         <TextBox x:Name="MaxTokensTextBox" Text="-1" Width="90" ToolTip="-1 (empfohlen für Reasoning-Modelle): kein Limit, llama.cpp generiert bis EOS/Kontext/Timeout — Thinking UND finale Antwort haben Platz. Eine feste Zahl teilt sich das Budget zwischen Thinking und Antwort; bei denkenden Modellen kann dann die Antwort leer bleiben." />

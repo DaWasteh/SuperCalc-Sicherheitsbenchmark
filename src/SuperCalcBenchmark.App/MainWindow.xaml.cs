@@ -1,7 +1,9 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
@@ -80,6 +82,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        RestoreWindowPlacement();
         SourceInitialized += MainWindow_SourceInitialized;
         ApplyTheme(BenchmarkTheme.Light);
         _repositoryRoot = FindRepositoryRoot();
@@ -650,8 +653,10 @@ public partial class MainWindow : Window
         }
 
         BenchmarkOptions options;
+        int totalPasses;
         try
         {
+            totalPasses = ParseInt(RepeatCountTextBox.Text, "Durchläufe", 1, min: 1);
             options = BuildOptions(model);
         }
         catch (Exception ex)
@@ -660,49 +665,81 @@ public partial class MainWindow : Window
             return;
         }
 
-        ResetResultUi();
         _benchmarkCancellation = new CancellationTokenSource();
-        _run1ManualStop = new CancellationTokenSource();
-        _run2ManualStop = new CancellationTokenSource();
-        _run3ManualStop = new CancellationTokenSource();
         SetBusy(true, benchmarkRunning: true);
-        StatusTextBlock.Text = "Benchmark läuft... Run 1 + Run 2 + Run 3 Truth-Audit können je nach Modell einige Minuten dauern.";
-        AppendLog($"Benchmark startet für Modell: {model}");
-        AppendLog($"Repository: {_repositoryRoot}");
-        AppendLog($"Request-Settings: max_tokens={options.MaxTokens}, response_format={!options.SkipResponseFormat}, disable_thinking={options.DisableThinking}, truth_audit={options.WithTruthAudit}, loop_abort={options.AbortOnLoop}, timeout={options.Timeout.TotalSeconds:0}s");
+        var completedPasses = 0;
 
         try
         {
-            var runner = new BenchmarkRunner();
+            for (var pass = 1; pass <= totalPasses; pass++)
+            {
+                _benchmarkCancellation.Token.ThrowIfCancellationRequested();
 
-            // IProgress created on the UI thread → Report() callbacks are marshalled
-            // back to the UI thread automatically, so we can touch controls directly.
-            var streamProgress = new Progress<ChatStreamDelta>(OnStreamDelta);
+                // Manual per-run stop tokens are per pass: stopping Run 1 in pass 3
+                // must not affect Run 1 of pass 4.
+                _run1ManualStop = new CancellationTokenSource();
+                _run2ManualStop = new CancellationTokenSource();
+                _run3ManualStop = new CancellationTokenSource();
 
-            // Prepare the live view for Run 1 before the first token arrives.
-            BeginLiveRun(Run1RawPanel, "Run 1 — Blind Analysis", runNumber: 1);
+                ResetResultUi(clearLog: pass == 1);
+                var passLabel = totalPasses > 1 ? $" — Durchlauf {pass}/{totalPasses}" : string.Empty;
+                StatusTextBlock.Text = $"Benchmark läuft{passLabel}... Run 1 + Run 2 + Run 3 Truth-Audit können je nach Modell einige Minuten dauern.";
+                AppendLog($"Benchmark startet für Modell: {model}{passLabel}");
+                if (pass == 1)
+                {
+                    AppendLog($"Repository: {_repositoryRoot}");
+                    AppendLog($"Request-Settings: max_tokens={options.MaxTokens}, response_format={!options.SkipResponseFormat}, disable_thinking={options.DisableThinking}, truth_audit={options.WithTruthAudit}, loop_abort={options.AbortOnLoop}, timeout={options.Timeout.TotalSeconds:0}s");
+                    if (totalPasses > 1)
+                    {
+                        AppendLog($"Geplante Durchläufe: {totalPasses} komplette Benchmarks hintereinander; jeder Durchlauf wird einzeln archiviert.");
+                    }
+                }
 
-            var result = await runner.RunAsync(
-                options,
-                Progress,
-                _benchmarkCancellation.Token,
-                onRunCompleted: OnRunCompleted,
-                streamProgress: streamProgress,
-                run1ManualAbortToken: _run1ManualStop.Token,
-                run2ManualAbortToken: _run2ManualStop.Token,
-                run3ManualAbortToken: _run3ManualStop.Token);
+                var runner = new BenchmarkRunner();
 
-            _lastResult = result;
+                // IProgress created on the UI thread → Report() callbacks are marshalled
+                // back to the UI thread automatically, so we can touch controls directly.
+                var streamProgress = new Progress<ChatStreamDelta>(OnStreamDelta);
 
-            // Final pass: comparison panel + open buttons (per-run UI already rendered).
-            ApplyComparisonAndPaths(result);
-            StatusTextBlock.Text = "Benchmark abgeschlossen.";
-            AppendLog("Benchmark abgeschlossen.");
+                // Prepare the live view for Run 1 before the first token arrives.
+                BeginLiveRun(Run1RawPanel, "Run 1 — Blind Analysis", runNumber: 1);
+
+                var result = await runner.RunAsync(
+                    options,
+                    Progress,
+                    _benchmarkCancellation.Token,
+                    onRunCompleted: OnRunCompleted,
+                    streamProgress: streamProgress,
+                    run1ManualAbortToken: _run1ManualStop.Token,
+                    run2ManualAbortToken: _run2ManualStop.Token,
+                    run3ManualAbortToken: _run3ManualStop.Token);
+
+                _lastResult = result;
+
+                // Final pass: comparison panel + open buttons (per-run UI already rendered).
+                ApplyComparisonAndPaths(result);
+                completedPasses = pass;
+                DisposeManualStopTokens();
+                AppendLog(totalPasses > 1
+                    ? $"Durchlauf {pass}/{totalPasses} abgeschlossen."
+                    : "Benchmark abgeschlossen.");
+            }
+
+            StatusTextBlock.Text = totalPasses > 1
+                ? $"Alle {totalPasses} Benchmark-Durchläufe abgeschlossen."
+                : "Benchmark abgeschlossen.";
+            if (totalPasses > 1)
+            {
+                AppendLog($"Alle {totalPasses} Durchläufe abgeschlossen.");
+            }
         }
         catch (OperationCanceledException)
         {
-            StatusTextBlock.Text = "Benchmark abgebrochen.";
-            AppendLog("Benchmark abgebrochen.");
+            var message = totalPasses > 1
+                ? $"Benchmark abgebrochen ({completedPasses}/{totalPasses} Durchläufe abgeschlossen)."
+                : "Benchmark abgebrochen.";
+            StatusTextBlock.Text = message;
+            AppendLog(message);
         }
         catch (Exception ex)
         {
@@ -718,15 +755,20 @@ public partial class MainWindow : Window
         {
             _benchmarkCancellation?.Dispose();
             _benchmarkCancellation = null;
-            _run1ManualStop?.Dispose();
-            _run1ManualStop = null;
-            _run2ManualStop?.Dispose();
-            _run2ManualStop = null;
-            _run3ManualStop?.Dispose();
-            _run3ManualStop = null;
+            DisposeManualStopTokens();
             _activeRunNumber = 0;
             SetBusy(false, benchmarkRunning: false);
         }
+    }
+
+    private void DisposeManualStopTokens()
+    {
+        _run1ManualStop?.Dispose();
+        _run1ManualStop = null;
+        _run2ManualStop?.Dispose();
+        _run2ManualStop = null;
+        _run3ManualStop?.Dispose();
+        _run3ManualStop = null;
     }
 
     private void CancelBenchmarkButton_Click(object sender, RoutedEventArgs e)
@@ -1489,7 +1531,7 @@ public partial class MainWindow : Window
         };
     }
 
-    private void ResetResultUi()
+    private void ResetResultUi(bool clearLog = true)
     {
         _lastResult = null;
         _activeLivePanel = null;
@@ -1516,7 +1558,10 @@ public partial class MainWindow : Window
         ShowRawOutputPlaceholder(Run1RawPanel, "Run 1 läuft bzw. wartet auf Server-Antwort...");
         ShowRawOutputPlaceholder(Run2RawPanel, "Run 2 wartet auf Run 1...");
         ShowRawOutputPlaceholder(Run3RawPanel, "Run 3 wartet auf Run 2...");
-        ProgressLogTextBox.Clear();
+        if (clearLog)
+        {
+            ProgressLogTextBox.Clear();
+        }
         OutputPathTextBlock.Text = "Run läuft...";
         OpenReportButton.IsEnabled = false;
         OpenFolderButton.IsEnabled = false;
@@ -1866,6 +1911,7 @@ public partial class MainWindow : Window
         MaxTokensTextBox.IsEnabled = !busy;
         TimeoutTextBox.IsEnabled = !busy;
         SeedTextBox.IsEnabled = !busy;
+        RepeatCountTextBox.IsEnabled = !busy;
         OutputDirectoryTextBox.IsEnabled = !busy;
         SkipResponseFormatCheckBox.IsEnabled = !busy;
         DisableThinkingCheckBox.IsEnabled = !busy;
@@ -1907,6 +1953,95 @@ public partial class MainWindow : Window
             UseShellExecute = true
         });
     }
+
+    // ---- Window placement persistence ---------------------------------------
+
+    private static string WindowPlacementFilePath =>
+        Path.Combine(GetLocalAppDataRoot(), "SuperCalcBenchmark", "window-placement.json");
+
+    private void RestoreWindowPlacement()
+    {
+        try
+        {
+            var path = WindowPlacementFilePath;
+            if (!File.Exists(path))
+            {
+                return;
+            }
+
+            var placement = JsonSerializer.Deserialize<WindowPlacement>(File.ReadAllText(path));
+            if (placement is null
+                || !double.IsFinite(placement.Left) || !double.IsFinite(placement.Top)
+                || !double.IsFinite(placement.Width) || !double.IsFinite(placement.Height)
+                || placement.Width < 200 || placement.Height < 200)
+            {
+                return;
+            }
+
+            // Only restore if the saved bounds are still at least partially on a screen
+            // (monitor removed / resolution changed since the last session).
+            const double minVisible = 80;
+            var virtualLeft = SystemParameters.VirtualScreenLeft;
+            var virtualTop = SystemParameters.VirtualScreenTop;
+            var virtualRight = virtualLeft + SystemParameters.VirtualScreenWidth;
+            var virtualBottom = virtualTop + SystemParameters.VirtualScreenHeight;
+            if (placement.Left > virtualRight - minVisible
+                || placement.Top > virtualBottom - minVisible
+                || placement.Left + placement.Width < virtualLeft + minVisible
+                || placement.Top + placement.Height < virtualTop + minVisible)
+            {
+                return;
+            }
+
+            WindowStartupLocation = WindowStartupLocation.Manual;
+            Left = placement.Left;
+            Top = placement.Top;
+            Width = placement.Width;
+            Height = placement.Height;
+            if (placement.IsMaximized)
+            {
+                WindowState = WindowState.Maximized;
+            }
+        }
+        catch
+        {
+            // A corrupt placement file must never block app startup; the default
+            // size/CenterScreen from XAML is used instead.
+        }
+    }
+
+    protected override void OnClosing(CancelEventArgs e)
+    {
+        SaveWindowPlacement();
+        base.OnClosing(e);
+    }
+
+    private void SaveWindowPlacement()
+    {
+        try
+        {
+            // When maximized/minimized, RestoreBounds carries the last normal bounds,
+            // so un-maximizing after a restart lands on the previous window size.
+            var bounds = WindowState == WindowState.Normal
+                ? new Rect(Left, Top, Width, Height)
+                : RestoreBounds;
+            if (bounds.IsEmpty || !double.IsFinite(bounds.Width) || !double.IsFinite(bounds.Height))
+            {
+                return;
+            }
+
+            var placement = new WindowPlacement(bounds.Left, bounds.Top, bounds.Width, bounds.Height, WindowState == WindowState.Maximized);
+            var path = WindowPlacementFilePath;
+            CreateParentDirectory(path);
+            File.WriteAllText(path, JsonSerializer.Serialize(placement));
+        }
+        catch
+        {
+            // Best effort: failing to persist the placement must never block closing.
+        }
+    }
+
+    private sealed record WindowPlacement(double Left, double Top, double Width, double Height, bool IsMaximized);
 
     private SafeUpdateResult RunSafeRepositoryUpdate()
     {
