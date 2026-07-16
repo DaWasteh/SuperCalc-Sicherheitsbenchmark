@@ -378,6 +378,9 @@ internal static partial class TestRunner
             Assert(html.Contains("heatmap", StringComparison.Ordinal), "html should include the vulnerability heatmap");
             Assert(html.Contains("openMetricModal", StringComparison.Ordinal), "html should include maximizable metric-card modal code");
             Assert(html.Contains("card.addEventListener(\"click\"", StringComparison.Ordinal), "metric cards should maximize when clicking inside the tile");
+            Assert(html.Contains("const chartRows = expandedMetricId ? rows : rows.slice", StringComparison.Ordinal), "maximized metric cards should render every filtered model while overview cards keep the Top-N limit");
+            Assert(html.Contains("expandedMetricId === \"vulnerabilityRadar\" ? rows", StringComparison.Ordinal), "maximized radar should not keep its compact-view model cap");
+            Assert(html.Contains("expandedMetricId === \"run2Delta\" ? slopeCandidates", StringComparison.Ordinal), "maximized Run 1 to Run 2 chart should not keep its compact-view model cap");
             Assert(html.Contains("openHelpPopover", StringComparison.Ordinal), "html should include metric help popover code");
             Assert(html.Contains("aria-modal=\"true\"", StringComparison.Ordinal), "metric overlays should expose ARIA modal attributes");
             Assert(html.Contains("data-help-metric", StringComparison.Ordinal), "metric headings should include help buttons");

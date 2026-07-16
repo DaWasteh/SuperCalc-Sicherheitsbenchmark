@@ -219,7 +219,7 @@ public sealed class ComparisonHtmlWriter
   .overlay-backdrop { position:fixed; inset:0; z-index:50; background:rgba(15,23,42,.58); backdrop-filter:blur(3px); display:flex; align-items:center; justify-content:center; padding:24px; }
   .overlay-dialog { background:var(--card); color:var(--fg); border:1px solid var(--line); border-radius:16px; width:min(1180px,96vw); max-height:92vh; overflow:auto; box-shadow:0 24px 70px rgba(0,0,0,.35); padding:18px; }
   .overlay-dialog.metric-modal { width:min(1420px,98vw); }
-  .overlay-dialog .chart-box { height:min(72vh,760px); }
+  .overlay-dialog .chart-box { min-height:620px; }
   .overlay-close { float:right; width:34px; height:34px; border-radius:999px; padding:0; margin-left:10px; }
   .metric-card.in-modal { margin:0; border:0; box-shadow:none; padding:0; cursor:default; }
   .grid { display:grid; grid-template-columns:1fr; gap:18px; }
@@ -417,11 +417,16 @@ public sealed class ComparisonHtmlWriter
     const state = readState();
     const axisIdx = filteredAxisIndices(state);
     const rows = data.series.filter(s => includeSeries(s, state)).sort((a,b) => metricValue(b,state) - metricValue(a,state) || a.label.localeCompare(b.label));
-    const chartRows = rows.slice(0, Math.max(1, state.topN || 24));
+    const expandedMetricId = activeMovedCard?.getAttribute("data-metric-id") || null;
+    const chartRows = expandedMetricId ? rows : rows.slice(0, Math.max(1, state.topN || 24));
     document.getElementById("summary").textContent = `${rows.length} von ${data.series.length} Gruppen sichtbar · ${axisIdx.length} von ${data.axis.length} Schwachstellenachsen im Heatmap/Radar-Filter`;
     renderTable(rows, state);
     renderHeatmap(rows, axisIdx, state);
-    if (hasChart) renderCharts(chartRows, axisIdx, state);
+    if (activeMovedCard) {
+      const expandedChartBox = activeMovedCard.querySelector(".chart-box");
+      if (expandedChartBox) expandedChartBox.style.height = `${Math.max(620, rows.length * 34 + 180)}px`;
+    }
+    if (hasChart) renderCharts(chartRows, axisIdx, state, expandedMetricId);
   }
 
   function readState() {
@@ -523,7 +528,7 @@ public sealed class ComparisonHtmlWriter
     return {suggestedMin:min - pad, suggestedMax:max + pad};
   }
 
-  function renderCharts(rows, axisIdx, st) {
+  function renderCharts(rows, axisIdx, st, expandedMetricId) {
     const metricName = metricLabel(st);
     const barErrorRanges = rows.map(s => metricErrorRange(s, st));
     const xScaleBounds = errorScaleBounds(barErrorRanges);
@@ -537,10 +542,11 @@ public sealed class ComparisonHtmlWriter
     updateChart("severityChart", { type:"bar", data:{ labels:rows.map(s=>s.label), datasets:[
       {label:"Critical",data:rows.map(s=>s.criticalRecall),backgroundColor:"#dc2626cc"},{label:"High",data:rows.map(s=>s.highRecall),backgroundColor:"#f97316cc"},{label:"Medium",data:rows.map(s=>s.mediumRecall),backgroundColor:"#eab308cc"},{label:"Low",data:rows.map(s=>s.lowRecall),backgroundColor:"#22c55ecc"}]},
       options:{ indexAxis:"y", responsive:true, maintainAspectRatio:false, scales:{x:{min:0,max:100,title:{display:true,text:"Recall/Credit %"}}} }});
-    const radarRows = rows.slice(0, Math.min(10, rows.length));
+    const radarRows = expandedMetricId === "vulnerabilityRadar" ? rows : rows.slice(0, Math.min(10, rows.length));
     const labels = axisIdx.map(i => data.axis[i].id);
     updateChart("radarChart", { type:"radar", data:{ labels, datasets:radarRows.map(s=>({ label:s.label, data:axisIdx.map(i=>s.perVuln[i] ?? 0), borderColor:s.color, backgroundColor:s.color+"33", fill:st.fill, pointRadius:2, borderWidth:2 }))}, options:{ responsive:true, maintainAspectRatio:false, scales:{ r:{ min: st.runView === "delta" ? -1 : 0, max:1, ticks:{stepSize:0.5,showLabelBackdrop:false}, pointLabels:{font:{size:10}}}}, plugins:{legend:{position:"bottom",labels:{boxWidth:12,font:{size:11}}}} }});
-    const slopeRows = rows.filter(s => s.run2Score || s.run1Score).slice(0, 12);
+    const slopeCandidates = rows.filter(s => s.run2Score || s.run1Score);
+    const slopeRows = expandedMetricId === "run2Delta" ? slopeCandidates : slopeCandidates.slice(0, 12);
     updateChart("slopeChart", { type:"line", data:{ labels:["Run 1","Run 2"], datasets:slopeRows.map(s=>({ label:s.label, data:[s.run1Score,s.run2Score], borderColor:s.color, backgroundColor:s.color, tension:0.15 }))}, options:{ responsive:true, maintainAspectRatio:false, scales:{ y:{ beginAtZero:true, max:100, title:{display:true,text:"Score"}}}, plugins:{legend:{position:"bottom",labels:{boxWidth:12,font:{size:11}}}} }});
     updateChart("qualityChart", { type:"bar", data:{ labels:rows.map(s=>s.label), datasets:[
       {label:"FP",data:rows.map(s=>s.falsePositives),backgroundColor:"#ef4444cc"},{label:"Duplicates",data:rows.map(s=>s.duplicates),backgroundColor:"#f59e0bcc"},{label:"Ignored",data:rows.map(s=>s.ignoredLowConfidence),backgroundColor:"#64748bcc"},{label:"Hallucination %",data:rows.map(s=>s.hallucinationRate),backgroundColor:"#fb7185aa"},{label:"Evidence %",data:rows.map(s=>s.evidenceFidelity),backgroundColor:"#22c55e99"},{label:"Location %",data:rows.map(s=>s.locationAccuracy),backgroundColor:"#14b8a699"},{label:"Loop %",data:rows.map(s=>s.loopRate),backgroundColor:"#a855f7aa"},{label:"Parse fail %",data:rows.map(s=>100-(s.parseSuccessRate||0)),backgroundColor:"#0ea5e9aa"}]}, options:{ indexAxis:"y", responsive:true, maintainAspectRatio:false, scales:{x:{beginAtZero:true}}, plugins:{legend:{position:"bottom"}} }});
@@ -617,6 +623,7 @@ public sealed class ComparisonHtmlWriter
     document.body.appendChild(overlay);
     activeOverlay = overlay;
     close.focus();
+    render();
     resizeChartsSoon();
   }
 
@@ -644,12 +651,15 @@ public sealed class ComparisonHtmlWriter
     if (!activeOverlay) return;
     if (activeMovedCard && activePlaceholder) {
       activeMovedCard.classList.remove("in-modal");
+      const expandedChartBox = activeMovedCard.querySelector(".chart-box");
+      if (expandedChartBox) expandedChartBox.style.removeProperty("height");
       activePlaceholder.parentNode.insertBefore(activeMovedCard, activePlaceholder);
       activePlaceholder.remove();
     }
     activeOverlay.remove();
     activeOverlay = null; activePlaceholder = null; activeMovedCard = null;
     if (lastFocusedElement && typeof lastFocusedElement.focus === "function") lastFocusedElement.focus();
+    render();
     resizeChartsSoon();
   }
 

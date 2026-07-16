@@ -324,7 +324,7 @@ The **Vergleich** tab in the GUI shows one row per model + quant with score, cri
 
 Archive scorecards now use schema v3 (v1/v2 still load) and keep compact diagnostics that were previously available only in `run.json`: score version metadata, finish reason, loop flag, parse mode/warnings, response/request/prompt/reasoning character counts, per-run durations, duplicates, ignored-low-confidence counts, and rich per-vulnerability status. Truth-audit runs are archived separately as `runKind="truth_audit"` with `groundTruthVisibleToModel=true`; comparison treats their Accountability/Honesty metrics separately and does not let them raise the primary detection score. Archive scorecards still do **not** copy prompts or raw model responses; those remain referenced only via `runDirectory`.
 
-The generated HTML contains client-side filters/search (family, quant, severity, category, CWE, score/runs/stddev/FP thresholds, official/source-hash/loop/reasoning toggles) and multiple views. Metric tiles can be maximized by clicking anywhere inside the tile (the ? buttons keep opening the contextual help):
+The generated HTML contains client-side filters/search (family, quant, severity, category, CWE, score/runs/stddev/FP thresholds, official/source-hash/loop/reasoning toggles) and multiple views. Compact metric tiles honor the configurable Top-N limit; maximizing a tile by clicking anywhere inside it always shows every filtered model (the ? buttons keep opening the contextual help):
 
 - **main metric bar chart** (score, critical recall, F1, FP-rate, stability, Run2-delta, thinking coverage, accountability, overclaim rate, duration) with min/max error bars where multiple runs exist for the selected bar metric,
 - **severity recall chart** and **vulnerability heatmap** (1.0 full, 0.5 partial, 0.0 missed; delta view highlights improvements/regressions),
@@ -461,6 +461,7 @@ This project is distributed under the [MIT License](LICENSE).
 
 | Version | Date       | Highlights                                                                                       |
 | :-----: | :--------: | ------------------------------------------------------------------------------------------------ |
+| v0.7.1  | 2026-07-16 | Maximized HTML metric tiles show every filtered model while compact tiles keep Top-N; benchmark controls use a dedicated visible row with soft-stop between start/cancel; the read-only "Durchläufe" field counts pending passes down immediately; includes 23 new Bonsai 27B, Ternary Bonsai 27B, and Qwen3.6 27B scorecards |
 | v0.7.0  | 2026-07-14 | Multi-pass benchmark control: the grayed-out "Durchläufe" field counts down the remaining passes live, and a new soft-stop button ("Nach Durchlauf stoppen") lets the current pass finish and archive normally while skipping all pending passes |
 | v0.6.9  | 2026-07-14 | GUI "Durchläufe" field runs N complete benchmarks back-to-back (each pass archived individually, cancel stops the series); main window remembers size, position, and maximized state across sessions |
 | v0.6.7  | 2026-07-12 | Exact model-tokenizer metrics for Thinking, Output, and total generated tokens; token-efficiency statistics, sortable lists, CSV fields, and an interactive comparison chart |

@@ -456,7 +456,7 @@ public sealed class BenchmarkRunArtifacts
 
 public sealed class BenchmarkRunResult
 {
-    public string ToolVersion { get; init; } = "0.6.8";
+    public string ToolVersion { get; init; } = "0.7.1";
     public string BenchmarkId { get; init; } = string.Empty;
     public string BenchmarkProfile { get; init; } = "official";
     public DateTimeOffset StartedAt { get; init; }

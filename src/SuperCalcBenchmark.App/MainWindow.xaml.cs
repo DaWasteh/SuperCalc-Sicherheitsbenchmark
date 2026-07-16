@@ -679,9 +679,10 @@ public partial class MainWindow : Window
             {
                 _benchmarkCancellation.Token.ThrowIfCancellationRequested();
 
-                // Countdown im (während des Laufs ausgegrauten) Durchläufe-Feld:
-                // zeigt, wie viele Durchläufe inklusive des aktuellen noch anstehen.
-                RepeatCountTextBox.Text = (totalPasses - pass + 1).ToString();
+                // Keep the original input visible as a live countdown. The active pass is
+                // described in the status area; this field shows only passes still pending
+                // afterwards, so the value visibly changes as soon as the benchmark starts.
+                RepeatCountTextBox.Text = (totalPasses - pass).ToString();
 
                 // Manual per-run stop tokens are per pass: stopping Run 1 in pass 3
                 // must not affect Run 1 of pass 4.
@@ -711,6 +712,10 @@ public partial class MainWindow : Window
 
                 // Prepare the live view for Run 1 before the first token arrives.
                 BeginLiveRun(Run1RawPanel, "Run 1 — Blind Analysis", runNumber: 1);
+
+                // Let WPF paint the updated remaining-pass counter and control states
+                // before the potentially long-running model request begins.
+                await System.Windows.Threading.Dispatcher.Yield(System.Windows.Threading.DispatcherPriority.Render);
 
                 var result = await runner.RunAsync(
                     options,
@@ -814,6 +819,7 @@ public partial class MainWindow : Window
 
         _stopAfterCurrentPassRequested = true;
         SoftStopButton.IsEnabled = false;
+        RepeatCountTextBox.Text = "0";
         var message = "Soft-Stopp angefordert: aktueller Durchlauf läuft zu Ende und wird archiviert, ausstehende Durchläufe werden übersprungen.";
         StatusTextBlock.Text = message;
         AppendLog(message);
@@ -1950,7 +1956,7 @@ public partial class MainWindow : Window
         MaxTokensTextBox.IsEnabled = !busy;
         TimeoutTextBox.IsEnabled = !busy;
         SeedTextBox.IsEnabled = !busy;
-        RepeatCountTextBox.IsEnabled = !busy;
+        RepeatCountTextBox.IsReadOnly = busy;
         OutputDirectoryTextBox.IsEnabled = !busy;
         SkipResponseFormatCheckBox.IsEnabled = !busy;
         DisableThinkingCheckBox.IsEnabled = !busy;

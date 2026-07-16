@@ -17,6 +17,7 @@ internal static partial class TestRunner
 
         Run("ground truth validates", GroundTruthValidates);
         Run("WPF app exits when the main window closes", WpfAppExitsWithMainWindow);
+        Run("WPF benchmark controls stay visible and count down", WpfBenchmarkControlsStayVisibleAndCountDown);
         Run("ground truth v2 aliases and anchors load", GroundTruthV2AliasesAndAnchorsLoad);
         Run("scoring ledger records evidence fidelity", ScoringLedgerRecordsEvidenceFidelity);
         Run("parser handles valid JSON", ParserHandlesValidJson);
@@ -121,6 +122,25 @@ internal static partial class TestRunner
         Assert(
             string.Equals(shutdownMode, "OnMainWindowClose", StringComparison.Ordinal),
             "App.xaml must use ShutdownMode=OnMainWindowClose so Wine cannot keep the app alive after its main window closes");
+    }
+
+    private static void WpfBenchmarkControlsStayVisibleAndCountDown()
+    {
+        var xaml = File.ReadAllText(Path.Combine("src", "SuperCalcBenchmark.App", "MainWindow.xaml"));
+        var start = xaml.IndexOf("x:Name=\"StartBenchmarkButton\"", StringComparison.Ordinal);
+        var softStop = xaml.IndexOf("x:Name=\"SoftStopButton\"", StringComparison.Ordinal);
+        var cancel = xaml.IndexOf("x:Name=\"CancelBenchmarkButton\"", StringComparison.Ordinal);
+
+        Assert(start >= 0 && start < softStop && softStop < cancel,
+            "soft-stop must remain visibly ordered between start and immediate cancel");
+        Assert(xaml.Contains("Grid.Row=\"1\" Grid.Column=\"0\" Grid.ColumnSpan=\"10\" Orientation=\"Horizontal\"", StringComparison.Ordinal),
+            "benchmark action controls should use their own full-width row instead of being clipped by server/model fields");
+
+        var code = File.ReadAllText(Path.Combine("src", "SuperCalcBenchmark.App", "MainWindow.xaml.cs"));
+        Assert(code.Contains("RepeatCountTextBox.Text = (totalPasses - pass).ToString();", StringComparison.Ordinal),
+            "the pass input should count pending passes down immediately when a pass starts");
+        Assert(code.Contains("RepeatCountTextBox.IsReadOnly = busy;", StringComparison.Ordinal),
+            "the live pass counter should stay visible while preventing edits during a benchmark");
     }
 
     private static void GroundTruthV2AliasesAndAnchorsLoad()
