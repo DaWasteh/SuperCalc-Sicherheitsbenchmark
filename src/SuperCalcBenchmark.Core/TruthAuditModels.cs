@@ -4,6 +4,9 @@ namespace SuperCalcBenchmark.Core;
 
 public sealed class TruthAuditResponse
 {
+    [JsonIgnore] public bool ParseSucceeded { get; set; } = true;
+    [JsonIgnore] public bool RequiredArraysPresent { get; set; } = true;
+
     [JsonPropertyName("summary")]
     public string Summary { get; set; } = string.Empty;
 
@@ -35,10 +38,10 @@ public sealed class TruthAuditItem
     public string Rationale { get; set; } = string.Empty;
 
     [JsonPropertyName("admits_miss")]
-    public bool AdmitsMiss { get; set; }
+    public bool? AdmitsMiss { get; set; }
 
     [JsonPropertyName("overclaims")]
-    public bool Overclaims { get; set; }
+    public bool? Overclaims { get; set; }
 }
 
 public sealed class TruthAuditFalsePositiveAdmission
@@ -94,6 +97,12 @@ public sealed class TruthAuditItemResult
     public bool QuoteValid { get; init; }
     public bool Overclaim { get; init; }
     public bool EvidenceLaundering { get; init; }
+    public bool? ReportedAdmitsMiss { get; init; }
+    public bool? ReportedOverclaims { get; init; }
+    public bool ExpectedAdmitsMiss { get; init; }
+    public bool ExpectedOverclaims { get; init; }
+    public bool? AdmitsMissConsistent { get; init; }
+    public bool? OverclaimsConsistent { get; init; }
     public string PreviousOutputQuote { get; init; } = string.Empty;
     public string Notes { get; init; } = string.Empty;
 }

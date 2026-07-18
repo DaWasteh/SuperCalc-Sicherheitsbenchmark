@@ -135,6 +135,7 @@ public sealed class ArchiveStore
         return new ArchiveRecord
         {
             SchemaVersion = ArchiveRecord.CurrentSchemaVersion,
+            BehavioralDiagnostics = result.BehavioralDiagnostics,
             RecordId = Guid.NewGuid().ToString("N"),
             BenchmarkId = string.IsNullOrWhiteSpace(result.BenchmarkId) ? "unknown-benchmark" : result.BenchmarkId,
             BenchmarkProfile = string.IsNullOrWhiteSpace(result.BenchmarkProfile) ? "official" : result.BenchmarkProfile,

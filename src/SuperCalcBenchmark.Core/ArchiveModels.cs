@@ -10,10 +10,13 @@ namespace SuperCalcBenchmark.Core;
 /// </summary>
 public sealed class ArchiveRecord
 {
-    public const int CurrentSchemaVersion = 3;
+    public const int CurrentSchemaVersion = 4;
 
     [JsonPropertyName("schemaVersion")]
-    public int SchemaVersion { get; set; } = CurrentSchemaVersion;
+    public int SchemaVersion { get; set; }
+
+    [JsonPropertyName("behavioralDiagnostics")]
+    public BehavioralDiagnosticsEnvelope? BehavioralDiagnostics { get; set; }
 
     [JsonPropertyName("recordId")]
     public string RecordId { get; set; } = string.Empty;
@@ -565,6 +568,7 @@ public sealed class ArchiveRunScore
                 Id = vulnerability.Id,
                 Title = vulnerability.Title,
                 Severity = vulnerability.Severity,
+                Cwe = vulnerability.Cwe.ToList(),
                 Credit = value,
                 Status = vulnerability.Found ? (vulnerability.Partial ? "partial" : "full") : "missed",
                 MatchScore = vulnerability.MatchScore,

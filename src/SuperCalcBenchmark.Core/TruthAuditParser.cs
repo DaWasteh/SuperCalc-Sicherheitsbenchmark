@@ -14,54 +14,95 @@ public sealed class TruthAuditParser
     public TruthAuditResponse Parse(string content)
     {
         content ??= string.Empty;
-        var trimmed = content.Trim();
-        foreach (var candidate in JsonCandidates(trimmed))
+        Candidate? best = null;
+        var ordinal = 0;
+        foreach (var json in JsonCandidates(content.Trim()).Distinct(StringComparer.Ordinal))
         {
             try
             {
-                var response = JsonSerializer.Deserialize<TruthAuditResponse>(candidate, Options);
-                if (response is not null)
-                {
-                    response.TruthItems ??= [];
-                    response.FalsePositiveAdmissions ??= [];
-                    response.Corrections ??= [];
-                    return response;
-                }
+                using var document = JsonDocument.Parse(json, new JsonDocumentOptions { AllowTrailingCommas = true, CommentHandling = JsonCommentHandling.Skip });
+                if (document.RootElement.ValueKind != JsonValueKind.Object) continue;
+
+                var arraysPresent = HasArray(document.RootElement, "truth_items")
+                    && HasArray(document.RootElement, "false_positive_admissions")
+                    && HasArray(document.RootElement, "corrections");
+                var response = JsonSerializer.Deserialize<TruthAuditResponse>(json, Options);
+                if (response is null) continue;
+                var normalizedRun = AuditedRunNames.Normalize(response.AuditedRun);
+                // A schema/example echo commonly deserializes because unknown schema keywords are
+                // ignored. It is not a response unless it has response arrays or a real run value.
+                if (!arraysPresent && normalizedRun is null) continue;
+
+                response.ParseSucceeded = true;
+                response.RequiredArraysPresent = arraysPresent;
+                response.TruthItems ??= [];
+                response.FalsePositiveAdmissions ??= [];
+                response.Corrections ??= [];
+
+                if (normalizedRun is not null) response.AuditedRun = normalizedRun;
+                var score = arraysPresent ? (normalizedRun is null ? 2 : 3) : 1;
+                var candidate = new Candidate(response, score, ordinal++);
+                if (best is null || candidate.Score > best.Score ||
+                    (candidate.Score == best.Score && candidate.Ordinal > best.Ordinal))
+                    best = candidate;
             }
             catch (JsonException)
             {
-                // Try next candidate.
+                // Try every other balanced object/fenced/direct candidate.
             }
         }
 
-        return new TruthAuditResponse { Summary = "Could not parse truth-audit JSON." };
+        return best?.Response ?? new TruthAuditResponse
+        {
+            Summary = "Could not parse truth-audit JSON.",
+            ParseSucceeded = false,
+            RequiredArraysPresent = false
+        };
+    }
+
+    private static bool HasArray(JsonElement element, string name)
+    {
+        foreach (var property in element.EnumerateObject())
+            if (property.Name.Equals(name, StringComparison.OrdinalIgnoreCase))
+                return property.Value.ValueKind == JsonValueKind.Array;
+        return false;
     }
 
     private static IEnumerable<string> JsonCandidates(string content)
     {
-        if (string.IsNullOrWhiteSpace(content))
-        {
-            yield break;
-        }
+        if (string.IsNullOrWhiteSpace(content)) yield break;
 
+        // Retains tolerant direct JSON and markdown handling. The balanced scanner below also
+        // finds sequential objects, objects inside fences, and valid answers after prose/schema.
         yield return content;
+        foreach (var candidate in BalancedObjects(content)) yield return candidate;
+    }
 
-        var fenceStart = content.IndexOf("```", StringComparison.Ordinal);
-        while (fenceStart >= 0)
+    private static IEnumerable<string> BalancedObjects(string content)
+    {
+        var starts = new Stack<int>();
+        var inString = false;
+        var escaped = false;
+        for (var i = 0; i < content.Length; i++)
         {
-            var lineEnd = content.IndexOf('\n', fenceStart);
-            if (lineEnd < 0) yield break;
-            var fenceEnd = content.IndexOf("```", lineEnd + 1, StringComparison.Ordinal);
-            if (fenceEnd < 0) yield break;
-            yield return content[(lineEnd + 1)..fenceEnd].Trim();
-            fenceStart = content.IndexOf("```", fenceEnd + 3, StringComparison.Ordinal);
-        }
+            var ch = content[i];
+            if (inString)
+            {
+                if (escaped) escaped = false;
+                else if (ch == '\\') escaped = true;
+                else if (ch == '"') inString = false;
+                continue;
+            }
 
-        var objectStart = content.IndexOf('{');
-        var objectEnd = content.LastIndexOf('}');
-        if (objectStart >= 0 && objectEnd > objectStart)
-        {
-            yield return content[objectStart..(objectEnd + 1)];
+            if (ch == '"') { inString = true; continue; }
+            if (ch == '{') starts.Push(i);
+            else if (ch == '}' && starts.Count > 0)
+            {
+                var start = starts.Pop();
+                yield return content[start..(i + 1)];
+            }
         }
     }
+
+    private sealed record Candidate(TruthAuditResponse Response, int Score, int Ordinal);
 }

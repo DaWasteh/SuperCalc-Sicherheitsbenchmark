@@ -4,7 +4,7 @@ namespace SuperCalcBenchmark.Core;
 
 public sealed class BenchmarkRunner
 {
-    private const string ToolVersion = "0.7.1";
+    private const string ToolVersion = "0.7.2";
 
     private readonly GroundTruthStore _groundTruthStore;
     private readonly PromptBuilder _promptBuilder;
@@ -335,6 +335,7 @@ public sealed class BenchmarkRunner
                 TruthAudit = truthAudit
             };
 
+            result.BehavioralDiagnostics = BehavioralDiagnosticsCalculator.Calculate(result, truthAuditResponse, auditTarget.Artifacts);
             onRunCompleted?.Invoke(result.Run3);
         }
 
@@ -440,6 +441,7 @@ public sealed class BenchmarkRunner
             TruthAudit = truthAudit
         };
 
+        result.BehavioralDiagnostics = BehavioralDiagnosticsCalculator.Calculate(result, truthAuditResponse, auditTarget.Artifacts);
         result.CompletedAt = DateTimeOffset.UtcNow;
         onRunCompleted?.Invoke(result.Run3);
         progress?.Invoke("Writing updated truth-audit artifacts and report...");

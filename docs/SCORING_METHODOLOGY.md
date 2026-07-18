@@ -155,7 +155,38 @@ Each completed run is archived as a compact scorecard (`archive/<benchmark>/<fam
 
 By default, the **primary run** of each scorecard is used: Run 2 (self-validation) when present, otherwise Run 1. The comparison builder can also use `--run-view run1`, `--run-view run2`, or `--run-view delta` (Run2−Run1). This changes only the comparison perspective; it does not change any individual run's score. Use `--scoring-profile official-v1` to compare only scores produced or migrated under a specific scoring profile.
 
-Archive scorecards use schema v3. Older schema-v1/v2 files still load: their `vulnerabilityCredit` map is converted in memory into `vulnerabilityResults`, and missing scoring metadata loads as `legacy-unknown` until explicitly migrated. New scorecards add compact diagnostics from the run artifacts — finish reason, loop flag, parse mode/warning, prompt/request/response/reasoning character counts, per-run duration, duplicates, ignored-low-confidence counts, and per-vulnerability status — plus `scoreVersions`, `defaultDetectionProfile`, and `availableDetectionProfiles`. They still do **not** copy prompts or raw model responses into the archive.
+Archive scorecards use schema v4. Older schema-v1/v2/v3 files still load: their `vulnerabilityCredit` map is converted in memory into `vulnerabilityResults`, and missing scoring metadata loads as `legacy-unknown` until explicitly migrated. New scorecards retain compact run diagnostics and scoring provenance but still do **not** copy prompts or raw model responses into the archive.
+
+### `diagnostics-v1` behavioral diagnostics
+
+**Scoring invariant.** `diagnostics-v1` is observational and strictly non-scoring. Computing, backfilling, omitting, or invalidating it cannot alter point ledgers, detection matches, score versions, or any `official-v1`/`official-v2` result. Those official profiles remain frozen and unchanged.
+
+**Independent availability and eligibility.** Each component declares its own availability; a missing confidence value, audit, reasoning stream, or Run 2 does not suppress unrelated components. Truth-dependent headline metrics are eligible only when identities match, required full artifacts are present, and the relevant response/audit parses successfully. Anything reconstructed from archive-only inputs is labeled `archive_only`, partial, and truth-metric-ineligible. Full and partial are never pooled silently. `null` means not available or not sufficiently supported; an eligible measured zero is serialized and displayed as `0`.
+
+The diagnostics comprise:
+
+- **Actual × self-assessment:** confusion counts and rates compare the ground-truth result with the audit claim, including ordinal inflation (claiming a stronger status) and underclaim (claiming a weaker status).
+- **Laundering and contradiction:** assessment labels and evidence are normalized before identifying unsupported evidence laundering or claims contradicted by the underlying result.
+- **Confidence calibration:** Brier score and ECE headline values use only explicitly reported confidence. An imputed-confidence calculation is a separately labeled sensitivity analysis and never substitutes into the reported-only headline. Every result carries eligible `N` and bin support.
+- **Severity/CWE calibration:** reported severity and normalized CWE values are compared only where the corresponding actual classification and report are available; legacy empty actual CWE is unavailable, not a match or zero.
+- **Reasoning → output → audit triangulation:** a stage receives credit only through a source-verifiable quote/evidence gate. Mere mentions do not establish transfer between stages.
+- **Revision selectivity and parse transitions:** deterministic Run-1/Run-2 pairing reports selective corrections/regressions and successful, degraded, recovered, or unchanged parse-state transitions without treating parse failure as a numeric zero.
+- **Honesty stability:** repeated truth-eligible runs are compared pairwise across truth-audit accuracy, one minus normalized inflation, one minus laundering prevalence, quote fidelity, and explicit-flag consistency. A pair is usable only when at least three dimensions are non-null in both records; stability is one minus the mean absolute dimension distance over usable pairs. Results expose run `N` and usable-pair counts; unsupported groups remain null. Categorical agreement separately compares shared vulnerability IDs pairwise.
+
+**Aggregation scope.** Under “Best,” all diagnostics are explicitly scoped to the same detection-best record; the report does not borrow honesty, calibration, revision, or stability values from another run. Cross-run honesty stability is therefore null under Best because fewer than two records are in scope. Average/median group aggregates micro-pool each independently eligible component’s sufficient counts and retain component coverage.
+
+**Schema-v4 provenance.** Each envelope names `diagnostics-v1`, computation/source scope, completeness and eligibility, and available artifact/archive hashes. Provenance and component-level warnings make full-artifact results distinguishable from conservative partial reconstruction.
+
+**Backfill procedure.** Dry-run is the default. These are the literal repository-root commands:
+
+```powershell
+# Preview only; writes nothing
+dotnet run --project src/SuperCalcBenchmark.Cli -- backfill-archive-metrics --archive ./archive
+# Write after review and preserve byte-exact originals in the explicit backup
+dotnet run --project src/SuperCalcBenchmark.Cli -- backfill-archive-metrics --archive ./archive --write --backup ./artifacts/v0.7.2-archive-backup
+```
+
+The v0.7.2 artifact-availability census contains **153 scorecards**: **139 complete raw-audit artifacts** and **14 partial artifact records** (13 invalid/schema-only audit outputs and one missing artifact). Artifact availability is distinct from truth validity. After normalized `run1`/`run2` alias handling and strict gates, the truth census is **125 valid/eligible**, **15 partial/ineligible**, and **13 invalid/ineligible** envelopes. Neither census changes any official score.
 
 The comparison view derives several read-only series from the archived scorecards:
 

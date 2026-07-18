@@ -15,6 +15,7 @@ internal static partial class TestRunner
         System.Globalization.CultureInfo.DefaultThreadCurrentUICulture = System.Globalization.CultureInfo.InvariantCulture;
         Console.OutputEncoding = System.Text.Encoding.UTF8;
 
+        Run("release versions agree", ReleaseVersionsAgree);
         Run("ground truth validates", GroundTruthValidates);
         Run("WPF app exits when the main window closes", WpfAppExitsWithMainWindow);
         Run("WPF benchmark controls stay visible and count down", WpfBenchmarkControlsStayVisibleAndCountDown);
@@ -50,8 +51,30 @@ internal static partial class TestRunner
         Run("reasoning disclosure compares thinking and output true positives", ReasoningDisclosureComparesThinkingAndOutputTruePositives);
         Run("fixture scoring separates inline think block", FixtureScoringSeparatesInlineThinkBlock);
         Run("prompts do not contain hidden answer files", PromptsDoNotLeakHiddenGroundTruth);
+        Run("truth audit parser selects final response after schema echo", TruthAuditParserSelectsFinalResponse);
+        Run("truth audit parser handles multiple fences and string braces", TruthAuditParserHandlesCandidateBoundaries);
+        Run("truth audit parser rejects schema-only response and normalizes run alias", TruthAuditParserRejectsSchemaOnlyAndNormalizesAlias);
         Run("truth audit scorer detects honest and overclaiming self-assessments", TruthAuditScorerDetectsHonestyAndOverclaims);
         Run("truth audit rejects omissions, empty proof, and duplicate FP admissions", TruthAuditRejectsGamingShortcuts);
+        Run("diagnostics parse transition contract", DiagnosticsParseTransitionContract);
+        Run("diagnostics corrections validate provenance only", DiagnosticsCorrectionsContract);
+        Run("diagnostics revision selectivity pairs items deterministically", DiagnosticsRevisionSelectivityContract);
+        Run("diagnostics confidence separates reported and imputed", DiagnosticsConfidenceContract);
+        Run("diagnostics CWE normalization is deterministic", DiagnosticsCweContract);
+        Run("run artifact reader handles BOM and response priority", RunArtifactReaderBomAndPriority);
+        Run("run artifact reader reconstructs streaming formats and flags corruption", RunArtifactReaderStreamingFormats);
+        Run("run artifact reader rejects every identity mismatch", RunArtifactReaderIdentityMismatches);
+        Run("archive diagnostics backfill is dry-run safe and transactionally idempotent", ArchiveBackfillTransactionContract);
+        Run("archive diagnostics backfill isolates bad files and backup trees", ArchiveBackfillIsolationContract);
+        Run("backfill backup safety variants", BackfillBackupSafetyVariants);
+        Run("archive-only eligibility rejects malformed audits", ArchiveOnlyEligibilityVariants);
+        Run("confidence provenance ignores descriptive words", ConfidenceProvenanceParserContract);
+        Run("release presentation and export contracts", ReleasePresentationExportContracts);
+        Run("frozen detection scores survive diagnostics", FrozenDetectionInvariantContract);
+        Run("comparison diagnostics micro-pool and stability", ComparisonDiagnosticsMicroPoolsAndStability);
+        Run("comparison Best consistently uses one detection record", ComparisonBestUsesOneDetectionRecord);
+        Run("legacy empty actual CWE is unavailable", LegacyEmptyActualCweIsUnavailable);
+        Run("generated presentation and inline scripts are valid", GeneratedPresentationAndScriptContracts);
         Run("model identity detects quant and family", ModelIdentityDetectsQuantAndFamily);
         Run("model identity honors manual quant override", ModelIdentityHonorsQuantOverride);
         Run("model identity normalizes server ftype", ModelIdentityNormalizesServerFtype);
@@ -1520,6 +1543,21 @@ internal static partial class TestRunner
         public override void SetLength(long value) => throw new NotSupportedException();
 
         public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    private static void ReleaseVersionsAgree()
+    {
+        const string expected = "0.7.2";
+        var runnerField = typeof(BenchmarkRunner).GetField("ToolVersion", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        Assert(runnerField?.GetRawConstantValue() as string == expected, "BenchmarkRunner.ToolVersion must match the release version.");
+        Assert(new BenchmarkRunResult().ToolVersion == expected, "BenchmarkRunResult.ToolVersion must match the release version.");
+
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "Directory.Build.props")))
+            directory = directory.Parent;
+        Assert(directory is not null, "Could not locate Directory.Build.props from the test output directory.");
+        var props = File.ReadAllText(Path.Combine(directory!.FullName, "Directory.Build.props"));
+        Assert(props.Contains($"<Version>{expected}</Version>", StringComparison.Ordinal), "Directory.Build.props must match the runner and model defaults.");
     }
 
     private static void Assert(bool condition, string message)

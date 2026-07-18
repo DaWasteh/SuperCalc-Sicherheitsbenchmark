@@ -1160,6 +1160,20 @@ public partial class MainWindow : Window
 
     private void ApplyComparisonAndPaths(BenchmarkRunResult result)
     {
+        if (result.BehavioralDiagnostics?.TruthAudit is { } diagnostics)
+        {
+            var target = AuditedRunNames.Normalize(result.BehavioralDiagnostics.Provenance.AuditedRunName);
+            var taxonomy = target == "Run 2" ? result.BehavioralDiagnostics.Run2Taxonomy : target == "Run 1" ? result.BehavioralDiagnostics.Run1Taxonomy : null;
+            var triangulation = diagnostics.Triangulation;
+            var eligible = diagnostics.Validity.MetricEligible;
+            var gate = $"state={diagnostics.Validity.State}, failures={string.Join(',', diagnostics.Validity.Failures)}, tier={diagnostics.Validity.EvidenceTier}";
+            Run3AuditSummaryTextBlock.Text +=
+                $"\nDiagnostik ({target ?? "unknown target"}): Honesty {(eligible && diagnostics.NormalizedInflation.HasValue ? (1 - diagnostics.NormalizedInflation.Value).ToString("P1") : "n/a (" + gate + ")")}" +
+                $" | Severity exakt {(taxonomy?.SeverityExactRate?.ToString("P1") ?? "n/a")} (N={taxonomy?.AssignedTruePositiveCount ?? 0})" +
+                $" | CWE any-hit {(taxonomy?.CweAnyHitRate?.ToString("P1") ?? "n/a")}" +
+                $" | End-to-end {(eligible ? triangulation?.EndToEndRetention?.ToString("P1") ?? "n/a" : "n/a (" + gate + ")")}";
+        }
+
         if (result.Comparison is not null)
         {
             ComparisonTextBlock.Text =
@@ -1482,6 +1496,10 @@ public partial class MainWindow : Window
             "Evidence Fidelity" => ComparisonMetric.EvidenceFidelity,
             "Hallucination" => ComparisonMetric.HallucinationRate,
             "Accountability" => ComparisonMetric.Accountability,
+            "Honesty" => ComparisonMetric.Honesty,
+            "Calibration" => ComparisonMetric.HonestyCalibration,
+            "Revision Selectivity" => ComparisonMetric.RevisionSelectivity,
+            "Honesty Stability" => ComparisonMetric.HonestyStability,
             "Tokeneffizienz" => ComparisonMetric.TokenEfficiency,
             _ => ComparisonMetric.Score
         };
@@ -1527,6 +1545,11 @@ public partial class MainWindow : Window
         public double LocationAccuracy { get; init; }
         public double HallucinationRate { get; init; }
         public double AccountabilityScore { get; init; }
+        public int DiagnosticsN { get; init; }
+        public string HonestyDisplay { get; init; } = "n/a";
+        public string CalibrationDisplay { get; init; } = "n/a";
+        public string RevisionDisplay { get; init; } = "n/a";
+        public string HonestyStabilityDisplay { get; init; } = "n/a";
         public double Run2Delta { get; init; }
         public double? ReasoningTokens { get; init; }
         public double? OutputTokens { get; init; }
@@ -1557,6 +1580,11 @@ public partial class MainWindow : Window
             LocationAccuracy = series.LocationAccuracy,
             HallucinationRate = series.HallucinationRate,
             AccountabilityScore = series.AccountabilityScore,
+            DiagnosticsN = series.DiagnosticsAvailableRunCount,
+            HonestyDisplay = FormatNullablePercent(series.Honesty),
+            CalibrationDisplay = FormatNullablePercent(series.HonestyCalibration),
+            RevisionDisplay = FormatNullablePercent(series.RevisionSelectivity),
+            HonestyStabilityDisplay = FormatNullablePercent(series.HonestyStability),
             Run2Delta = series.Run2ScoreDelta,
             ReasoningTokens = series.ReasoningTokens,
             OutputTokens = series.OutputTokens,
@@ -1574,6 +1602,8 @@ public partial class MainWindow : Window
             FalsePositives = series.FalsePositives,
             Missed = series.Missed
         };
+
+        private static string FormatNullablePercent(double? value) => value.HasValue ? value.Value.ToString("P1") : "n/a";
     }
 
     private void ResetResultUi(bool clearLog = true)

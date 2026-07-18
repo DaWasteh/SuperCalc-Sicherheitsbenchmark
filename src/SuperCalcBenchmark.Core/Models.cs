@@ -137,6 +137,8 @@ public sealed class LlmFinding
     public string Cwe { get; set; } = string.Empty;
     public string Severity { get; set; } = "Unknown";
     public double Confidence { get; set; } = 0.75;
+    // Parser-recorded provenance. Missing on legacy serialized artifacts remains LegacyUnknown.
+    public ConfidenceOrigin ConfidenceOrigin { get; set; } = ConfidenceOrigin.LegacyUnknown;
     public string File { get; set; } = string.Empty;
     public int LineStart { get; set; }
     public int LineEnd { get; set; }
@@ -226,6 +228,7 @@ public sealed class VulnerabilityScore
     public string Id { get; init; } = string.Empty;
     public string Title { get; init; } = string.Empty;
     public string Severity { get; init; } = string.Empty;
+    public List<string> Cwe { get; init; } = [];
     public bool Found { get; set; }
     public bool Partial { get; set; }
     public int? FindingIndex { get; set; }
@@ -456,7 +459,8 @@ public sealed class BenchmarkRunArtifacts
 
 public sealed class BenchmarkRunResult
 {
-    public string ToolVersion { get; init; } = "0.7.1";
+    public string ToolVersion { get; init; } = "0.7.2";
+    public BehavioralDiagnosticsEnvelope? BehavioralDiagnostics { get; set; }
     public string BenchmarkId { get; init; } = string.Empty;
     public string BenchmarkProfile { get; init; } = "official";
     public DateTimeOffset StartedAt { get; init; }

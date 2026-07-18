@@ -280,6 +280,12 @@ CLI quick start:
 # From the repository root. global.json pins the SDK to .NET 10.
 dotnet run --project src/SuperCalcBenchmark.Cli -- validate
 
+# Preview archive diagnostics migration (no writes):
+dotnet run --project src/SuperCalcBenchmark.Cli -- backfill-archive-metrics --archive archive
+
+# Write only after review, with mandatory backup directory:
+dotnet run --project src/SuperCalcBenchmark.Cli -- backfill-archive-metrics --archive archive --write --backup artifacts/archive-metrics-backup
+
 dotnet run --project src/SuperCalcBenchmark.Cli -- models --server http://127.0.0.1:1234
 
 dotnet run --project src/SuperCalcBenchmark.Cli -- run `
@@ -322,7 +328,24 @@ The model family and quant are parsed automatically from the llama.cpp model id 
 
 The **Vergleich** tab in the GUI shows one row per model + quant with score, critical recall, evidence fidelity, hallucination rate, stability, Run-2 delta, Run-3 audit/accountability score, median, standard deviation, min/max, precision, recall, F1, and TP/FP/Missed counts. Pick a single model family to compare only its quants, switch between **Durchschnitt** (mean across all runs in a group), **Median**, and **Bester Run**, choose **Primary / Run 1 / Run 2 / Delta**, and click **Diagramme öffnen (HTML)** for a graphical view. For guaranteed model-family/quant corrections, click **Archiv bearbeiten**, edit `modelFamily` and/or `quant` in the JSON scorecards, then reload the archive.
 
-Archive scorecards now use schema v3 (v1/v2 still load) and keep compact diagnostics that were previously available only in `run.json`: score version metadata, finish reason, loop flag, parse mode/warnings, response/request/prompt/reasoning character counts, per-run durations, duplicates, ignored-low-confidence counts, and rich per-vulnerability status. Truth-audit runs are archived separately as `runKind="truth_audit"` with `groundTruthVisibleToModel=true`; comparison treats their Accountability/Honesty metrics separately and does not let them raise the primary detection score. Archive scorecards still do **not** copy prompts or raw model responses; those remain referenced only via `runDirectory`.
+Archive scorecards now use schema v4 (v1/v2/v3 still load) and keep compact diagnostics that were previously available only in `run.json`: score version metadata, finish reason, loop flag, parse mode/warnings, response/request/prompt/reasoning character counts, per-run durations, duplicates, ignored-low-confidence counts, and rich per-vulnerability status. Truth-audit runs are archived separately as `runKind="truth_audit"` with `groundTruthVisibleToModel=true`; comparison treats their Accountability/Honesty metrics separately and does not let them raise the primary detection score. Archive scorecards still do **not** copy prompts or raw model responses; those remain referenced only via `runDirectory`.
+
+#### diagnostics-v1 methodology
+
+`diagnostics-v1` is a **non-scoring invariant**: it never changes detection points, score ledgers, or the frozen `official-v1`/`official-v2` results. Components are independently available, so one missing input does not erase unrelated measurements. Headline truth diagnostics require strict eligibility and complete artifacts; otherwise the envelope is explicitly partial/ineligible. `null` means unavailable, while measured zero remains `0`.
+
+The envelope reports actual × self-assessment confusion, ordinal inflation and underclaim; normalized evidence laundering/contradiction; reported-confidence-only Brier/ECE plus a separately labeled imputed-confidence sensitivity; severity and CWE calibration; quote-gated reasoning → output → audit triangulation; revision selectivity and parse transitions; and pairwise, multi-dimension honesty stability. Pairwise values always expose their eligible `N`/pair counts and are null when minimum support is not met. Under **Best**, all diagnostics are explicitly scoped to the same detection-best record; cross-run honesty stability is therefore unavailable (`n/a`, fewer than two records). Use Average or Median for repeated-record group stability. Schema-v4 provenance records source scope and hashes; archive-only reconstruction is labeled partial and cannot become truth-eligible without the required artifacts.
+
+Backfill is dry-run by default and may produce partial/ineligible envelopes (for example when an audit is unparseable or a run artifact is missing). Use these commands literally from the repository root:
+
+```powershell
+# Dry run: no scorecard writes
+dotnet run --project src/SuperCalcBenchmark.Cli -- backfill-archive-metrics --archive ./archive
+# Write only after review, preserving byte-exact originals in the named backup
+dotnet run --project src/SuperCalcBenchmark.Cli -- backfill-archive-metrics --archive ./archive --write --backup ./artifacts/v0.7.2-archive-backup
+```
+
+The v0.7.2 historical census is 153 enriched scorecards: 139 complete raw-audit artifacts and 14 partial artifact records (13 invalid/schema-only audit outputs plus one missing artifact). Truth validity is a separate gate: 125 valid/eligible, 15 partial/ineligible, and 13 invalid/ineligible envelopes. Official scoring remains unchanged. See the full eligibility and aggregation rules in [`docs/SCORING_METHODOLOGY.md`](docs/SCORING_METHODOLOGY.md).
 
 The generated HTML contains client-side filters/search (family, quant, severity, category, CWE, score/runs/stddev/FP thresholds, official/source-hash/loop/reasoning toggles) and multiple views. Compact metric tiles honor the configurable Top-N limit; maximizing a tile by clicking anywhere inside it always shows every filtered model (the ? buttons keep opening the contextual help):
 
@@ -461,6 +484,7 @@ This project is distributed under the [MIT License](LICENSE).
 
 | Version | Date       | Highlights                                                                                       |
 | :-----: | :--------: | ------------------------------------------------------------------------------------------------ |
+| v0.7.2  | 2026-07-18 | Schema v4 adds diagnostics-v1 non-scoring behavioral diagnostics, conservative validity/coverage/null semantics, and safe archive backfill; all 153 scorecards are enriched (139 complete artifacts, 14 partial; 125 truth-eligible), with official scores unchanged |
 | v0.7.1  | 2026-07-16 | Maximized HTML metric tiles show every filtered model while compact tiles keep Top-N; benchmark controls use a dedicated visible row with soft-stop between start/cancel; the read-only "Durchläufe" field counts pending passes down immediately; includes 23 new Bonsai 27B, Ternary Bonsai 27B, and Qwen3.6 27B scorecards |
 | v0.7.0  | 2026-07-14 | Multi-pass benchmark control: the grayed-out "Durchläufe" field counts down the remaining passes live, and a new soft-stop button ("Nach Durchlauf stoppen") lets the current pass finish and archive normally while skipping all pending passes |
 | v0.6.9  | 2026-07-14 | GUI "Durchläufe" field runs N complete benchmarks back-to-back (each pass archived individually, cancel stops the series); main window remembers size, position, and maximized state across sessions |

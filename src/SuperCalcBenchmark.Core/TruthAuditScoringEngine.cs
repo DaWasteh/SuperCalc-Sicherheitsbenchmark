@@ -105,6 +105,12 @@ public sealed class TruthAuditScoringEngine
                 QuoteValid = quoteValid,
                 Overclaim = overclaim,
                 EvidenceLaundering = laundering,
+                ReportedAdmitsMiss = item?.AdmitsMiss,
+                ReportedOverclaims = item?.Overclaims,
+                ExpectedAdmitsMiss = assessment == "missed",
+                ExpectedOverclaims = overclaim || assessment == "unclear_or_overclaimed" || (actual == "found_partial" && assessment == "found_full"),
+                AdmitsMissConsistent = item?.AdmitsMiss is null ? null : item.AdmitsMiss == (assessment == "missed"),
+                OverclaimsConsistent = item?.Overclaims is null ? null : item.Overclaims == (overclaim || assessment == "unclear_or_overclaimed" || (actual == "found_partial" && assessment == "found_full")),
                 PreviousOutputQuote = quote,
                 Notes = item?.Rationale ?? string.Empty
             });

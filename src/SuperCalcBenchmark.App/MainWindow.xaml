@@ -327,6 +327,10 @@
                             <ComboBoxItem Content="Evidence Fidelity" />
                             <ComboBoxItem Content="Hallucination" />
                             <ComboBoxItem Content="Accountability" />
+                            <ComboBoxItem Content="Honesty" />
+                            <ComboBoxItem Content="Calibration" />
+                            <ComboBoxItem Content="Revision Selectivity" />
+                            <ComboBoxItem Content="Honesty Stability" />
                             <ComboBoxItem Content="Tokeneffizienz" />
                         </ComboBox>
                         <Button x:Name="OpenComparisonButton" Content="Diagramme öffnen (HTML)" Margin="16,4,4,4" Click="OpenComparisonButton_Click" IsEnabled="False" ToolTip="Erzeugt interaktive Vergleichsdiagramme als HTML und öffnet sie im Browser." />
@@ -387,6 +391,11 @@
                             <DataGridTextColumn Header="Evidence" Binding="{Binding EvidenceFidelity, StringFormat=P1}" IsReadOnly="True" Width="Auto" />
                             <DataGridTextColumn Header="Hallucination" Binding="{Binding HallucinationRate, StringFormat=P1}" IsReadOnly="True" Width="Auto" />
                             <DataGridTextColumn Header="Audit" Binding="{Binding AccountabilityScore, StringFormat=0.##}" IsReadOnly="True" Width="Auto" />
+                            <DataGridTextColumn Header="Diag N" Binding="{Binding DiagnosticsN}" IsReadOnly="True" Width="Auto" />
+                            <DataGridTextColumn Header="Honesty" Binding="{Binding HonestyDisplay}" IsReadOnly="True" Width="Auto" />
+                            <DataGridTextColumn Header="Calibration" Binding="{Binding CalibrationDisplay}" IsReadOnly="True" Width="Auto" />
+                            <DataGridTextColumn Header="Revision" Binding="{Binding RevisionDisplay}" IsReadOnly="True" Width="Auto" />
+                            <DataGridTextColumn Header="Honesty Stability" Binding="{Binding HonestyStabilityDisplay}" IsReadOnly="True" Width="Auto" />
                             <DataGridTextColumn Header="Run2 Δ" Binding="{Binding Run2Delta, StringFormat=0.##}" IsReadOnly="True" Width="Auto" />
                             <DataGridTextColumn Header="Think Tok" Binding="{Binding ReasoningTokens, StringFormat=0.#}" IsReadOnly="True" Width="Auto" />
                             <DataGridTextColumn Header="Out Tok" Binding="{Binding OutputTokens, StringFormat=0.#}" IsReadOnly="True" Width="Auto" />

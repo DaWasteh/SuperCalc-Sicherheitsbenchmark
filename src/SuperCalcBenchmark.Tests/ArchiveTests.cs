@@ -384,6 +384,9 @@ internal static partial class TestRunner
             Assert(html.Contains("openHelpPopover", StringComparison.Ordinal), "html should include metric help popover code");
             Assert(html.Contains("aria-modal=\"true\"", StringComparison.Ordinal), "metric overlays should expose ARIA modal attributes");
             Assert(html.Contains("data-help-metric", StringComparison.Ordinal), "metric headings should include help buttons");
+            Assert(html.Contains("{key:\"scoreMedian\",title:\"Median\",kind:\"num\"}", StringComparison.Ordinal), "generated script must contain a valid scoreMedian column object");
+            Assert(!html.Contains("{key:\"scoreMedian\"},title:", StringComparison.Ordinal), "generated script must not close the scoreMedian object early");
+            Assert(html.Contains("s.run1Score ?? s.score", StringComparison.Ordinal) && html.Contains("s.run2Delta ?? 0", StringComparison.Ordinal), "browser count/value fallback must preserve measured zero");
 
             const string open = "<script id=\"data\" type=\"application/json\">";
             var start = html.IndexOf(open, StringComparison.Ordinal);
@@ -658,7 +661,7 @@ internal static partial class TestRunner
             var record = store.LoadAll().Single();
             Assert(record.SchemaVersion == ArchiveRecord.CurrentSchemaVersion, "new archives should use current schema version");
             Assert(record.TimeoutSeconds == BenchmarkDefaults.OfficialRequestTimeoutSeconds, "request timeout should be archived for slow-model diagnostics");
-            Assert(File.ReadAllText(path).Contains("\"schemaVersion\": 3", StringComparison.Ordinal), "saved JSON should declare schema v3");
+            Assert(File.ReadAllText(path).Contains("\"schemaVersion\": 4", StringComparison.Ordinal), "saved JSON should declare schema v4");
             var run = record.Runs.Single();
             Assert(run.FinishReason == "length", "finish reason should be archived");
             Assert(run.LoopDetected, "loop flag should be archived");

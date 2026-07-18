@@ -133,6 +133,7 @@ public static class AdjudicationApplier
             Id = v.Id,
             Title = v.Title,
             Severity = v.Severity,
+            Cwe = v.Cwe.ToList(),
             Category = v.Category,
             Module = v.Module,
             Exploitability = v.Exploitability,

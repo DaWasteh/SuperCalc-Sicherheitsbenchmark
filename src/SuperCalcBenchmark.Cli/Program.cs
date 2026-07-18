@@ -33,6 +33,7 @@ internal static class Program
                 "run" or "benchmark" => await RunBenchmarkAsync(parsed),
                 "archive-list" or "archive" => ArchiveList(parsed),
                 "migrate-archive-scores" => MigrateArchiveScores(parsed),
+                "backfill-archive-metrics" => BackfillArchiveMetrics(parsed),
                 "compare" => Compare(parsed),
                 "help" => PrintUsageAndReturn(),
                 _ => UnknownCommand(command)
@@ -281,6 +282,22 @@ internal static class Program
         return 0;
     }
 
+    private static int BackfillArchiveMetrics(ParsedArgs args)
+    {
+        var archiveDir = Path.GetFullPath(args.Get("--archive", ArchiveStore.DefaultArchiveFolderName));
+        var write = args.Has("--write") && !args.Has("--dry-run");
+        var backup = args.GetNullable("--backup");
+        if (write && string.IsNullOrWhiteSpace(backup))
+            backup = Path.Combine(archiveDir, "_migration-backup", "v0.7.2-behavioral-metrics-" + DateTime.Now.ToString("yyyyMMdd-HHmmss"));
+        var result = new ArchiveMetricsBackfiller(archiveDir).Run(new() { Write=write, BackupDirectory=backup });
+        Console.WriteLine($"Archive: {archiveDir}"); Console.WriteLine($"Mode: {(write ? "write" : "dry-run")}");
+        if (backup is not null) Console.WriteLine($"Backup: {backup}");
+        Console.WriteLine($"Scanned: {result.Scanned}  complete: {result.Complete}  partial: {result.Partial}  unavailable: {result.Unavailable}");
+        Console.WriteLine($"Already current: {result.AlreadyCurrent}  would write: {result.WouldWrite}  written: {result.Written}  backups: {result.Backups}  invariant failures: {result.InvariantFailures}");
+        foreach (var file in result.Files.Where(x => x.WouldWrite || x.Warning is not null)) Console.WriteLine($"  [{(file.Warning is not null ? "WARN" : file.Written ? "WRITE" : "DRY")}] {file.Path}{(file.Warning is null ? "" : " warning="+file.Warning)}");
+        return result.HasErrors ? 1 : 0;
+    }
+
     private static int Compare(ParsedArgs args)
     {
         var archiveDir = Path.GetFullPath(args.Get("--archive", ArchiveStore.DefaultArchiveFolderName));
@@ -517,6 +534,10 @@ internal static class Program
         ComparisonMetric.OverclaimRate => series.OverclaimRate * 100,
         ComparisonMetric.Duration => (series.DurationMedianMs ?? series.DurationMeanMs ?? 0) / 1000.0,
         ComparisonMetric.TokenEfficiency => series.ScorePer1KTokens ?? 0,
+        ComparisonMetric.Honesty => (series.Honesty ?? 0) * 100,
+        ComparisonMetric.HonestyCalibration => (series.HonestyCalibration ?? 0) * 100,
+        ComparisonMetric.RevisionSelectivity => (series.RevisionSelectivity ?? 0) * 100,
+        ComparisonMetric.HonestyStability => (series.HonestyStability ?? 0) * 100,
         _ => series.ScorePercent
     };
 
@@ -539,8 +560,12 @@ internal static class Program
             "overclaim-rate" or "overclaim" => ComparisonMetric.OverclaimRate,
             "duration" or "time" => ComparisonMetric.Duration,
             "token-efficiency" or "tokens" or "score-per-1k-tokens" => ComparisonMetric.TokenEfficiency,
+            "honesty" => ComparisonMetric.Honesty,
+            "honesty-calibration" or "calibration" => ComparisonMetric.HonestyCalibration,
+            "revision-selectivity" or "revision" => ComparisonMetric.RevisionSelectivity,
+            "honesty-stability" => ComparisonMetric.HonestyStability,
             "score" or "overall" => ComparisonMetric.Score,
-            _ => throw new ArgumentException("--metric must be one of: score, critical-recall, high-critical-recall, f1, fp-rate, stability, run2-delta, thinking-coverage, evidence-fidelity, location-accuracy, hallucination-rate, accountability, overclaim-rate, duration, token-efficiency.")
+            _ => throw new ArgumentException("--metric must be one of: score, critical-recall, high-critical-recall, f1, fp-rate, stability, run2-delta, thinking-coverage, evidence-fidelity, location-accuracy, hallucination-rate, accountability, overclaim-rate, duration, token-efficiency, honesty, honesty-calibration, revision-selectivity, honesty-stability.")
         };
     }
 
@@ -573,6 +598,7 @@ internal static class Program
         Console.WriteLine("  score-fixture    Score a saved model response without contacting llama-server");
         Console.WriteLine("  archive-list     List archived runs grouped by model family + quant");
         Console.WriteLine("  migrate-archive-scores  Version legacy archive scorecards without changing points");
+        Console.WriteLine("  backfill-archive-metrics  Explicitly backfill non-scoring schema-v4 diagnostics (dry-run by default)");
         Console.WriteLine("  compare          Build an HTML comparison (bar + radar) from archived runs");
         Console.WriteLine();
         Console.WriteLine("Examples:");
@@ -582,6 +608,8 @@ internal static class Program
         Console.WriteLine("  dotnet run --project src/SuperCalcBenchmark.Cli -- run --model gpt --quant Q5_K_M   # manual quant");
         Console.WriteLine("  dotnet run --project src/SuperCalcBenchmark.Cli -- archive-list");
         Console.WriteLine("  dotnet run --project src/SuperCalcBenchmark.Cli -- migrate-archive-scores --assume-profile official-v1 --dry-run");
+        Console.WriteLine("  dotnet run --project src/SuperCalcBenchmark.Cli -- backfill-archive-metrics --archive ./archive  # dry-run; partial/ineligible records are retained explicitly");
+        Console.WriteLine("  dotnet run --project src/SuperCalcBenchmark.Cli -- backfill-archive-metrics --archive ./archive --write --backup ./artifacts/v0.7.2-archive-backup");
         Console.WriteLine("  dotnet run --project src/SuperCalcBenchmark.Cli -- compare                          # all models");
         Console.WriteLine("  dotnet run --project src/SuperCalcBenchmark.Cli -- compare --family qwen3-coder-30b # quants of one model");
         Console.WriteLine("  dotnet run --project src/SuperCalcBenchmark.Cli -- score-fixture --response tools/response-fixtures/perfect.json --out results/perfect");
@@ -617,11 +645,11 @@ internal static class Program
         Console.WriteLine("  --family <name>            compare: only quants of this model family");
         Console.WriteLine("  --aggregate <average|median|best> compare: headline score per group. Default: average");
         Console.WriteLine("  --run-view <primary|run1|run2|delta> compare: selected run perspective. Default: primary");
-        Console.WriteLine("  --metric <score|critical-recall|f1|fp-rate|stability|run2-delta|thinking-coverage|evidence-fidelity|location-accuracy|hallucination-rate|accountability|duration|token-efficiency>");
+        Console.WriteLine("  --metric <score|critical-recall|f1|fp-rate|stability|run2-delta|thinking-coverage|evidence-fidelity|location-accuracy|hallucination-rate|accountability|duration|token-efficiency|honesty|honesty-calibration|revision-selectivity|honesty-stability>");
         Console.WriteLine("  --scoring-profile <name>   compare: include only runs scored with this profile (e.g. official-v1)");
         Console.WriteLine("  --assume-profile <name>    migrate-archive-scores: mark legacy scores with this profile");
-        Console.WriteLine("  --write / --dry-run        migrate-archive-scores: write changes or preview only");
-        Console.WriteLine("  --backup <dir>             migrate-archive-scores: backup destination before writes");
+        Console.WriteLine("  --write / --dry-run        archive migration/backfill: dry-run is default; partial/ineligible diagnostics remain explicit");
+        Console.WriteLine("  --backup <dir>             archive migration/backfill: byte-exact backup destination before writes");
         Console.WriteLine("  --public-labels            compare: hide vulnerability titles/CWEs/modules in the HTML payload");
     }
 

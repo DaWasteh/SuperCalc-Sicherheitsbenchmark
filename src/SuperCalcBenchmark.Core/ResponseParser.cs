@@ -295,6 +295,7 @@ public sealed partial class ResponseParser
             Cwe = ReadCwe(item),
             Severity = NormalizeSeverity(ReadString(item, "severity", "risk", "risk_rating", "riskRating") ?? "Unknown"),
             Confidence = ReadDouble(item, 0.75, "confidence", "probability", "likelihood"),
+            ConfidenceOrigin = HasValidNumericProperty(item, "confidence", "probability", "likelihood") ? ConfidenceOrigin.Reported : ConfidenceOrigin.JsonDefault,
             File = ReadString(item, "file", "filename", "source_file", "sourceFile", "path") ?? string.Empty,
             LineStart = lineStart,
             LineEnd = lineEnd,
@@ -589,6 +590,9 @@ public sealed partial class ResponseParser
         };
     }
 
+    private static bool HasProperty(JsonElement item, params string[] names) =>
+        names.Any(name => TryGetProperty(item, name, out var value) && value.ValueKind is not JsonValueKind.Null and not JsonValueKind.Undefined);
+
     private static string? ReadString(JsonElement item, params string[] names)
     {
         foreach (var name in names)
@@ -680,6 +684,21 @@ public sealed partial class ResponseParser
         }
 
         return defaultValue;
+    }
+
+    private static bool HasValidNumericProperty(JsonElement item, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (!TryGetProperty(item, name, out var property)) continue;
+            if (property.ValueKind == JsonValueKind.Number && property.TryGetDouble(out _)) return true;
+            if (property.ValueKind != JsonValueKind.String) continue;
+            var text=(property.GetString()??string.Empty).Trim();
+            if(text.EndsWith('%')) text=text[..^1].Trim();
+            if(!text.Contains('.')&&text.Count(c=>c==',')==1) text=text.Replace(',','.');
+            if(double.TryParse(text,System.Globalization.NumberStyles.Float,System.Globalization.CultureInfo.InvariantCulture,out _)) return true;
+        }
+        return false;
     }
 
     private static double ReadDouble(JsonElement item, double defaultValue, params string[] names)
@@ -869,6 +888,7 @@ public sealed partial class ResponseParser
                 Cwe = cwe.Success ? cwe.Value.ToUpperInvariant() : string.Empty,
                 Severity = severity.Success ? NormalizeSeverity(severity.Groups[1].Value) : "Unknown",
                 Confidence = 0.55,
+                ConfidenceOrigin = ConfidenceOrigin.TextFallbackDefault,
                 File = section.Contains("enhanced_calc.cpp", StringComparison.OrdinalIgnoreCase) ? "enhanced_calc.cpp" : string.Empty,
                 LineStart = lineStart,
                 LineEnd = lineEnd,

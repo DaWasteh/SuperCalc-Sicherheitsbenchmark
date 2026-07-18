@@ -111,6 +111,7 @@ public sealed class ScoringEngine
                 Id = v.Id,
                 Title = v.Title,
                 Severity = v.Severity,
+                Cwe = v.Cwe.ToList(),
                 Found = matchingScore is not null,
                 Partial = matchingScore?.Classification == FindingClassification.PartialTruePositive,
                 FindingIndex = matchingScore?.FindingIndex,
