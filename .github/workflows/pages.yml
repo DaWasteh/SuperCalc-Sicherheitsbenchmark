@@ -100,16 +100,34 @@ jobs:
         run: |
           set -eu
           archive="supercalc-comparison-${RELEASE_TAG}.zip"
-          cd release-artifacts
-          zip -r "../$archive" .
-          echo "ARCHIVE=$archive" >> "$GITHUB_ENV"
+          release_dir="release-artifacts"
+          output="$RUNNER_TEMP/$archive"
 
+          if [ ! -d "$release_dir" ]; then
+            echo "Expected '$release_dir' directory not found"
+            ls -la
+            exit 1
+          fi
+
+          zip -r "$output" "$release_dir"
+          if [ ! -f "$output" ]; then
+            echo "Failed to create archive: $output"
+            exit 1
+          fi
+
+          echo "ARCHIVE=$output" >> "$GITHUB_ENV"
+          echo "Prepared page archive: $output"
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: v${{ github.run_number }}
         run: |
           set -eu
+          if [ -z "${ARCHIVE:-}" ] || [ ! -f "$ARCHIVE" ]; then
+            echo "Archive path is invalid: ${ARCHIVE:-<empty>}"
+            exit 1
+          fi
+
           if gh release view "$RELEASE_TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
             echo "Release $RELEASE_TAG already exists – skipping."
             exit 0
