@@ -46,6 +46,7 @@ public sealed class ComparisonHtmlWriter
             runView = report.RunView.ToString(),
             metric = MetricValue(report.Metric),
             scoringProfile = report.ScoringProfile,
+            parserVersion = ResponseParser.CurrentParserVersion,
             axis = report.VulnerabilityMetadata.Select(a => new
             {
                 id = a.Id,
@@ -64,6 +65,7 @@ public sealed class ComparisonHtmlWriter
                 runCount = s.RunCount,
                 officialRunCount = s.OfficialRunCount,
                 officialComparableRunCount = s.OfficialComparableRunCount,
+                currentEvaluationRunCount = s.CurrentEvaluationRunCount,
                 legacyMigratedRunCount = s.LegacyMigratedRunCount,
                 rescoredRunCount = s.RescoredRunCount,
                 sourceHashMatchCount = s.SourceHashMatchCount,
@@ -183,9 +185,11 @@ public sealed class ComparisonHtmlWriter
                     benchmarkProfile = d.BenchmarkProfile,
                     scoringProfile = d.ScoringProfile,
                     scoringProfileVersion = d.ScoringProfileVersion,
+                    parserVersion = d.ParserVersion,
                     isLegacyMigrated = d.IsLegacyMigrated,
                     isRescored = d.IsRescored,
                     officialComparable = d.OfficialComparable,
+                    isCurrentEvaluation = d.IsCurrentEvaluation,
                     sourceHashMatches = d.SourceHashMatches,
                     runDirectory = d.RunDirectory,
                     runName = d.RunName,
@@ -635,7 +639,7 @@ public sealed class ComparisonHtmlWriter
   }
   const auditMetricKeys = new Set(["accountabilityScore","truthAuditAccuracy","overclaimRate","missAdmissionRate","falsePositiveAdmissionRate","quoteFidelity","evidenceLaunderingCount"]);
   function cell(s,c,st) { if (c.kind === "detail") return detailCell(s); if (auditMetricKeys.has(c.key) && !(s.truthAuditRunCount > 0)) return "n/a"; const v = valueForSort(s,c.key,st); return typeof v === "number" && Number.isFinite(v) ? (Number.isInteger(v) ? v : v.toFixed(1)) : "n/a"; }
-  function detailCell(s) { const details = s.details || []; const rows = details.map(d => { const version = `${esc(d.scoringProfile||"legacy-unknown")} v${d.scoringProfileVersion||"?"}${d.isLegacyMigrated ? " · legacy-migriert" : ""}${d.isRescored ? " · rescored" : ""}`; return `<tr><td>${esc(d.completedAt||"")}</td><td>${esc(d.runName)}</td><td>${version}</td><td>${d.officialComparable?'ja':'nein'}</td><td>${fmt(d.score)}</td><td>${fmtSigned(d.run2Delta)}</td><td>${esc(d.finishReason||"")}</td><td>${esc(d.parseMode||"")}</td><td>${d.loopDetected?'ja':'nein'}</td><td>${fmt(d.durationSec)}</td><td>${fmt(d.outputTokens)}/${fmt(d.reasoningTokens)}/${fmt(d.completionTokens)}</td><td>${esc(d.repeatGroupId||'—')} ${d.repeatCount>1 ? '('+d.repeatIndex+'/'+d.repeatCount+')' : ''}</td></tr>`; }).join(""); const fpTax = Object.entries(s.falsePositiveTaxonomy||{}).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`${esc(k)}=${fmt(v)}`).join(', ') || '—'; return `<details><summary>${esc(s.label)}</summary><div class="note">Profil: ${s.officialRunCount}/${s.runCount} offiziell · official comparable: ${s.officialComparableRunCount}/${s.runCount} · legacy-migriert: ${s.legacyMigratedRunCount}/${s.runCount} · rescored: ${s.rescoredRunCount}/${s.runCount} · Source-Hash: ${s.sourceHashMatchCount}/${s.runCount} · FP-Taxonomie: ${fpTax} · Run2 dropped: ${(s.run2DroppedIds||[]).join(', ')||'—'} · added: ${(s.run2AddedIds||[]).join(', ')||'—'}</div><table class="detail-table"><thead><tr><th>Datum</th><th>Run</th><th>Score-Version</th><th>Official</th><th>Score</th><th>Run2 Δ</th><th>Finish</th><th>Parse</th><th>Loop</th><th>s</th><th>Out/Think/Gesamt Tokens</th><th>Repeat</th></tr></thead><tbody>${rows}</tbody></table></details>`; }
+  function detailCell(s) { const details = s.details || []; const rows = details.map(d => { const version = `${esc(d.scoringProfile||"legacy-unknown")} v${d.scoringProfileVersion||"?"} · ${esc(d.parserVersion||"parser-unbekannt")}${d.isLegacyMigrated ? " · legacy-migriert" : ""}${d.isRescored ? " · rescored" : ""}`; return `<tr><td>${esc(d.completedAt||"")}</td><td>${esc(d.runName)}</td><td>${version}</td><td>${d.officialComparable?'ja':'nein'}</td><td>${d.isCurrentEvaluation?'aktuell':'veraltet'}</td><td>${fmt(d.score)}</td><td>${fmtSigned(d.run2Delta)}</td><td>${esc(d.finishReason||"")}</td><td>${esc(d.parseMode||"")}</td><td>${d.loopDetected?'ja':'nein'}</td><td>${fmt(d.durationSec)}</td><td>${fmt(d.outputTokens)}/${fmt(d.reasoningTokens)}/${fmt(d.completionTokens)}</td><td>${esc(d.repeatGroupId||'—')} ${d.repeatCount>1 ? '('+d.repeatIndex+'/'+d.repeatCount+')' : ''}</td></tr>`; }).join(""); const fpTax = Object.entries(s.falsePositiveTaxonomy||{}).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`${esc(k)}=${fmt(v)}`).join(', ') || '—'; return `<details><summary>${esc(s.label)}</summary><div class="note">Profil: ${s.officialRunCount}/${s.runCount} offiziell · official comparable: ${s.officialComparableRunCount}/${s.runCount} · aktuell (${esc(data.parserVersion||'parser-v2')}): ${s.currentEvaluationRunCount}/${s.runCount} · legacy-migriert: ${s.legacyMigratedRunCount}/${s.runCount} · rescored: ${s.rescoredRunCount}/${s.runCount} · Source-Hash: ${s.sourceHashMatchCount}/${s.runCount} · FP-Taxonomie: ${fpTax} · Run2 dropped: ${(s.run2DroppedIds||[]).join(', ')||'—'} · added: ${(s.run2AddedIds||[]).join(', ')||'—'}</div><table class="detail-table"><thead><tr><th>Datum</th><th>Run</th><th>Score-Version</th><th>Official</th><th>Aktualität</th><th>Score</th><th>Run2 Δ</th><th>Finish</th><th>Parse</th><th>Loop</th><th>s</th><th>Out/Think/Gesamt Tokens</th><th>Repeat</th></tr></thead><tbody>${rows}</tbody></table></details>`; }
   function valueForSort(s,key,st) { if (key === "score") return scoreForRunView(s, st.runView); return s[key]; }
 
   function metricHeader(metricId, title, titleId) {
@@ -751,7 +755,7 @@ public sealed class ComparisonHtmlWriter
         var builder = new StringBuilder();
         var header = new List<string>
         {
-            "model_family", "quant", "run_count", "aggregate", "run_view", "scoring_profile", "official_comparable_runs", "legacy_migrated_runs", "rescored_runs", "score_percent",
+            "model_family", "quant", "run_count", "aggregate", "run_view", "scoring_profile", "official_comparable_runs", "current_evaluation_runs", "legacy_migrated_runs", "rescored_runs", "score_percent",
             "score_mean", "score_median", "score_stddev", "score_iqr", "score_ci95", "score_min", "score_max",
             "precision_percent", "recall_percent", "f1_percent",
             "critical_recall_percent", "high_recall_percent", "medium_recall_percent", "low_recall_percent", "high_critical_recall_percent",
@@ -781,6 +785,7 @@ public sealed class ComparisonHtmlWriter
                 Csv(s.RunView.ToString()),
                 Csv(report.ScoringProfile ?? "all"),
                 s.OfficialComparableRunCount.ToString(CultureInfo.InvariantCulture),
+                s.CurrentEvaluationRunCount.ToString(CultureInfo.InvariantCulture),
                 s.LegacyMigratedRunCount.ToString(CultureInfo.InvariantCulture),
                 s.RescoredRunCount.ToString(CultureInfo.InvariantCulture),
                 s.ScorePercent.ToString("0.##", CultureInfo.InvariantCulture),

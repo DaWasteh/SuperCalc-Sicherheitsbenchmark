@@ -9,6 +9,7 @@ public sealed class RunArtifactReadResult
     public BenchmarkRunResult? Run { get; init; }
     public string? FinalResponse { get; init; }
     public string? ResponseSource { get; init; }
+    public string? ResolvedRunDirectory { get; init; }
     public string? RunJsonSha256 { get; init; }
     public string? FinalResponseSha256 { get; init; }
     public string? Error { get; init; }
@@ -22,24 +23,59 @@ public sealed class RunArtifactReader
 
     public RunArtifactReadResult Read(ArchiveRecord record)
     {
-        var directory = record.RunDirectory;
-        var runPath = Path.Combine(directory, "run.json");
-        if (!File.Exists(runPath)) return new() { Error = "run directory or run.json is missing" };
+        ArgumentNullException.ThrowIfNull(record);
         try
         {
+            var resolvedFromLocator = BenchmarkPathResolver.TryResolveDataLocator(
+                                          record.RunLocator,
+                                          BenchmarkPathResolver.ResolveDataRoot(),
+                                          out var locatorDirectory)
+                                      && File.Exists(Path.Combine(locatorDirectory, "run.json"));
+            var directory = resolvedFromLocator ? locatorDirectory : record.RunDirectory;
+            if (string.IsNullOrWhiteSpace(directory))
+            {
+                return new() { Error = "run directory or run.json is missing" };
+            }
+
+            var runPath = Path.Combine(directory, "run.json");
+            if (!File.Exists(runPath))
+            {
+                return new() { Error = "run directory or run.json is missing", ResolvedRunDirectory = directory };
+            }
+
             var bytes = File.ReadAllBytes(runPath);
             var jsonBytes = StripUtf8Bom(bytes);
             var run = JsonSerializer.Deserialize<BenchmarkRunResult>(jsonBytes, Options);
-            if (run is null) return new() { Error = "run.json is empty" };
-            var mismatch = Verify(record, run);
-            if (mismatch is not null) return new() { Error = mismatch, RunJsonSha256 = Hash(bytes) };
+            if (run is null)
+            {
+                return new() { Error = "run.json is empty", ResolvedRunDirectory = directory };
+            }
+
+            var mismatch = Verify(record, run, resolvedFromLocator);
+            if (mismatch is not null)
+            {
+                return new() { Error = mismatch, ResolvedRunDirectory = directory, RunJsonSha256 = Hash(bytes) };
+            }
+
             var (response, source, skipped) = ReadResponse(run, directory);
-            return new() { Run = run, FinalResponse = response, ResponseSource = source, CorruptRawChunksSkipped = skipped, RunJsonSha256 = Hash(bytes), FinalResponseSha256 = response is null ? null : Hash(Encoding.UTF8.GetBytes(response)) }; 
+            return new()
+            {
+                Run = run,
+                FinalResponse = response,
+                ResponseSource = source,
+                ResolvedRunDirectory = directory,
+                CorruptRawChunksSkipped = skipped,
+                RunJsonSha256 = Hash(bytes),
+                FinalResponseSha256 = response is null ? null : Hash(Encoding.UTF8.GetBytes(response))
+            };
         }
-        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException) { return new() { Error = $"corrupt/unreadable artifact: {ex.Message}" }; }
+        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            return new() { Error = $"corrupt/unreadable artifact: {ex.Message}" };
+        }
     }
 
-    private static string? Verify(ArchiveRecord a, BenchmarkRunResult r)
+    private static string? Verify(ArchiveRecord a, BenchmarkRunResult r, bool resolvedFromLocator)
     {
         if (!string.Equals(a.BenchmarkId, r.BenchmarkId, StringComparison.OrdinalIgnoreCase)) return "identity mismatch: benchmark";
         if (!string.IsNullOrWhiteSpace(a.SourceSha256) && !string.Equals(a.SourceSha256, r.SourceSha256, StringComparison.OrdinalIgnoreCase)) return "identity mismatch: source hash";
@@ -49,7 +85,9 @@ public sealed class RunArtifactReader
         if (a.RepeatIndex > 0 && r.RepeatIndex > 0 && a.RepeatIndex != r.RepeatIndex) return "identity mismatch: repeat index";
         if (a.Seed.HasValue && a.Seed.Value != r.Seed) return "identity mismatch: seed";
         if (a.CompletedAt != default && r.CompletedAt != default && Math.Abs((a.CompletedAt-r.CompletedAt).TotalSeconds) > 1) return "identity mismatch: completion time";
-        if (!string.IsNullOrWhiteSpace(r.OutputDirectory) && !SameDirectory(a.RunDirectory, r.OutputDirectory)) return "identity mismatch: output directory";
+        if (!resolvedFromLocator
+            && !string.IsNullOrWhiteSpace(r.OutputDirectory)
+            && !SameDirectory(a.RunDirectory, r.OutputDirectory)) return "identity mismatch: output directory";
         return null;
     }
 

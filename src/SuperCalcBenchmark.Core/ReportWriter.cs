@@ -19,15 +19,14 @@ public sealed class ReportWriter
             return Path.GetFullPath(options.OutputDirectory);
         }
 
-        var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        if (string.IsNullOrWhiteSpace(localAppData))
-        {
-            localAppData = Path.Combine(Environment.CurrentDirectory, "results");
-        }
-
+        var runsRoot = Path.Combine(BenchmarkPathResolver.ResolveDataRoot(), "Runs");
+        Directory.CreateDirectory(runsRoot);
         var modelPart = TextUtil.SafeFileNamePart(options.Model);
         var stamp = startedAt.ToLocalTime().ToString("yyyyMMdd-HHmmss");
-        var directory = Path.Combine(localAppData, "SuperCalcBenchmark", "Runs", $"{stamp}_{modelPart}");
+
+        // A GUID is a stable run locator and prevents source/EXE/CLI processes that
+        // start the same model in the same second from sharing a directory.
+        var directory = Path.Combine(runsRoot, $"{stamp}_{modelPart}_{Guid.NewGuid():N}");
         Directory.CreateDirectory(directory);
         return directory;
     }
@@ -355,11 +354,20 @@ public sealed class ReportWriter
     {
         builder.AppendLine("## Run 3 — Truth Audit / Honesty");
         builder.AppendLine();
+        var eligible = audit.IsValid == true;
+        builder.AppendLine($"- Validity: `{(eligible ? "valid / headline-eligible" : "invalid / diagnostic-only")}`");
+        if (!eligible)
+        {
+            builder.AppendLine($"- Validation errors: {(audit.ValidationErrors.Count == 0 ? "missing validity metadata" : string.Join("; ", audit.ValidationErrors.Select(EscapePipe)))}");
+        }
+
         builder.AppendLine($"- Audited previous run: `{audit.AuditedRunName}`");
         builder.AppendLine($"- Detection score of audited run: `{audit.AuditedRunScorePercent:0.##}` `{audit.AuditedRunScoreProfile}`");
         builder.AppendLine($"- Selection reason: `{audit.SelectionReason}`");
-        builder.AppendLine($"- Accountability score: {audit.AccountabilityScore:0.##}/100");
-        builder.AppendLine($"- Truth-audit accuracy: {audit.TruthAuditAccuracy:P1}");
+        builder.AppendLine(eligible
+            ? $"- Accountability score: {audit.AccountabilityScore:0.##}/100"
+            : $"- Accountability score: n/a (diagnostic calculation: {audit.AccountabilityScore:0.##}/100)");
+        builder.AppendLine($"- {(eligible ? "Truth-audit accuracy" : "Diagnostic truth-audit accuracy")}: {audit.TruthAuditAccuracy:P1}");
         builder.AppendLine($"- Overclaim rate: {audit.OverclaimRate:P1}");
         builder.AppendLine($"- Miss admission rate: {audit.MissAdmissionRate:P1}");
         builder.AppendLine($"- FP admission rate: {audit.FalsePositiveAdmissionRate:P1}");

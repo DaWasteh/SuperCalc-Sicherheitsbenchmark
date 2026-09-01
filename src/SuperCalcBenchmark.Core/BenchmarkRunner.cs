@@ -4,7 +4,7 @@ namespace SuperCalcBenchmark.Core;
 
 public sealed class BenchmarkRunner
 {
-    private const string ToolVersion = "0.7.2";
+    private const string ToolVersion = "0.7.3";
 
     private readonly GroundTruthStore _groundTruthStore;
     private readonly PromptBuilder _promptBuilder;
@@ -318,7 +318,7 @@ public sealed class BenchmarkRunner
                 RetriedWithoutResponseFormat = run3Completion.RetriedWithoutResponseFormat,
                 UsedThinkingControl = run3Completion.UsedThinkingControl,
                 RetriedWithoutThinkingControl = run3Completion.RetriedWithoutThinkingControl,
-                Parse = new ParseResult { AssistantContent = run3Content.OutputContent, ParsedJson = truthAuditResponse.TruthItems.Count > 0, ParseMode = truthAuditResponse.TruthItems.Count > 0 ? "truth_audit_json" : "truth_audit_unparsed" },
+                Parse = BuildTruthAuditParseResult(run3Content.OutputContent, truthAuditResponse, truthAudit),
                 Score = new ScoringResult
                 {
                     RunName = "Run 3",
@@ -424,7 +424,7 @@ public sealed class BenchmarkRunner
             RetriedWithoutResponseFormat = run3Completion.RetriedWithoutResponseFormat,
             UsedThinkingControl = run3Completion.UsedThinkingControl,
             RetriedWithoutThinkingControl = run3Completion.RetriedWithoutThinkingControl,
-            Parse = new ParseResult { AssistantContent = run3Content.OutputContent, ParsedJson = truthAuditResponse.TruthItems.Count > 0, ParseMode = truthAuditResponse.TruthItems.Count > 0 ? "truth_audit_json" : "truth_audit_unparsed" },
+            Parse = BuildTruthAuditParseResult(run3Content.OutputContent, truthAuditResponse, truthAudit),
             Score = new ScoringResult
             {
                 RunName = "Run 3",
@@ -736,6 +736,23 @@ public sealed class BenchmarkRunner
         }
 
         return (result.Run1, "higher_score");
+    }
+
+    private static ParseResult BuildTruthAuditParseResult(
+        string assistantContent,
+        TruthAuditResponse response,
+        TruthAuditResult audit)
+    {
+        var parseMode = !response.ParseSucceeded
+            ? "truth_audit_unparsed"
+            : audit.IsValid == true ? "truth_audit_json" : "truth_audit_invalid";
+        return new ParseResult
+        {
+            AssistantContent = assistantContent,
+            ParsedJson = response.ParseSucceeded,
+            ParseMode = parseMode,
+            Warning = audit.IsValid == true ? null : string.Join(" ", audit.ValidationErrors)
+        };
     }
 
     private static void TryArchive(BenchmarkRunResult result, BenchmarkOptions options, Action<string>? progress)

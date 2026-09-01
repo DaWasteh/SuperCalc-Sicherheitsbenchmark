@@ -78,7 +78,8 @@ public sealed class ComparisonReport
             var scoreValues = samples.Select(s => s.ScorePercent).ToList();
             var score = AggregateMetric(samples, s => s.ScorePercent, aggregate, bestSample);
             var perVuln = axis.Select(id => AggregateCredit(samples, id, aggregate, bestSample)).ToList();
-            var visibleReasoningRunCount = samples.Count(s => s.Run.ReasoningDisclosure?.HasVisibleReasoning == true);
+            IReadOnlyList<ComparisonSample> rateSamples = aggregate == ComparisonAggregate.Best ? [bestSample] : samples;
+            var visibleReasoningRunCount = rateSamples.Count(s => s.Run.ReasoningDisclosure?.HasVisibleReasoning == true);
             var pairMetrics = BuildPairMetrics(samples, aggregate, bestSample, scoringProfile);
             var truthAudit = BuildTruthAuditMetrics(samples, aggregate, bestSample);
             var diagnostics = BuildDiagnosticsMetrics(samples, aggregate, bestSample);
@@ -87,10 +88,10 @@ public sealed class ComparisonReport
             var cwe = BuildCweMetrics(axisMetadata, perVuln);
             var modules = BuildBucketMetrics(axisMetadata, perVuln, item => item.Module);
             var durationValues = samples.Select(s => s.Run.DurationMs).Where(v => v.HasValue).Select(v => (double)v!.Value).ToList();
-            var findingTotal = samples.Sum(s => Math.Max(0, s.Run.FindingCount));
-            var duplicateTotal = samples.Sum(s => Math.Max(0, s.Run.Duplicates));
-            var ignoredTotal = samples.Sum(s => Math.Max(0, s.Run.IgnoredLowConfidence));
-            var fpTotal = samples.Sum(s => Math.Max(0, s.Run.FalsePositives));
+            var findingTotal = rateSamples.Sum(s => Math.Max(0, s.Run.FindingCount));
+            var duplicateTotal = rateSamples.Sum(s => Math.Max(0, s.Run.Duplicates));
+            var ignoredTotal = rateSamples.Sum(s => Math.Max(0, s.Run.IgnoredLowConfidence));
+            var fpTotal = rateSamples.Sum(s => Math.Max(0, s.Run.FalsePositives));
             var outputTokens = AggregateNullableMetric(samples, s => s.Run.ResponseTokens, aggregate, bestSample);
             var reasoningTokens = AggregateNullableMetric(samples, s => s.Run.ReasoningTokens, aggregate, bestSample);
             var completionTokens = AggregateNullableMetric(samples, s => s.Run.CompletionTokens, aggregate, bestSample);
@@ -124,6 +125,7 @@ public sealed class ComparisonReport
                 Missed = RoundToInt(AggregateMetric(samples, s => s.Missed, aggregate, bestSample)),
                 OfficialRunCount = samples.Count(s => string.Equals(s.Record.BenchmarkProfile, "official", StringComparison.OrdinalIgnoreCase)),
                 OfficialComparableRunCount = samples.Count(s => s.Run.OfficialComparable),
+                CurrentEvaluationRunCount = samples.Count(s => s.Run.IsCurrentEvaluation),
                 LegacyMigratedRunCount = samples.Count(s => s.Run.IsLegacyMigrated),
                 RescoredRunCount = samples.Count(s => s.Run.IsRescored),
                 SourceHashMatchCount = samples.Count(s => s.Record.SourceHashMatches),
@@ -161,10 +163,10 @@ public sealed class ComparisonReport
                 FpPerFinding = findingTotal == 0 ? 0 : (double)fpTotal / findingTotal,
                 DuplicateRate = findingTotal == 0 ? 0 : (double)duplicateTotal / findingTotal,
                 IgnoredLowConfidenceRate = findingTotal == 0 ? 0 : (double)ignoredTotal / findingTotal,
-                ParseSuccessRate = samples.Count == 0 ? 0 : samples.Count(s => IsParseSuccess(s.Run.ParseMode)) / (double)samples.Count,
-                LoopRate = samples.Count == 0 ? 0 : samples.Count(s => s.Run.LoopDetected) / (double)samples.Count,
-                EmptyOutputRate = samples.Count == 0 ? 0 : samples.Count(s => s.Run.EmptyOutputWithReasoning) / (double)samples.Count,
-                VisibleReasoningRate = samples.Count == 0 ? 0 : visibleReasoningRunCount / (double)samples.Count,
+                ParseSuccessRate = rateSamples.Count == 0 ? 0 : rateSamples.Count(s => IsParseSuccess(s.Run.ParseMode)) / (double)rateSamples.Count,
+                LoopRate = rateSamples.Count == 0 ? 0 : rateSamples.Count(s => s.Run.LoopDetected) / (double)rateSamples.Count,
+                EmptyOutputRate = rateSamples.Count == 0 ? 0 : rateSamples.Count(s => s.Run.EmptyOutputWithReasoning) / (double)rateSamples.Count,
+                VisibleReasoningRate = rateSamples.Count == 0 ? 0 : visibleReasoningRunCount / (double)rateSamples.Count,
                 Run1Score = pairMetrics.Run1Score,
                 Run2Score = pairMetrics.Run2Score,
                 Run2ScoreDelta = pairMetrics.ScoreDelta,
@@ -420,8 +422,24 @@ public sealed class ComparisonReport
     }
 
     private static bool MatchesProfile(ArchiveRunScore run, string? scoringProfile)
-        => string.IsNullOrWhiteSpace(scoringProfile)
-           || string.Equals(run.ScoringProfile, scoringProfile, StringComparison.OrdinalIgnoreCase);
+    {
+        if (string.IsNullOrWhiteSpace(scoringProfile))
+        {
+            return true;
+        }
+
+        if (!string.Equals(run.ScoringProfile, scoringProfile, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return !ScoringProfiles.IsOfficialComparableProfile(scoringProfile)
+               || ScoringProfiles.IsOfficialComparableIdentity(
+                   run.ScoringProfile,
+                   run.ScoringProfileVersion,
+                   run.ScoringEngineVersion,
+                   run.ScoreSchemaVersion);
+    }
 
     private static (ArchiveRunScore? Run1, ArchiveRunScore? Run2) SelectDetectionRuns(ArchiveRecord record)
     {
@@ -453,10 +471,8 @@ public sealed class ComparisonReport
     {
         var auditSamples = aggregate == ComparisonAggregate.Best ? new[] { bestSample } : samples;
         var audits = auditSamples
-            .Select(sample => (Sample: sample, Audit: sample.Record.Runs.FirstOrDefault(run =>
-                run.TruthAudit is not null
-                && !(run.ResponseChars == 0 && (string.Equals(run.ParseMode, "none", StringComparison.OrdinalIgnoreCase)
-                    || string.Equals(run.ParseMode, "unparsed", StringComparison.OrdinalIgnoreCase))))?.TruthAudit))
+            .Select(sample => (Sample: sample, Audit: sample.Record.Runs
+                .FirstOrDefault(run => IsEligibleTruthAudit(sample.Record, run))?.TruthAudit))
             .Where(x => x.Audit is not null)
             .ToList();
         if (audits.Count == 0)
@@ -475,6 +491,57 @@ public sealed class ComparisonReport
             EvidenceLaunderingCount = AggregateAudit(audits, x => x.Audit!.EvidenceLaunderingCount, aggregate, bestSample),
             QuoteFidelity = AggregateAudit(audits, x => x.Audit!.QuoteFidelity, aggregate, bestSample)
         };
+    }
+
+    private static bool IsEligibleTruthAudit(ArchiveRecord record, ArchiveRunScore run)
+    {
+        var audit = run.TruthAudit;
+        if (audit is null
+            || !string.Equals(run.RunKind, "truth_audit", StringComparison.OrdinalIgnoreCase)
+            || run.IsDegenerate
+            || audit.IsValid == false
+            || !double.IsFinite(audit.AccountabilityScore)
+            || audit.AccountabilityScore is < 0 or > 100
+            || !double.IsFinite(audit.TruthAuditAccuracy)
+            || audit.TruthAuditAccuracy is < 0 or > 1)
+        {
+            return false;
+        }
+
+        if (audit.IsValid == true)
+        {
+            return true;
+        }
+
+        // Legacy scorecards predate explicit validity metadata. Admit only complete,
+        // internally coherent audits; synthesized scorer defaults and partial responses
+        // must remain unavailable rather than appearing as measured zeroes.
+        if (!string.Equals(run.ParseMode, "truth_audit_json", StringComparison.OrdinalIgnoreCase)
+            || audit.Items is null
+            || audit.Items.Count == 0
+            || AuditedRunNames.Normalize(audit.AuditedRunName) is null
+            || audit.Items.Any(item => item is null
+                                       || string.IsNullOrWhiteSpace(item.Id)
+                                       || item.SelfAssessment is not ("found_full" or "found_partial" or "unclear_or_overclaimed" or "missed"))
+            || audit.Items.Select(item => item.Id).Distinct(StringComparer.OrdinalIgnoreCase).Count() != audit.Items.Count)
+        {
+            return false;
+        }
+
+        var target = record.Runs.FirstOrDefault(candidate =>
+            !string.Equals(candidate.RunKind, "truth_audit", StringComparison.OrdinalIgnoreCase)
+            && AuditedRunNames.Equivalent(candidate.RunName, audit.AuditedRunName));
+        if (target is null)
+        {
+            return false;
+        }
+
+        var expectedIds = target.VulnerabilityCredit.Keys
+            .Concat(target.VulnerabilityResults.Select(result => result.Id))
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return expectedIds.Count == 0
+               || expectedIds.SetEquals(audit.Items.Select(item => item.Id));
     }
 
     private static double AggregateAudit(IReadOnlyList<(ComparisonSample Sample, TruthAuditResult? Audit)> values, Func<(ComparisonSample Sample, TruthAuditResult? Audit), double> selector, ComparisonAggregate aggregate, ComparisonSample bestSample)
@@ -959,6 +1026,7 @@ public sealed class ComparisonSeries
 
     public int OfficialRunCount { get; init; }
     public int OfficialComparableRunCount { get; init; }
+    public int CurrentEvaluationRunCount { get; init; }
     public int LegacyMigratedRunCount { get; init; }
     public int RescoredRunCount { get; init; }
     public int SourceHashMatchCount { get; init; }
@@ -1102,9 +1170,11 @@ public sealed class ComparisonRunDetail
     public string BenchmarkProfile { get; init; } = string.Empty;
     public string ScoringProfile { get; init; } = string.Empty;
     public int ScoringProfileVersion { get; init; }
+    public string ParserVersion { get; init; } = string.Empty;
     public bool IsLegacyMigrated { get; init; }
     public bool IsRescored { get; init; }
     public bool OfficialComparable { get; init; }
+    public bool IsCurrentEvaluation { get; init; }
     public bool SourceHashMatches { get; init; }
     public string RunDirectory { get; init; } = string.Empty;
     public string RunName { get; init; } = string.Empty;
@@ -1150,9 +1220,11 @@ public sealed class ComparisonRunDetail
             BenchmarkProfile = sample.Record.BenchmarkProfile,
             ScoringProfile = sample.Run.ScoringProfile,
             ScoringProfileVersion = sample.Run.ScoringProfileVersion,
+            ParserVersion = sample.Run.ParserVersion,
             IsLegacyMigrated = sample.Run.IsLegacyMigrated,
             IsRescored = sample.Run.IsRescored,
             OfficialComparable = sample.Run.OfficialComparable,
+            IsCurrentEvaluation = sample.Run.IsCurrentEvaluation,
             SourceHashMatches = sample.Record.SourceHashMatches,
             RunDirectory = sample.Record.RunDirectory,
             RunName = sample.Run.RunName,

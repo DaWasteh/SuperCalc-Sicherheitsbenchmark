@@ -24,6 +24,8 @@ if not exist "%PROJECT%" (
 )
 
 echo [1/2] Publish (Release, win-x64, self-contained, single-file)...
+if exist "%OUTPUT%" rmdir /s /q "%OUTPUT%"
+if errorlevel 1 goto :fail
 dotnet publish "%PROJECT%" ^
     --configuration Release ^
     --runtime win-x64 ^
@@ -47,6 +49,7 @@ echo   %OUTPUT%\SuperCalcBenchmark.App.exe
 echo.
 echo Der Ordner ist komplett portabel: EXE plus benchmarks\ und enhanced_calc.cpp
 echo koennen zusammen an einen beliebigen Ort kopiert werden. Kein .NET noetig.
+echo Runs, Archiv und Einstellungen bleiben im gemeinsamen Benutzerdaten-Pool.
 
 popd >nul
 exit /b 0

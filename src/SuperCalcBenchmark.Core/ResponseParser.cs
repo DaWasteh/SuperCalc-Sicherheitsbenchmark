@@ -5,91 +5,31 @@ namespace SuperCalcBenchmark.Core;
 
 public sealed partial class ResponseParser
 {
-    public const string CurrentParserVersion = "parser-v1";
+    public const string LegacyParserVersion = "parser-v1";
+    public const string CurrentParserVersion = "parser-v2";
 
     public ParseResult Parse(string assistantContent)
     {
         assistantContent ??= string.Empty;
         var trimmed = assistantContent.Trim().Trim('\uFEFF');
 
-        if (TryParseJsonFindings(trimmed, out var directFindings, out var directWarning))
+        var direct = EvaluateJsonCandidate(trimmed, start: 0, fromFence: false, parseMode: "json");
+        if (direct is not null)
         {
-            return new ParseResult
-            {
-                AssistantContent = assistantContent,
-                Findings = Reindex(directFindings),
-                ParsedJson = true,
-                ParseMode = "json",
-                Warning = directWarning
-            };
+            return ToParseResult(assistantContent, direct);
         }
 
-        if (TryParseJsonWithoutFindings(trimmed, out var directJsonWarning))
+        var fencedCandidates = ExtractFencedJsonCandidates(trimmed);
+        var completeCandidates = new List<JsonCandidate>(fencedCandidates);
+        completeCandidates.AddRange(ExtractBalancedJsonCandidates(trimmed, fencedCandidates));
+        var bestComplete = SelectBestCandidate(completeCandidates);
+        if (bestComplete is { Quality: JsonCandidateQuality.Findings })
         {
-            return new ParseResult
-            {
-                AssistantContent = assistantContent,
-                Findings = [],
-                ParsedJson = true,
-                ParseMode = "json",
-                Warning = directJsonWarning
-            };
+            return ToParseResult(assistantContent, bestComplete);
         }
 
-        var fencedJson = ExtractFencedJson(trimmed);
-        if (!string.IsNullOrWhiteSpace(fencedJson) && TryParseJsonFindings(fencedJson, out var fencedFindings, out var fencedWarning))
-        {
-            return new ParseResult
-            {
-                AssistantContent = assistantContent,
-                Findings = Reindex(fencedFindings),
-                ParsedJson = true,
-                UsedMarkdownJsonBlock = true,
-                ParseMode = "markdown_json",
-                Warning = fencedWarning
-            };
-        }
-
-        if (!string.IsNullOrWhiteSpace(fencedJson) && TryParseJsonWithoutFindings(fencedJson, out var fencedJsonWarning))
-        {
-            return new ParseResult
-            {
-                AssistantContent = assistantContent,
-                Findings = [],
-                ParsedJson = true,
-                UsedMarkdownJsonBlock = true,
-                ParseMode = "markdown_json",
-                Warning = fencedJsonWarning
-            };
-        }
-
-        var balanced = ExtractBalancedJson(trimmed);
-        if (!string.IsNullOrWhiteSpace(balanced) && TryParseJsonFindings(balanced, out var balancedFindings, out var balancedWarning))
-        {
-            return new ParseResult
-            {
-                AssistantContent = assistantContent,
-                Findings = Reindex(balancedFindings),
-                ParsedJson = true,
-                UsedMarkdownJsonBlock = trimmed.Contains("```", StringComparison.Ordinal),
-                ParseMode = "balanced_json",
-                Warning = balancedWarning
-            };
-        }
-
-        if (!string.IsNullOrWhiteSpace(balanced) && TryParseJsonWithoutFindings(balanced, out var balancedJsonWarning))
-        {
-            return new ParseResult
-            {
-                AssistantContent = assistantContent,
-                Findings = [],
-                ParsedJson = true,
-                UsedMarkdownJsonBlock = trimmed.Contains("```", StringComparison.Ordinal),
-                ParseMode = "balanced_json",
-                Warning = balancedJsonWarning
-            };
-        }
-
+        // An incidental empty [] in surrounding prose is weaker evidence than complete
+        // finding objects recoverable from an otherwise truncated/extra-braced response.
         if (TryParsePartialFindingsArray(trimmed, out var partialFindings, out var partialWarning))
         {
             return new ParseResult
@@ -101,6 +41,11 @@ public sealed partial class ResponseParser
                 ParseMode = "partial_json",
                 Warning = partialWarning
             };
+        }
+
+        if (bestComplete is not null)
+        {
+            return ToParseResult(assistantContent, bestComplete);
         }
 
         var fallbackFindings = ParseTextFallback(trimmed);
@@ -116,6 +61,74 @@ public sealed partial class ResponseParser
         };
     }
 
+    private static ParsedJsonCandidate? EvaluateJsonCandidate(string json, int start, bool fromFence, string parseMode)
+    {
+        if (TryParseJsonFindings(json, out var findings, out var warning, out var validPayload))
+        {
+            var quality = validPayload
+                ? findings.Count > 0 ? JsonCandidateQuality.Findings : JsonCandidateQuality.ValidFindingsPayload
+                : JsonCandidateQuality.JsonWithoutFindings;
+            return new ParsedJsonCandidate(start, fromFence, parseMode, findings, warning, quality);
+        }
+
+        return TryParseJsonWithoutFindings(json, out var jsonWarning)
+            ? new ParsedJsonCandidate(start, fromFence, parseMode, [], jsonWarning, JsonCandidateQuality.JsonWithoutFindings)
+            : null;
+    }
+
+    private static ParsedJsonCandidate? SelectBestCandidate(IEnumerable<JsonCandidate> candidates)
+    {
+        ParsedJsonCandidate? best = null;
+        foreach (var candidate in candidates.OrderBy(candidate => candidate.Start))
+        {
+            var evaluated = EvaluateJsonCandidate(
+                candidate.Json,
+                candidate.Start,
+                candidate.FromFence,
+                candidate.FromFence ? "markdown_json" : "balanced_json");
+            if (evaluated is null)
+            {
+                continue;
+            }
+
+            if (best is null
+                || evaluated.Quality > best.Quality
+                || evaluated.Quality == best.Quality && evaluated.Start >= best.Start)
+            {
+                best = evaluated;
+            }
+        }
+
+        return best;
+    }
+
+    private static ParseResult ToParseResult(string assistantContent, ParsedJsonCandidate candidate) => new()
+    {
+        AssistantContent = assistantContent,
+        Findings = Reindex(candidate.Findings),
+        ParsedJson = true,
+        UsedMarkdownJsonBlock = candidate.FromFence,
+        ParseMode = candidate.ParseMode,
+        Warning = candidate.Warning
+    };
+
+    private enum JsonCandidateQuality
+    {
+        JsonWithoutFindings = 1,
+        ValidFindingsPayload = 2,
+        Findings = 3
+    }
+
+    private sealed record JsonCandidate(string Json, int Start, int End, bool FromFence);
+
+    private sealed record ParsedJsonCandidate(
+        int Start,
+        bool FromFence,
+        string ParseMode,
+        List<LlmFinding> Findings,
+        string? Warning,
+        JsonCandidateQuality Quality);
+
     private static List<LlmFinding> Reindex(List<LlmFinding> findings)
     {
         for (var i = 0; i < findings.Count; i++)
@@ -126,10 +139,15 @@ public sealed partial class ResponseParser
         return findings;
     }
 
-    private static bool TryParseJsonFindings(string json, out List<LlmFinding> findings, out string? warning)
+    private static bool TryParseJsonFindings(
+        string json,
+        out List<LlmFinding> findings,
+        out string? warning,
+        out bool validPayload)
     {
         findings = [];
         warning = null;
+        validPayload = false;
 
         if (string.IsNullOrWhiteSpace(json))
         {
@@ -160,7 +178,12 @@ public sealed partial class ResponseParser
 
             if (TryGetFindingsElement(root, out var findingsElement, warnings))
             {
-                ParseFindingsElement(findingsElement, findings, warnings);
+                validPayload = ParseFindingsElement(findingsElement, findings, warnings);
+                if (!validPayload)
+                {
+                    warnings.Add("The findings payload had an invalid shape and was ignored; expected an array or finding object.");
+                }
+
                 warning = FormatWarnings(warnings);
                 return true;
             }
@@ -168,6 +191,7 @@ public sealed partial class ResponseParser
             if (root.ValueKind == JsonValueKind.Object && LooksLikeFindingObject(root))
             {
                 findings.Add(ReadFinding(root));
+                validPayload = true;
                 warnings.Add("Parsed a single finding object without a top-level findings array.");
                 warning = FormatWarnings(warnings);
                 return true;
@@ -242,25 +266,35 @@ public sealed partial class ResponseParser
         return false;
     }
 
-    private static void ParseFindingsElement(JsonElement findingsElement, List<LlmFinding> findings, List<string> warnings)
+    private static bool ParseFindingsElement(JsonElement findingsElement, List<LlmFinding> findings, List<string> warnings)
     {
         switch (findingsElement.ValueKind)
         {
             case JsonValueKind.Array:
+                var rejected = 0;
                 foreach (var item in findingsElement.EnumerateArray())
                 {
                     if (item.ValueKind == JsonValueKind.Object && LooksLikeFindingObject(item))
                     {
                         findings.Add(ReadFinding(item));
                     }
+                    else
+                    {
+                        rejected++;
+                    }
                 }
 
-                break;
+                if (rejected > 0)
+                {
+                    warnings.Add($"Ignored {rejected} malformed finding array element(s).");
+                }
+
+                return true;
 
             case JsonValueKind.Object when LooksLikeFindingObject(findingsElement):
                 findings.Add(ReadFinding(findingsElement));
                 warnings.Add("Parsed object-valued 'findings' as a single finding.");
-                break;
+                return true;
 
             case JsonValueKind.Object:
                 var before = findings.Count;
@@ -279,9 +313,13 @@ public sealed partial class ResponseParser
                 if (findings.Count > before)
                 {
                     warnings.Add("Parsed object-valued 'findings' map as multiple findings.");
+                    return true;
                 }
 
-                break;
+                return false;
+
+            default:
+                return false;
         }
     }
 
@@ -398,44 +436,90 @@ public sealed partial class ResponseParser
     {
         findings = [];
         warning = string.Empty;
+        string? bestParseWarning = null;
+        var bestPropertyIndex = -1;
 
-        var findingsProperty = -1;
+        var propertyOccurrences = new List<int>();
         foreach (var name in new[] { "findings", "vulnerabilities", "issues", "security_findings", "securityFindings", "results" })
         {
-            findingsProperty = text.IndexOf($"\"{name}\"", StringComparison.OrdinalIgnoreCase);
-            if (findingsProperty >= 0)
+            var needle = $"\"{name}\"";
+            for (var searchStart = 0; searchStart < text.Length;)
             {
-                break;
+                var index = text.IndexOf(needle, searchStart, StringComparison.OrdinalIgnoreCase);
+                if (index < 0)
+                {
+                    break;
+                }
+
+                propertyOccurrences.Add(index);
+                searchStart = index + needle.Length;
             }
         }
 
-        if (findingsProperty < 0)
+        foreach (var propertyIndex in propertyOccurrences.Distinct().OrderBy(index => index))
         {
-            return false;
+            var closingQuote = text.IndexOf('"', propertyIndex + 1);
+            if (closingQuote < 0)
+            {
+                continue;
+            }
+
+            var colon = closingQuote + 1;
+            while (colon < text.Length && char.IsWhiteSpace(text[colon]))
+            {
+                colon++;
+            }
+
+            if (colon >= text.Length || text[colon] != ':')
+            {
+                continue;
+            }
+
+            var arrayStart = colon + 1;
+            while (arrayStart < text.Length && char.IsWhiteSpace(text[arrayStart]))
+            {
+                arrayStart++;
+            }
+
+            // Do not jump from a schema property whose value is an object to an unrelated
+            // later array. The '[' must be the direct value of this findings property.
+            if (arrayStart >= text.Length || text[arrayStart] != '[')
+            {
+                continue;
+            }
+
+            var objectJson = ExtractCompleteObjectsFromArray(text, arrayStart);
+            if (objectJson.Count == 0)
+            {
+                continue;
+            }
+
+            var salvagedJson = "{\"findings\":[" + string.Join(',', objectJson) + "]}";
+            if (!TryParseJsonFindings(salvagedJson, out var candidate, out var parseWarning, out var validPayload)
+                || !validPayload
+                || candidate.Count == 0)
+            {
+                continue;
+            }
+
+            if (candidate.Count > findings.Count
+                || candidate.Count == findings.Count && propertyIndex >= bestPropertyIndex)
+            {
+                findings = candidate;
+                bestParseWarning = parseWarning;
+                bestPropertyIndex = propertyIndex;
+            }
         }
 
-        var arrayStart = text.IndexOf('[', findingsProperty);
-        if (arrayStart < 0)
-        {
-            return false;
-        }
-
-        var objectJson = ExtractCompleteObjectsFromArray(text, arrayStart);
-        if (objectJson.Count == 0)
-        {
-            return false;
-        }
-
-        var salvagedJson = "{\"findings\":[" + string.Join(',', objectJson) + "]}";
-        if (!TryParseJsonFindings(salvagedJson, out findings, out var parseWarning) || findings.Count == 0)
+        if (findings.Count == 0)
         {
             return false;
         }
 
         warning = $"Response JSON was incomplete or had trailing non-JSON text; salvaged {findings.Count} complete finding object(s) from the findings array.";
-        if (!string.IsNullOrWhiteSpace(parseWarning))
+        if (!string.IsNullOrWhiteSpace(bestParseWarning))
         {
-            warning += " " + parseWarning;
+            warning += " " + bestParseWarning;
         }
 
         return true;
@@ -690,14 +774,12 @@ public sealed partial class ResponseParser
     {
         foreach (var name in names)
         {
-            if (!TryGetProperty(item, name, out var property)) continue;
-            if (property.ValueKind == JsonValueKind.Number && property.TryGetDouble(out _)) return true;
-            if (property.ValueKind != JsonValueKind.String) continue;
-            var text=(property.GetString()??string.Empty).Trim();
-            if(text.EndsWith('%')) text=text[..^1].Trim();
-            if(!text.Contains('.')&&text.Count(c=>c==',')==1) text=text.Replace(',','.');
-            if(double.TryParse(text,System.Globalization.NumberStyles.Float,System.Globalization.CultureInfo.InvariantCulture,out _)) return true;
+            if (TryGetProperty(item, name, out var property) && TryReadFiniteDouble(property, out _))
+            {
+                return true;
+            }
         }
+
         return false;
     }
 
@@ -705,38 +787,55 @@ public sealed partial class ResponseParser
     {
         foreach (var name in names)
         {
-            if (!TryGetProperty(item, name, out var property))
-            {
-                continue;
-            }
-
-            if (property.ValueKind == JsonValueKind.Number && property.TryGetDouble(out var number))
+            if (TryGetProperty(item, name, out var property) && TryReadFiniteDouble(property, out var number))
             {
                 return TextUtil.Clamp01(number);
-            }
-
-            if (property.ValueKind == JsonValueKind.String)
-            {
-                var text = (property.GetString() ?? string.Empty).Trim();
-                var isPercent = text.EndsWith('%');
-                if (isPercent)
-                {
-                    text = text.TrimEnd('%').Trim();
-                }
-
-                if (!text.Contains('.') && text.Count(c => c == ',') == 1)
-                {
-                    text = text.Replace(',', '.');
-                }
-
-                if (double.TryParse(text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out number))
-                {
-                    return TextUtil.Clamp01(isPercent ? number / 100.0 : number);
-                }
             }
         }
 
         return defaultValue;
+    }
+
+    private static bool TryReadFiniteDouble(JsonElement property, out double number)
+    {
+        number = 0;
+        if (property.ValueKind == JsonValueKind.Number)
+        {
+            return property.TryGetDouble(out number) && double.IsFinite(number);
+        }
+
+        if (property.ValueKind != JsonValueKind.String)
+        {
+            return false;
+        }
+
+        var text = (property.GetString() ?? string.Empty).Trim();
+        var isPercent = text.EndsWith('%');
+        if (isPercent)
+        {
+            text = text.TrimEnd('%').Trim();
+        }
+
+        if (!text.Contains('.') && text.Count(character => character == ',') == 1)
+        {
+            text = text.Replace(',', '.');
+        }
+
+        if (!double.TryParse(
+                text,
+                System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out number))
+        {
+            return false;
+        }
+
+        if (isPercent)
+        {
+            number /= 100.0;
+        }
+
+        return double.IsFinite(number);
     }
 
     private static bool TryGetProperty(JsonElement element, string name, out JsonElement property)
@@ -773,52 +872,87 @@ public sealed partial class ResponseParser
         };
     }
 
-    private static string? ExtractFencedJson(string text)
+    private static List<JsonCandidate> ExtractFencedJsonCandidates(string text)
     {
-        var match = FencedJsonRegex().Match(text);
-        if (match.Success)
-        {
-            return match.Groups[1].Value;
-        }
-
-        match = AnyFenceRegex().Match(text);
-        return match.Success ? match.Groups[1].Value : null;
+        return AnyFenceRegex().Matches(text)
+            .Select(match => new JsonCandidate(
+                match.Groups[1].Value,
+                match.Index,
+                match.Index + match.Length,
+                FromFence: true))
+            .ToList();
     }
 
-    private static string? ExtractBalancedJson(string text)
+    private static List<JsonCandidate> ExtractBalancedJsonCandidates(
+        string text,
+        IReadOnlyList<JsonCandidate> fencedCandidates)
     {
-        var start = text.IndexOf('{');
-        if (start < 0)
+        var candidates = new List<JsonCandidate>();
+        var cursor = 0;
+        while (cursor < text.Length)
         {
-            start = text.IndexOf('[');
+            var objectStart = text.IndexOf('{', cursor);
+            var arrayStart = text.IndexOf('[', cursor);
+            var start = objectStart < 0
+                ? arrayStart
+                : arrayStart < 0 ? objectStart : Math.Min(objectStart, arrayStart);
+            if (start < 0)
+            {
+                break;
+            }
+
+            if (!TryExtractBalancedJson(text, start, out var end))
+            {
+                // Recover nested/later self-contained answers in one linear pass. This
+                // avoids both abandoning the response and O(n²) retries on brace floods.
+                candidates.AddRange(ExtractRecoveryCandidates(text, start + 1, fencedCandidates));
+                break;
+            }
+
+            var json = text[start..end];
+            var evaluated = EvaluateJsonCandidate(json, start, fromFence: false, parseMode: "balanced_json");
+            var insideFence = fencedCandidates.Any(fence => start >= fence.Start && start < fence.End);
+            if (!insideFence)
+            {
+                candidates.Add(new JsonCandidate(json, start, end, FromFence: false));
+            }
+
+            if (evaluated is null)
+            {
+                // Balanced prose can surround later valid JSON. Its nested recovery is
+                // filtered to real findings containers, never single finding fragments.
+                candidates.AddRange(ExtractRecoveryCandidates(text, start + 1, fencedCandidates));
+                break;
+            }
+
+            cursor = end;
         }
 
-        if (start < 0)
-        {
-            return null;
-        }
+        return candidates;
+    }
 
-        var opening = text[start];
-        var closing = opening == '{' ? '}' : ']';
-        var depth = 0;
+    private static IEnumerable<JsonCandidate> ExtractRecoveryCandidates(
+        string text,
+        int start,
+        IReadOnlyList<JsonCandidate> fencedCandidates)
+    {
+        var openings = new Stack<(char Closing, int Start)>();
         var inString = false;
         var escaped = false;
-
-        for (var i = start; i < text.Length; i++)
+        for (var index = Math.Max(0, start); index < text.Length; index++)
         {
-            var c = text[i];
-
+            var character = text[index];
             if (inString)
             {
                 if (escaped)
                 {
                     escaped = false;
                 }
-                else if (c == '\\')
+                else if (character == '\\')
                 {
                     escaped = true;
                 }
-                else if (c == '"')
+                else if (character == '"')
                 {
                     inString = false;
                 }
@@ -826,27 +960,188 @@ public sealed partial class ResponseParser
                 continue;
             }
 
-            if (c == '"')
+            if (character == '"')
             {
                 inString = true;
                 continue;
             }
 
-            if (c == opening)
+            if (character is '{' or '[')
             {
-                depth++;
+                openings.Push((character == '{' ? '}' : ']', index));
+                continue;
             }
-            else if (c == closing)
+
+            if (character is not ('}' or ']') || openings.Count == 0)
             {
-                depth--;
-                if (depth == 0)
+                continue;
+            }
+
+            var opening = openings.Pop();
+            if (opening.Closing != character)
+            {
+                openings.Clear();
+                continue;
+            }
+
+            var end = index + 1;
+            if (!CouldBeRecoveryFindingsPayload(text, opening.Start, end))
+            {
+                continue;
+            }
+
+            var json = text[opening.Start..end];
+            var evaluated = EvaluateJsonCandidate(json, opening.Start, fromFence: false, parseMode: "balanced_json");
+            var isEligibleContainer = evaluated is { Quality: JsonCandidateQuality.Findings }
+                                      && !IsSingleFindingObjectCandidate(json)
+                                      || IsExplicitFindingsWrapperCandidate(json);
+            var insideFence = fencedCandidates.Any(fence => opening.Start >= fence.Start && opening.Start < fence.End);
+            if (isEligibleContainer && !insideFence)
+            {
+                yield return new JsonCandidate(json, opening.Start, end, FromFence: false);
+            }
+        }
+    }
+
+    private static bool CouldBeRecoveryFindingsPayload(string text, int start, int end)
+    {
+        var contentStart = start + 1;
+        while (contentStart < end && char.IsWhiteSpace(text[contentStart]))
+        {
+            contentStart++;
+        }
+
+        var length = Math.Min(2048, Math.Max(0, end - contentStart));
+        if (length == 0)
+        {
+            return false;
+        }
+
+        var prefix = text.AsSpan(contentStart, length);
+        var firstQuote = prefix.IndexOf('"');
+        if (firstQuote < 0)
+        {
+            return false;
+        }
+
+        prefix = prefix[firstQuote..];
+        return prefix.Contains("\"findings\"", StringComparison.OrdinalIgnoreCase)
+               || prefix.Contains("\"vulnerabilities\"", StringComparison.OrdinalIgnoreCase)
+               || prefix.Contains("\"issues\"", StringComparison.OrdinalIgnoreCase)
+               || prefix.Contains("\"results\"", StringComparison.OrdinalIgnoreCase)
+               || prefix.Contains("\"title\"", StringComparison.OrdinalIgnoreCase)
+               || prefix.Contains("\"vulnerability_type\"", StringComparison.OrdinalIgnoreCase)
+               || prefix.Contains("\"vulnerabilityType\"", StringComparison.OrdinalIgnoreCase)
+               || prefix.Contains("\"name\"", StringComparison.OrdinalIgnoreCase)
+               || prefix.Contains("\"summary\"", StringComparison.OrdinalIgnoreCase)
+               || prefix.Contains("\"description\"", StringComparison.OrdinalIgnoreCase)
+               || prefix.Contains("\"severity\"", StringComparison.OrdinalIgnoreCase)
+               || prefix.Contains("\"cwe\"", StringComparison.OrdinalIgnoreCase)
+               || prefix.Contains("\"evidence\"", StringComparison.OrdinalIgnoreCase)
+               || prefix.Contains("\"impact\"", StringComparison.OrdinalIgnoreCase)
+               || prefix.Contains("\"file\"", StringComparison.OrdinalIgnoreCase)
+               || prefix.Contains("\"symbol\"", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsSingleFindingObjectCandidate(string json)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(RemoveTrailingCommas(json.Trim()), new JsonDocumentOptions
+            {
+                AllowTrailingCommas = true,
+                CommentHandling = JsonCommentHandling.Skip
+            });
+            return document.RootElement.ValueKind == JsonValueKind.Object
+                   && LooksLikeFindingObject(document.RootElement)
+                   && !TryGetFindingsElement(document.RootElement, out _, []);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsExplicitFindingsWrapperCandidate(string json)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(RemoveTrailingCommas(json.Trim()), new JsonDocumentOptions
+            {
+                AllowTrailingCommas = true,
+                CommentHandling = JsonCommentHandling.Skip
+            });
+            return document.RootElement.ValueKind == JsonValueKind.Object
+                   && TryGetFindingsElement(document.RootElement, out _, []);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static bool TryExtractBalancedJson(string text, int start, out int end)
+    {
+        end = start;
+        if (start < 0 || start >= text.Length || text[start] is not ('{' or '['))
+        {
+            return false;
+        }
+
+        var expectedClosings = new Stack<char>();
+        var inString = false;
+        var escaped = false;
+        for (var index = start; index < text.Length; index++)
+        {
+            var character = text[index];
+            if (inString)
+            {
+                if (escaped)
                 {
-                    return text[start..(i + 1)];
+                    escaped = false;
                 }
+                else if (character == '\\')
+                {
+                    escaped = true;
+                }
+                else if (character == '"')
+                {
+                    inString = false;
+                }
+
+                continue;
+            }
+
+            if (character == '"')
+            {
+                inString = true;
+                continue;
+            }
+
+            if (character is '{' or '[')
+            {
+                expectedClosings.Push(character == '{' ? '}' : ']');
+                continue;
+            }
+
+            if (character is not ('}' or ']'))
+            {
+                continue;
+            }
+
+            if (expectedClosings.Count == 0 || expectedClosings.Pop() != character)
+            {
+                return false;
+            }
+
+            if (expectedClosings.Count == 0)
+            {
+                end = index + 1;
+                return true;
             }
         }
 
-        return null;
+        return false;
     }
 
     private static List<LlmFinding> ParseTextFallback(string text)
@@ -970,9 +1265,6 @@ public sealed partial class ResponseParser
     {
         return TrailingCommaRegex().Replace(json, "$1");
     }
-
-    [GeneratedRegex("```(?:json|JSON)\\s*(.*?)```", RegexOptions.Singleline)]
-    private static partial Regex FencedJsonRegex();
 
     [GeneratedRegex("```\\w*\\s*(.*?)```", RegexOptions.Singleline)]
     private static partial Regex AnyFenceRegex();

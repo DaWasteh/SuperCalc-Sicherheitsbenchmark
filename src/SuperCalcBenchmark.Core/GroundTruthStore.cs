@@ -19,28 +19,44 @@ public sealed class GroundTruthStore
         var document = JsonSerializer.Deserialize<GroundTruthDocument>(stream, JsonOptions)
             ?? throw new InvalidOperationException($"Ground truth file '{path}' is empty or invalid.");
 
+        Normalize(document, path);
         if (document.Vulnerabilities.Count == 0)
         {
             throw new InvalidOperationException($"Ground truth file '{path}' contains no vulnerabilities.");
         }
-
-        Normalize(document);
         return document;
     }
 
-    private static void Normalize(GroundTruthDocument document)
+    private static void Normalize(GroundTruthDocument document, string path)
     {
         if (document.GroundTruthSchemaVersion <= 0)
         {
             document.GroundTruthSchemaVersion = 1;
         }
 
+        document.Vulnerabilities ??= [];
+        document.Policy ??= new GroundTruthPolicy();
+        document.Policy.Runs ??= [];
+        if (document.Vulnerabilities.Any(vulnerability => vulnerability is null))
+        {
+            throw new InvalidOperationException($"Ground truth file '{path}' contains a null vulnerability entry.");
+        }
+
         foreach (var vulnerability in document.Vulnerabilities)
         {
+            vulnerability.Cwe ??= [];
             vulnerability.Locations ??= [];
             vulnerability.Aliases ??= [];
             vulnerability.RequiredEvidence ??= [];
             vulnerability.EvidenceAnchors ??= new EvidenceAnchorSet();
+            vulnerability.EvidenceAnchors.Must ??= [];
+            vulnerability.EvidenceAnchors.Should ??= [];
+            vulnerability.EvidenceAnchors.May ??= [];
+            vulnerability.EvidenceAnchors.Negative ??= [];
+            if (vulnerability.Locations.Any(location => location is null))
+            {
+                throw new InvalidOperationException($"Ground truth file '{path}' contains a null location entry.");
+            }
 
             if (!vulnerability.EvidenceAnchors.HasAny && vulnerability.RequiredEvidence.Count > 0)
             {

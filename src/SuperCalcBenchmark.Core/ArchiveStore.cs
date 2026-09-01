@@ -72,11 +72,9 @@ public sealed class ArchiveStore
         var fileName = $"{stamp}_{TextUtil.SafeFileNamePart(record.ModelFamily)}.json";
         var path = Path.Combine(directory, fileName);
 
-        // Guard against two runs in the same second clobbering each other.
-        path = EnsureUniquePath(path);
-
-        File.WriteAllText(path, JsonSerializer.Serialize(record, WriteOptions), Encoding.UTF8);
-        return path;
+        // Publish only complete JSON and reserve the final name atomically. Two app/CLI
+        // processes may share this pool and start the same model in the same second.
+        return WriteNewFileAtomically(path, JsonSerializer.Serialize(record, WriteOptions));
     }
 
     public static ArchiveRecord BuildRecord(BenchmarkRunResult result, string? quantOverride = null)
@@ -132,6 +130,11 @@ public sealed class ArchiveStore
             availableProfiles.Add(ScoringProfiles.OfficialV1Name);
         }
 
+        BenchmarkPathResolver.TryCreateDataLocator(
+            result.OutputDirectory,
+            BenchmarkPathResolver.ResolveDataRoot(),
+            out var runLocator);
+
         return new ArchiveRecord
         {
             SchemaVersion = ArchiveRecord.CurrentSchemaVersion,
@@ -175,6 +178,7 @@ public sealed class ArchiveStore
                 ServerContextSize = result.ServerContextSize
             },
             RunDirectory = result.OutputDirectory,
+            RunLocator = runLocator,
             Runs = runs,
             ScoreVersions = scoreVersions,
             DefaultDetectionProfile = availableProfiles.Contains(ScoringProfiles.OfficialV1Name, StringComparer.OrdinalIgnoreCase)
@@ -196,8 +200,26 @@ public sealed class ArchiveStore
         }
 
         var records = new List<ArchiveRecord>();
-        foreach (var path in Directory.EnumerateFiles(_archiveRoot, "*.json", SearchOption.AllDirectories)
-                     .Where(path => !IsMigrationBackupPath(path)))
+        IEnumerable<string> paths;
+        try
+        {
+            paths = Directory.EnumerateFiles(_archiveRoot, "*.json", new EnumerationOptions
+            {
+                RecurseSubdirectories = true,
+                IgnoreInaccessible = true,
+                AttributesToSkip = FileAttributes.ReparsePoint
+            }).ToList();
+        }
+        catch (IOException)
+        {
+            return records;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return records;
+        }
+
+        foreach (var path in paths.Where(path => !IsMigrationBackupPath(path)))
         {
             var record = TryLoad(path);
             if (record is null)
@@ -461,12 +483,21 @@ public sealed class ArchiveStore
         {
             using var stream = File.OpenRead(path);
             var record = JsonSerializer.Deserialize<ArchiveRecord>(stream, ReadOptions);
-            if (record is null || record.Runs.Count == 0)
+            if (record is null
+                || record.SchemaVersion > ArchiveRecord.CurrentSchemaVersion
+                || record.Runs is null
+                || record.Runs.Count == 0
+                || record.Runs.Any(run => run is null))
             {
                 return null;
             }
 
             NormalizeLoadedRecord(record);
+            if (!IsSaneRecord(record))
+            {
+                return null;
+            }
+
             record.ArchivePath = Path.GetFullPath(path);
             return record;
         }
@@ -478,7 +509,84 @@ public sealed class ArchiveStore
         {
             return null;
         }
+        catch (UnauthorizedAccessException)
+        {
+            return null;
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
+        catch (ArgumentException)
+        {
+            return null;
+        }
+        catch (NullReferenceException)
+        {
+            // Runtime-null collection elements can be produced by hand-edited JSON
+            // despite nullable annotations. Quarantine that file, not the whole pool.
+            return null;
+        }
     }
+
+    private static bool IsSaneRecord(ArchiveRecord record)
+    {
+        foreach (var run in record.Runs)
+        {
+            if (!double.IsFinite(run.ScorePercent) || run.ScorePercent is < 0 or > 100
+                || !double.IsFinite(run.RawPoints)
+                || !double.IsFinite(run.MaxPoints) || run.MaxPoints < 0
+                || run.ScoreableVulnerabilityCount < 0
+                || run.FindingCount < 0
+                || run.FullTruePositives < 0
+                || run.PartialTruePositives < 0
+                || run.FalsePositives < 0
+                || run.Duplicates < 0
+                || run.IgnoredLowConfidence < 0
+                || run.Missed < 0
+                || run.FindingCount != run.FullTruePositives
+                                      + run.PartialTruePositives
+                                      + run.FalsePositives
+                                      + run.Duplicates
+                                      + run.IgnoredLowConfidence
+                || run.FullTruePositives + run.PartialTruePositives > run.ScoreableVulnerabilityCount
+                || run.Missed != run.ScoreableVulnerabilityCount
+                                 - run.FullTruePositives
+                                 - run.PartialTruePositives
+                || !IsUnitRate(run.Precision)
+                || !IsUnitRate(run.Recall)
+                || !IsUnitRate(run.F1)
+                || !IsUnitRate(run.EvidenceFidelity)
+                || !IsUnitRate(run.LocationAccuracy)
+                || !IsUnitRate(run.HallucinationRate)
+                || !IsUnitRate(run.DuplicateRate)
+                || !IsUnitRate(run.EvaluationConfidence)
+                || run.VulnerabilityCredit.Values.Any(credit => !IsUnitRate(credit)))
+            {
+                return false;
+            }
+
+            var audit = run.TruthAudit;
+            if (audit is not null
+                && (!double.IsFinite(audit.AccountabilityScore) || audit.AccountabilityScore is < 0 or > 100
+                    || !IsUnitRate(audit.TruthAuditAccuracy)
+                    || !IsUnitRate(audit.MissAdmissionRate)
+                    || !IsUnitRate(audit.OverclaimRate)
+                    || !IsUnitRate(audit.FalsePositiveAdmissionRate)
+                    || !IsUnitRate(audit.QuoteFidelity)
+                    || audit.EvidenceLaunderingCount < 0
+                    || audit.ContradictionCount < 0
+                    || audit.ActualMissedCount < 0
+                    || audit.ActualFalsePositiveCount < 0))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool IsUnitRate(double value) => double.IsFinite(value) && value is >= 0 and <= 1;
 
     private static void NormalizeLoadedRecord(ArchiveRecord record)
     {
@@ -531,6 +639,16 @@ public sealed class ArchiveStore
         record.ServerMetadata ??= new ArchiveServerMetadata();
         record.ServerMetadata.ServerContextSize ??= record.ServerContextSize;
         record.ServerContextSize ??= record.ServerMetadata.ServerContextSize;
+
+        if (string.IsNullOrWhiteSpace(record.RunLocator)
+            && !string.IsNullOrWhiteSpace(record.RunDirectory))
+        {
+            BenchmarkPathResolver.TryCreateDataLocator(
+                record.RunDirectory,
+                BenchmarkPathResolver.ResolveDataRoot(),
+                out var inferredLocator);
+            record.RunLocator = inferredLocator;
+        }
 
         foreach (var run in record.Runs)
         {
@@ -612,7 +730,7 @@ public sealed class ArchiveStore
         run.ScoringProfile = isOfficialV1 ? ScoringProfiles.OfficialV1Name : profileName;
         run.ScoringProfileVersion = isOfficialV1 ? ScoringProfiles.OfficialV1Version : 0;
         run.ScoringEngineVersion = isOfficialV1 ? ScoringProfiles.OfficialV1EngineVersion : "unknown";
-        run.ParserVersion = ResponseParser.CurrentParserVersion;
+        run.ParserVersion = ResponseParser.LegacyParserVersion;
         run.GroundTruthSha256 = string.IsNullOrWhiteSpace(run.GroundTruthSha256) ? options.GroundTruthSha256 : run.GroundTruthSha256;
         run.SourceSha256 = FirstNonEmpty(run.SourceSha256, record.SourceSha256, options.SourceSha256);
         run.PromptVersion = string.IsNullOrWhiteSpace(run.PromptVersion) || string.Equals(run.PromptVersion, PromptVersions.Unknown, StringComparison.OrdinalIgnoreCase)
@@ -622,7 +740,12 @@ public sealed class ArchiveStore
         run.ComputedAt = completedAt == default ? options.MigratedAt : completedAt;
         run.IsLegacyMigrated = true;
         run.IsRescored = false;
-        run.OfficialComparable = ScoringProfiles.IsOfficialComparableProfile(run.ScoringProfile) && record.SourceHashMatches;
+        run.OfficialComparable = ScoringProfiles.IsOfficialComparableIdentity(
+                                     run.ScoringProfile,
+                                     run.ScoringProfileVersion,
+                                     run.ScoringEngineVersion,
+                                     run.ScoreSchemaVersion)
+                                 && record.SourceHashMatches;
 
         record.LegacyMigration = new ArchiveLegacyMigration
         {
@@ -716,6 +839,48 @@ public sealed class ArchiveStore
         catch
         {
             // Best-effort cleanup only; stale empty folders must never break an edit.
+        }
+    }
+
+    private static string WriteNewFileAtomically(string preferredPath, string content)
+    {
+        var directory = Path.GetDirectoryName(preferredPath)!;
+        var temporaryPath = Path.Combine(directory, $".{Path.GetFileName(preferredPath)}.tmp-{Guid.NewGuid():N}");
+        File.WriteAllText(temporaryPath, content, Encoding.UTF8);
+        try
+        {
+            var stem = Path.GetFileNameWithoutExtension(preferredPath);
+            var extension = Path.GetExtension(preferredPath);
+            for (var attempt = 1; attempt < 1000; attempt++)
+            {
+                var candidate = attempt == 1
+                    ? preferredPath
+                    : Path.Combine(directory, $"{stem}-{attempt}{extension}");
+                try
+                {
+                    File.Move(temporaryPath, candidate);
+                    return candidate;
+                }
+                catch (IOException) when (File.Exists(candidate))
+                {
+                    // Another process atomically claimed this name; try the next suffix.
+                }
+            }
+
+            var fallback = Path.Combine(directory, $"{stem}-{Guid.NewGuid():N}{extension}");
+            File.Move(temporaryPath, fallback);
+            return fallback;
+        }
+        finally
+        {
+            try
+            {
+                File.Delete(temporaryPath);
+            }
+            catch
+            {
+                // A stale temp file is ignored by archive enumeration and can be cleaned later.
+            }
         }
     }
 

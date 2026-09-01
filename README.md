@@ -110,9 +110,20 @@ Für alle, die den Benchmark nur **nutzen** wollen, gibt es die GUI als fertige 
 3. `SuperCalcBenchmark.App.exe` doppelklicken.
 4. Einen lokalen [llama.cpp](https://github.com/ggml-org/llama.cpp) `llama-server` mit Modell auf `http://127.0.0.1:1234` starten, dann in der App **Refresh Models** → Modell wählen → **Benchmark starten**.
 
-**Updates:** Der Button **„Update ziehen"** oben rechts prüft die GitHub-Releases, lädt die neue Version herunter und startet die App automatisch neu. In einem Git-Checkout führt derselbe Button stattdessen `git pull --ff-only` aus. In beiden Fällen bleiben lokale Benchmarkdaten in `archive/`, `artifacts/` und `results/` unangetastet.
+**Updates:** Der Button **„Update ziehen"** oben rechts prüft die GitHub-Releases, lädt die neue Version herunter und startet die App automatisch neu. In einem Git-Checkout führt derselbe Button stattdessen `git pull --ff-only` aus. Der gemeinsame Benutzerdaten-Pool wird dabei nie überschrieben.
 
-Ergebnisse und Scorecards landen im Ordner `archive/` neben der EXE.
+Ergebnisse, Scorecards und Einstellungen landen standardmäßig unter `%LOCALAPPDATA%\SuperCalcBenchmark` (`Runs\` und `archive\`) — unabhängig davon, wo die EXE oder der Quellcode liegt.
+
+### Gemeinsamer Datenpool (EXE, GUI aus Quellcode und CLI)
+
+Seit v0.7.3 werden **unveränderliche Benchmark-Assets** und **veränderliche Benutzerdaten** strikt getrennt:
+
+- Assets (`enhanced_calc.cpp`, Ground Truth, Prompts, Schemas) kommen aus dem Git-Checkout oder liegen neben der portablen EXE.
+- Runs, Archive, Theme- und Fenster-Einstellungen verwenden unter Windows `%LOCALAPPDATA%\SuperCalcBenchmark`.
+- Unter Linux/Native CLI liegt derselbe Pool standardmäßig unter `${XDG_DATA_HOME:-~/.local/share}/SuperCalcBenchmark`; `start_linux.sh` reicht diesen physischen Pfad an Wine weiter.
+- Ein altes `archive/` neben der EXE oder im Repository wird beim ersten Start **nicht-destruktiv und idempotent** nach `<data-root>/archive` importiert. Dedupliziert wird über `recordId` beziehungsweise Dateihash; das Quellarchiv bleibt unverändert.
+
+Damit sehen Standalone-EXE, `dotnet run --project src/SuperCalcBenchmark.App` und die CLI denselben persistenten Ergebnisbestand. Overrides (am besten absolute Pfade): `SUPERCALC_ASSET_ROOT=<dir>` für Assets und `SUPERCALC_DATA_ROOT=<dir>` für den gemeinsamen Datenpool. Explizite `--archive <dir>`- oder `--out <dir>`-Argumente bleiben möglich.
 
 ### Prerequisites
 
@@ -245,8 +256,8 @@ Ubuntu/Linux GUI workflow (without changing the Windows workflow):
 # CLI/tests, and publishes a self-contained win-x64 WPF app for Wine.
 ./setup_linux.sh
 
-# Starts the published WPF GUI via Wine with the repository root as working
-# directory, so the same ./archive scorecards are visible as on Windows.
+# Starts the published WPF GUI via Wine. The launcher maps the native
+# XDG data root into Wine, so native CLI and Wine GUI share Runs/archive.
 ./start_linux.sh
 
 # Optional: open VS Code with DOTNET_ROOT/DOTNET_CLI_HOME set to the local SDK.
@@ -255,9 +266,10 @@ Ubuntu/Linux GUI workflow (without changing the Windows workflow):
 ./code_linux.sh
 ```
 
-On Linux the WPF GUI is still the Windows app, started through Wine.  The CLI and
+On Linux the WPF GUI is still the Windows app, started through Wine. The CLI and
 validation commands run natively with `~/.pi/dotnet/dotnet`; this avoids relying
-on a writable `~/.dotnet` when the home mount is read-only.
+on a writable `~/.dotnet` when the home mount is read-only. Both use
+`${XDG_DATA_HOME:-~/.local/share}/SuperCalcBenchmark` as the physical data pool.
 
 In the app:
 
@@ -267,6 +279,8 @@ In the app:
 4. Click **Benchmark starten**.
 5. Run 1, Run 2, and the automatic **Run 3 — Truth Audit** execute in sequence.
 6. Read Run-1/Run-2 detection scores, Run-3 Accountability/Honesty metrics, TP/FP/FN matrix, audit grid, raw outputs, and open the generated report.
+
+The theme selector offers **System**, **Hell**, and **Dunkel**. New installations default to System, the selection is persisted atomically, and System mode follows Windows app-theme changes while the program is running.
 
 Official/fair runs should leave thinking/reasoning enabled so each model can use its full capability. The GUI still has **Thinking deaktivieren (Debug)** for compatibility tests; when enabled, the client sends `chat_template_kwargs: { "enable_thinking": false }` for Qwen-style templates.
 
@@ -303,7 +317,7 @@ By default the CLI leaves model thinking/reasoning enabled, uses `--max-tokens -
 
 Unlike the GUI, the CLI does **not** run Run 3 unless requested. Use `--with-truth-audit always` for every run, `--with-truth-audit only-best-repeat` together with `--repeats N` to audit only the best repeat, and `--truth-audit-source best|run1|run2` to choose which previous answer is audited.
 
-The tool writes `run.json`, prompts, visible responses, reasoning diagnostics, raw API responses, CSV ledgers, and `report.md` to `%LOCALAPPDATA%\SuperCalcBenchmark\Runs\YYYYMMDD-HHMMSS_model\` unless `--out <dir>` is supplied. When Run 3 runs, matching `run3_prompt.txt`, `run3_response.txt`, `run3_reasoning.txt`, `run3_request.json`, and `run3_raw_response.json` artifacts are written too. Fixture scoring is available without a live LLM server:
+The tool writes `run.json`, prompts, visible responses, reasoning diagnostics, raw API responses, CSV ledgers, and `report.md` to `%LOCALAPPDATA%\SuperCalcBenchmark\Runs\YYYYMMDD-HHMMSS_model_GUID\` unless `--out <dir>` is supplied. The GUID prevents same-second GUI/CLI processes from colliding. When Run 3 runs, matching `run3_prompt.txt`, `run3_response.txt`, `run3_reasoning.txt`, `run3_request.json`, and `run3_raw_response.json` artifacts are written too. Fixture scoring is available without a live LLM server:
 
 ```powershell
 dotnet run --project src/SuperCalcBenchmark.Cli -- score-fixture `
@@ -313,7 +327,7 @@ dotnet run --project src/SuperCalcBenchmark.Cli -- score-fixture `
 
 ### Run Archive & Model Comparison
 
-Every completed run (GUI and CLI) is now also archived as a compact scorecard under `archive/` in the repository, grouped by **model family and quantization**:
+Every completed run (GUI and CLI) is also archived as a compact scorecard under `<data-root>/archive`, grouped by **model family and quantization**. The repository's tracked `archive/` is the distributable historical seed/reference pool and is imported into the per-user pool on first use:
 
 ```
 archive/
@@ -324,17 +338,25 @@ archive/
       20260621-150188_qwen3-coder-30b-a3b-instruct.json
 ```
 
-The model family and quant are parsed automatically from the llama.cpp model id / GGUF name (`Q4_K_M`, `IQ3_XXS`, `Q8_0`, `F16`, …). When your server reports an alias that does not encode the quant, set it explicitly before the run — **Quant (optional)** in the GUI options, or `--quant Q4_K_M` on the CLI. The GUI clears the Quant field on every **Refresh Models** / model-selection change so a one-off manual override cannot accidentally be reused when the same model family is loaded in another quant. If a run is already archived as `unknown-quant`, open the JSON scorecard under `archive/` and edit `modelFamily` and/or `quant` manually; `groupKey` and the folder name are recomputed/ignored on load, so you do not have to move files. Then click **Archiv neu laden** or rerun `archive-list`/`compare`. Because every quant of the same model shares a family, you can line up, for example, all `qwen3-coder-30b` quants against each other. The JSON scorecards are committed to the repo so run history travels with any clone; only the generated reports under `archive/_reports/` are git-ignored. Archiving is on by default and writes to `./archive`; pass `--no-archive` (or `--archive <dir>`) to change that.
+The model family and quant are parsed automatically from the llama.cpp model id / GGUF name (`Q4_K_M`, `IQ3_XXS`, `Q8_0`, `F16`, …). When your server reports an alias that does not encode the quant, set it explicitly before the run — **Quant (optional)** in the GUI options, or `--quant Q4_K_M` on the CLI. The GUI clears the Quant field on every **Refresh Models** / model-selection change so a one-off manual override cannot accidentally be reused when the same model family is loaded in another quant. If a run is already archived as `unknown-quant`, click **Archiv bearbeiten** and edit `modelFamily` and/or `quant` in the canonical scorecard; `groupKey` and the folder name are recomputed/ignored on load. Then click **Archiv neu laden** or rerun `archive-list`/`compare`. Because every quant of the same model shares a family, you can line up, for example, all `qwen3-coder-30b` quants against each other. Archiving is on by default in `<data-root>/archive`; pass `--no-archive` or an explicit `--archive <dir>` to opt out/override. Maintainers who deliberately want to add scorecards to the tracked reference archive must pass `--archive ./archive`.
 
 The **Vergleich** tab in the GUI shows one row per model + quant with score, critical recall, evidence fidelity, hallucination rate, stability, Run-2 delta, Run-3 audit/accountability score, median, standard deviation, min/max, precision, recall, F1, and TP/FP/Missed counts. Pick a single model family to compare only its quants, switch between **Durchschnitt** (mean across all runs in a group), **Median**, and **Bester Run**, choose **Primary / Run 1 / Run 2 / Delta**, and click **Diagramme öffnen (HTML)** for a graphical view. For guaranteed model-family/quant corrections, click **Archiv bearbeiten**, edit `modelFamily` and/or `quant` in the JSON scorecards, then reload the archive.
 
-Archive scorecards now use schema v4 (v1/v2/v3 still load) and keep compact diagnostics that were previously available only in `run.json`: score version metadata, finish reason, loop flag, parse mode/warnings, response/request/prompt/reasoning character counts, per-run durations, duplicates, ignored-low-confidence counts, and rich per-vulnerability status. Truth-audit runs are archived separately as `runKind="truth_audit"` with `groundTruthVisibleToModel=true`; comparison treats their Accountability/Honesty metrics separately and does not let them raise the primary detection score. Archive scorecards still do **not** copy prompts or raw model responses; those remain referenced only via `runDirectory`.
+Archive scorecards now use schema v5 (v1–v4 still load) and keep compact diagnostics that were previously available only in `run.json`: score version metadata, finish reason, loop flag, parse mode/warnings, response/request/prompt/reasoning character counts, per-run durations, duplicates, ignored-low-confidence counts, and rich per-vulnerability status. Schema v5 adds a portable `runLocator` relative to the shared data root; legacy absolute `runDirectory` remains as fallback. Truth-audit runs are archived separately as `runKind="truth_audit"` with `groundTruthVisibleToModel=true`; comparison treats their Accountability/Honesty metrics separately and does not let them raise the primary detection score. Archive scorecards still do **not** copy prompts or raw model responses.
+
+#### v0.7.3 parser/evaluation freshness
+
+`parser-v2` evaluates all fenced and balanced JSON candidates, prefers actual findings over schema/metadata echoes, recovers complete findings from malformed trailing JSON, and rejects non-finite confidence values. The frozen `official-v1` weights, thresholds, matching rules, and engine identity are unchanged; this is nevertheless an **evaluation-semantic parser change**.
+
+A mechanical replay of every available historical detection artifact found 448/462 records with raw artifacts: 896 detection runs replayed, 890 exact score/count outcomes, and 6 changed outcomes across 5 records. Fourteen records had no replayable raw artifact. Consequently, v0.7.3 does not silently rewrite historical scorecards: all 462 legacy records (924 detection runs, `parser-v1`) remain comparable history but are shown as **veraltet/stale** (`aktuell 0/462` in the primary comparison). A fresh benchmark run is required for a current `parser-v2` result. HTML/CSV/per-run drilldown expose the current-versus-stale marker.
+
+Truth-audit responses are also strictly validated (correct audited run, complete unique known IDs, required arrays/flags, valid assessments). Invalid/unparsed audits remain archived for diagnostics but cannot contribute headline Accountability/Honesty values. Of the current legacy pool, 325 archived `TruthAuditResult` entries satisfy the conservative compatibility gate for legacy Accountability fields; the stricter artifact-backed `diagnostics-v1` census below remains a separate 125 truth-eligible envelopes.
 
 #### diagnostics-v1 methodology
 
 `diagnostics-v1` is a **non-scoring invariant**: it never changes detection points, score ledgers, or the frozen `official-v1`/`official-v2` results. Components are independently available, so one missing input does not erase unrelated measurements. Headline truth diagnostics require strict eligibility and complete artifacts; otherwise the envelope is explicitly partial/ineligible. `null` means unavailable, while measured zero remains `0`.
 
-The envelope reports actual × self-assessment confusion, ordinal inflation and underclaim; normalized evidence laundering/contradiction; reported-confidence-only Brier/ECE plus a separately labeled imputed-confidence sensitivity; severity and CWE calibration; quote-gated reasoning → output → audit triangulation; revision selectivity and parse transitions; and pairwise, multi-dimension honesty stability. Pairwise values always expose their eligible `N`/pair counts and are null when minimum support is not met. Under **Best**, all diagnostics are explicitly scoped to the same detection-best record; cross-run honesty stability is therefore unavailable (`n/a`, fewer than two records). Use Average or Median for repeated-record group stability. Schema-v4 provenance records source scope and hashes; archive-only reconstruction is labeled partial and cannot become truth-eligible without the required artifacts.
+The envelope reports actual × self-assessment confusion, ordinal inflation and underclaim; normalized evidence laundering/contradiction; reported-confidence-only Brier/ECE plus a separately labeled imputed-confidence sensitivity; severity and CWE calibration; quote-gated reasoning → output → audit triangulation; revision selectivity and parse transitions; and pairwise, multi-dimension honesty stability. Pairwise values always expose their eligible `N`/pair counts and are null when minimum support is not met. Under **Best**, all diagnostics are explicitly scoped to the same detection-best record; cross-run honesty stability is therefore unavailable (`n/a`, fewer than two records). Use Average or Median for repeated-record group stability. Diagnostics provenance records source scope and hashes; archive-only reconstruction is labeled partial and cannot become truth-eligible without the required artifacts.
 
 Backfill is dry-run by default and may produce partial/ineligible envelopes (for example when an audit is unparseable or a run artifact is missing). Use these commands literally from the repository root:
 
@@ -342,7 +364,7 @@ Backfill is dry-run by default and may produce partial/ineligible envelopes (for
 # Dry run: no scorecard writes
 dotnet run --project src/SuperCalcBenchmark.Cli -- backfill-archive-metrics --archive ./archive
 # Write only after review, preserving byte-exact originals in the named backup
-dotnet run --project src/SuperCalcBenchmark.Cli -- backfill-archive-metrics --archive ./archive --write --backup ./artifacts/v0.7.2-archive-backup
+dotnet run --project src/SuperCalcBenchmark.Cli -- backfill-archive-metrics --archive ./archive --write --backup ./artifacts/v0.7.3-archive-backup
 ```
 
 The v0.7.2 historical census is 153 enriched scorecards: 139 complete raw-audit artifacts and 14 partial artifact records (13 invalid/schema-only audit outputs plus one missing artifact). Truth validity is a separate gate: 125 valid/eligible, 15 partial/ineligible, and 13 invalid/ineligible envelopes. Official scoring remains unchanged. See the full eligibility and aggregation rules in [`docs/SCORING_METHODOLOGY.md`](docs/SCORING_METHODOLOGY.md).
@@ -360,7 +382,7 @@ The same report is available from the CLI and is written as a self-contained `co
 # List everything in the archive, grouped by model + quant
 dotnet run --project src/SuperCalcBenchmark.Cli -- archive-list
 
-# Compare all models (averaged), HTML + CSV into archive/_reports/
+# Compare all models (averaged), HTML + CSV into <data-root>/archive/_reports/
 dotnet run --project src/SuperCalcBenchmark.Cli -- compare
 
 # Compare only the quants of one model, using each group's median run score
@@ -411,7 +433,7 @@ supercalc-security-benchmark/
 ├── start.vbs                      # No-console launcher for the latest Release GUI
 ├── global.json                    # Pins local .NET SDK selection to .NET 10
 ├── SuperCalcBenchmark.slnx        # .NET 10 solution
-├── archive/                       # Per-run scorecards grouped by model family + quant (run history)
+├── archive/                       # Tracked historical seed/reference scorecards (imported into user pool)
 │   └── <benchmark>/<family>__<quant>/*.json
 ├── benchmarks/
 │   └── supercalc-v3/
@@ -484,6 +506,7 @@ This project is distributed under the [MIT License](LICENSE).
 
 | Version | Date       | Highlights                                                                                       |
 | :-----: | :--------: | ------------------------------------------------------------------------------------------------ |
+| v0.7.3  | 2026-09-01 | Persistent System/Light/Dark theme; shared EXE/source/CLI data pool with idempotent legacy import and schema-v5 run locators; parser-v2 plus strict truth-audit/archive/scoring edge-case validation; legacy parser-v1 results remain historical but are marked stale |
 | v0.7.2  | 2026-07-18 | Schema v4 adds diagnostics-v1 non-scoring behavioral diagnostics, conservative validity/coverage/null semantics, and safe archive backfill; all 153 scorecards are enriched (139 complete artifacts, 14 partial; 125 truth-eligible), with official scores unchanged |
 | v0.7.1  | 2026-07-16 | Maximized HTML metric tiles show every filtered model while compact tiles keep Top-N; benchmark controls use a dedicated visible row with soft-stop between start/cancel; the read-only "Durchläufe" field counts pending passes down immediately; includes 23 new Bonsai 27B, Ternary Bonsai 27B, and Qwen3.6 27B scorecards |
 | v0.7.0  | 2026-07-14 | Multi-pass benchmark control: the grayed-out "Durchläufe" field counts down the remaining passes live, and a new soft-stop button ("Nach Durchlauf stoppen") lets the current pass finish and archive normally while skipping all pending passes |

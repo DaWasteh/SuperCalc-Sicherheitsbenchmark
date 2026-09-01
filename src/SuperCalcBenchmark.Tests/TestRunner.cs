@@ -17,14 +17,24 @@ internal static partial class TestRunner
 
         Run("release versions agree", ReleaseVersionsAgree);
         Run("ground truth validates", GroundTruthValidates);
+        Run("ground truth loader handles null collections deterministically", GroundTruthLoaderHandlesNullCollections);
         Run("WPF app exits when the main window closes", WpfAppExitsWithMainWindow);
         Run("WPF benchmark controls stay visible and count down", WpfBenchmarkControlsStayVisibleAndCountDown);
+        Run("app settings default, persist, and recover safely", AppSettingsRoundTripAndRecovery);
+        Run("path resolver separates assets from shared mutable data", PathResolverSeparatesAssetsFromSharedData);
+        Run("legacy archive import is idempotent and concurrency safe", LegacyArchiveImportIsIdempotentAndConcurrencySafe);
+        Run("default run directories are collision safe", DefaultRunDirectoriesAreCollisionSafe);
+        Run("portable run locator survives data-root relocation", PortableRunLocatorSurvivesDataRootRelocation);
+        Run("WPF theme offers persistent system mode", WpfThemeOffersPersistentSystemMode);
         Run("ground truth v2 aliases and anchors load", GroundTruthV2AliasesAndAnchorsLoad);
         Run("scoring ledger records evidence fidelity", ScoringLedgerRecordsEvidenceFidelity);
         Run("parser handles valid JSON", ParserHandlesValidJson);
         Run("parser handles markdown JSON fence", ParserHandlesMarkdownJsonFence);
         Run("parser treats schema echo as no findings", ParserTreatsSchemaEchoAsNoFindings);
         Run("parser accepts schema metadata with findings", ParserAcceptsSchemaMetadataWithFindings);
+        Run("parser selects findings after earlier JSON candidates", ParserSelectsFindingsAfterEarlierJsonCandidates);
+        Run("parser rejects non-finite confidence safely", ParserRejectsNonFiniteConfidenceSafely);
+        Run("parser diagnoses malformed finding payloads", ParserDiagnosesMalformedFindingPayloads);
         Run("parser salvages truncated findings JSON", ParserSalvagesTruncatedFindingsJson);
         Run("parser handles lenient finding shapes", ParserHandlesLenientFindingShapes);
         Run("official timeout covers slow reasoning budget", OfficialTimeoutCoversSlowReasoningBudget);
@@ -45,6 +55,7 @@ internal static partial class TestRunner
         Run("official v2 keeps perfect fixture at 100", OfficialV2KeepsPerfectFixtureAt100);
         Run("official v2 gates unsupported alias-only finding", OfficialV2GatesUnsupportedAliasOnlyFinding);
         Run("duplicate finding is penalized", DuplicateFindingIsPenalized);
+        Run("scoring extreme inputs remain finite or fail clearly", ScoringExtremeInputsRemainFiniteOrFailClearly);
         Run("self-validation tracks TP/FP transitions and FP taxonomy", SelfValidationTracksTransitionsAndFpTaxonomy);
         Run("adjudication can accept a false positive transparently", AdjudicationCanAcceptFalsePositiveTransparently);
         Run("adjudication preserves one TP per vulnerability", AdjudicationPreservesOneTpPerVulnerability);
@@ -56,6 +67,10 @@ internal static partial class TestRunner
         Run("truth audit parser rejects schema-only response and normalizes run alias", TruthAuditParserRejectsSchemaOnlyAndNormalizesAlias);
         Run("truth audit scorer detects honest and overclaiming self-assessments", TruthAuditScorerDetectsHonestyAndOverclaims);
         Run("truth audit rejects omissions, empty proof, and duplicate FP admissions", TruthAuditRejectsGamingShortcuts);
+        Run("truth audit validity rejects wrong run and duplicate ids", TruthAuditValidityRejectsWrongRunAndDuplicateIds);
+        Run("truth audit validity rejects flag and admission gaming", TruthAuditValidityRejectsFlagAndAdmissionGaming);
+        Run("comparison excludes invalid truth-audit headlines", ComparisonExcludesInvalidTruthAuditHeadlines);
+        Run("invalid truth-audit surfaces show n/a", InvalidTruthAuditSurfacesShowNotAvailable);
         Run("diagnostics parse transition contract", DiagnosticsParseTransitionContract);
         Run("diagnostics corrections validate provenance only", DiagnosticsCorrectionsContract);
         Run("diagnostics revision selectivity pairs items deterministically", DiagnosticsRevisionSelectivityContract);
@@ -73,6 +88,7 @@ internal static partial class TestRunner
         Run("frozen detection scores survive diagnostics", FrozenDetectionInvariantContract);
         Run("comparison diagnostics micro-pool and stability", ComparisonDiagnosticsMicroPoolsAndStability);
         Run("comparison Best consistently uses one detection record", ComparisonBestUsesOneDetectionRecord);
+        Run("comparison Best rates use only the best record", ComparisonBestRatesUseOnlyBestRecord);
         Run("legacy empty actual CWE is unavailable", LegacyEmptyActualCweIsUnavailable);
         Run("generated presentation and inline scripts are valid", GeneratedPresentationAndScriptContracts);
         Run("model identity detects quant and family", ModelIdentityDetectsQuantAndFamily);
@@ -83,6 +99,8 @@ internal static partial class TestRunner
         Run("model identity server ftype resolves alias models", ModelIdentityServerFtypeResolvesAliasModels);
         Run("llama client extracts server ftype from models endpoint", LlamaClientExtractsServerFtypeFromModelsEndpoint);
         Run("llama client server ftype is null without meta field", LlamaClientServerFtypeIsNullWithoutMetaField);
+        Run("archive store rejects malformed and future scorecards", ArchiveStoreRejectsMalformedAndFutureScorecards);
+        Run("archive save is atomic under concurrent collisions", ArchiveSaveIsAtomicUnderConcurrentCollisions);
         Run("archive store updates editable identity fields", ArchiveStoreUpdatesEditableIdentityFields);
         Run("archive rename updates file name to new family", ArchiveRenameUpdatesFileNameToNewFamily);
         Run("archive store returns latest manual quant for family", ArchiveStoreReturnsLatestManualQuantForFamily);
@@ -94,6 +112,8 @@ internal static partial class TestRunner
         Run("comparison html embeds parseable payload", ComparisonHtmlEmbedsParseablePayload);
         Run("archive and comparison expose truth audit metrics", ArchiveAndComparisonExposeTruthAuditMetrics);
         Run("archive aborted run 2 falls back to run 1 headline", ArchiveAbortedRun2FallsBackToRun1AsHeadline);
+        Run("archive Run-3-only record has no detection headline", ArchiveRun3OnlyHasNoDetectionHeadline);
+        Run("official comparability requires a known full identity", OfficialComparabilityRequiresKnownIdentity);
         Run("archive loads v1 scorecards with v2 fallbacks", ArchiveLoadsV1ScorecardsWithV2Fallbacks);
         Run("archive v2 stores completion and parse diagnostics", ArchiveV2StoresCompletionAndParseDiagnostics);
         Run("archive stores official v1 score metadata", ArchiveStoresOfficialV1ScoreMetadata);
@@ -123,6 +143,423 @@ internal static partial class TestRunner
         {
             _failures++;
             Console.Error.WriteLine($"FAIL {name}: {ex.Message}");
+        }
+    }
+
+    private static void ComparisonBestRatesUseOnlyBestRecord()
+    {
+        static ArchiveRecord Record(string id, double score, int findings, int falsePositives, int duplicates, int ignored) => new()
+        {
+            RecordId = id,
+            BenchmarkId = "fixture",
+            ModelFamily = "fixture",
+            Quant = "Q",
+            GroupKey = "fixture__Q",
+            Runs =
+            [
+                new ArchiveRunScore
+                {
+                    RunName = "Run 2",
+                    RunKind = "self_validation",
+                    ScorePercent = score,
+                    FindingCount = findings,
+                    FalsePositives = falsePositives,
+                    Duplicates = duplicates,
+                    IgnoredLowConfidence = ignored,
+                    ResponseChars = 10,
+                    ParseMode = "json"
+                }
+            ]
+        };
+
+        var best = Record("best", 90, 2, 0, 0, 0);
+        var lower = Record("lower", 10, 100, 80, 10, 10);
+        var group = new ArchiveGroup
+        {
+            GroupKey = "fixture__Q",
+            ModelFamily = "fixture",
+            Quant = "Q",
+            Records = [best, lower]
+        };
+
+        var series = ComparisonReport.Build([group], "fixture", ComparisonAggregate.Best).Series.Single();
+        Assert(series.FalsePositives == 0 && series.FpPerFinding == 0,
+            "Best FP count and rate must both describe the best record");
+        Assert(series.Duplicates == 0 && series.DuplicateRate == 0,
+            "Best duplicate count and rate must both describe the best record");
+        Assert(series.IgnoredLowConfidence == 0 && series.IgnoredLowConfidenceRate == 0,
+            "Best ignored count and rate must both describe the best record");
+    }
+
+    private static void ArchiveRun3OnlyHasNoDetectionHeadline()
+    {
+        var record = new ArchiveRecord
+        {
+            SchemaVersion = ArchiveRecord.CurrentSchemaVersion,
+            RecordId = "run3-only",
+            BenchmarkId = "fixture",
+            ModelFamily = "fixture",
+            Quant = "Q",
+            GroupKey = "fixture__Q",
+            Runs = [new ArchiveRunScore { RunName = "Run 3", ScorePercent = 88, ResponseChars = 10 }]
+        };
+        record.Runs.Single().NormalizeAfterLoad(record);
+
+        Assert(record.Runs.Single().RunKind == "truth_audit", "legacy Run 3 should normalize to truth_audit");
+        Assert(record.Runs.Single().PromptVersion == PromptVersions.TruthAuditV1,
+            "legacy Run 3 should restore its truth-audit prompt identity before run kind");
+        Assert(record.PrimaryRun is null, "a Run-3-only record must never produce a detection headline");
+    }
+
+    private static void OfficialComparabilityRequiresKnownIdentity()
+    {
+        Assert(!ScoringProfiles.IsOfficialComparableProfile("official-arbitrary"),
+            "an arbitrary official-* prefix must not be considered supported");
+        Assert(!ScoringProfiles.IsOfficialComparableIdentity(
+                null,
+                ScoringProfiles.OfficialV1Version,
+                ScoringProfiles.OfficialV1EngineVersion,
+                ScoringProfiles.ScoreSchemaVersion)
+               && !ScoringProfiles.IsOfficialComparableIdentity(
+                   string.Empty,
+                   ScoringProfiles.OfficialV1Version,
+                   ScoringProfiles.OfficialV1EngineVersion,
+                   ScoringProfiles.ScoreSchemaVersion),
+            "a missing profile name must never alias the official-v1 identity");
+        Assert(ScoringProfiles.IsOfficialComparableIdentity(
+                ScoringProfiles.OfficialV1Name,
+                ScoringProfiles.OfficialV1Version,
+                ScoringProfiles.OfficialV1EngineVersion,
+                ScoringProfiles.ScoreSchemaVersion),
+            "the frozen official-v1 identity should be comparable");
+        Assert(!ScoringProfiles.IsOfficialComparableIdentity(
+                ScoringProfiles.OfficialV1Name,
+                999,
+                ScoringProfiles.OfficialV1EngineVersion,
+                ScoringProfiles.ScoreSchemaVersion),
+            "profile version mismatches must be quarantined");
+        Assert(!ScoringProfiles.IsOfficialComparableIdentity(
+                ScoringProfiles.OfficialV1Name,
+                ScoringProfiles.OfficialV1Version,
+                "different-engine",
+                ScoringProfiles.ScoreSchemaVersion),
+            "engine version mismatches must be quarantined");
+
+        var current = new ArchiveRunScore
+        {
+            RunName = "Run 1",
+            ScoringProfile = ScoringProfiles.OfficialV1Name,
+            ScoringProfileVersion = ScoringProfiles.OfficialV1Version,
+            ScoringEngineVersion = ScoringProfiles.OfficialV1EngineVersion,
+            ScoreSchemaVersion = ScoringProfiles.ScoreSchemaVersion,
+            ParserVersion = ResponseParser.CurrentParserVersion,
+            ResponseChars = 1
+        };
+        var historical = new ArchiveRunScore
+        {
+            RunName = "Run 1",
+            ScoringProfile = ScoringProfiles.OfficialV1Name,
+            ScoringProfileVersion = ScoringProfiles.OfficialV1Version,
+            ScoringEngineVersion = ScoringProfiles.OfficialV1EngineVersion,
+            ScoreSchemaVersion = ScoringProfiles.ScoreSchemaVersion,
+            ParserVersion = ResponseParser.LegacyParserVersion,
+            ResponseChars = 1
+        };
+        var record = new ArchiveRecord { BenchmarkProfile = "official", SourceHashMatches = true };
+        current.NormalizeAfterLoad(record);
+        historical.NormalizeAfterLoad(record);
+        Assert(current.IsCurrentEvaluation, "current parser results should be marked current");
+        Assert(historical.OfficialComparable && !historical.IsCurrentEvaluation,
+            "frozen parser-v1 results remain comparable history but must be visibly marked stale");
+    }
+
+    private static void GroundTruthLoaderHandlesNullCollections()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "supercalc-groundtruth-null-test-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(tempRoot);
+            var nullDocument = Path.Combine(tempRoot, "null-document.json");
+            File.WriteAllText(nullDocument, "{\"vulnerabilities\":null}", Encoding.UTF8);
+            try
+            {
+                _ = new GroundTruthStore().Load(nullDocument);
+                throw new InvalidOperationException("null vulnerabilities should have been rejected");
+            }
+            catch (InvalidOperationException exception)
+            {
+                Assert(exception.Message.Contains("no vulnerabilities", StringComparison.OrdinalIgnoreCase),
+                    "null vulnerabilities should produce a clear validation error instead of NullReferenceException");
+            }
+
+            var normalized = Path.Combine(tempRoot, "normalized.json");
+            File.WriteAllText(normalized, """
+            {
+              "vulnerabilities": [{
+                "id": "V",
+                "cwe": null,
+                "locations": [],
+                "aliases": null,
+                "required_evidence": null,
+                "evidence_anchors": { "must": null, "should": null, "may": null, "negative": null }
+              }]
+            }
+            """, Encoding.UTF8);
+            var loaded = new GroundTruthStore().Load(normalized);
+            var vulnerability = loaded.Vulnerabilities.Single();
+            Assert(vulnerability.Cwe.Count == 0 && vulnerability.Aliases.Count == 0,
+                "nullable legacy lists should normalize to empty collections");
+            Assert(!vulnerability.EvidenceAnchors.HasAny,
+                "null evidence-anchor lists should normalize without crashing");
+        }
+        finally
+        {
+            TryDeleteDirectory(tempRoot);
+        }
+    }
+
+    private static void PathResolverSeparatesAssetsFromSharedData()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "supercalc-paths-" + Guid.NewGuid().ToString("N"));
+        var assets = Path.Combine(root, "portable");
+        var current = Path.Combine(root, "unrelated-cwd");
+        var baseDirectory = Path.Combine(assets, "bin", "win-x64");
+        Directory.CreateDirectory(current);
+        Directory.CreateDirectory(baseDirectory);
+        try
+        {
+            foreach (var relative in new[]
+                     {
+                         "enhanced_calc.cpp",
+                         Path.Combine("benchmarks", "supercalc-v3", "ground_truth.json"),
+                         Path.Combine("benchmarks", "supercalc-v3", "prompts", "analysis_v1.md"),
+                         Path.Combine("benchmarks", "supercalc-v3", "prompts", "self_validate_v1.md"),
+                         Path.Combine("benchmarks", "supercalc-v3", "prompts", "truth_audit_v1.md"),
+                         Path.Combine("benchmarks", "supercalc-v3", "schemas", "llm_findings.schema.json"),
+                         Path.Combine("benchmarks", "supercalc-v3", "schemas", "truth_audit.schema.json")
+                     })
+            {
+                var path = Path.Combine(assets, relative);
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                File.WriteAllText(path, "fixture", Encoding.UTF8);
+            }
+
+            var paths = BenchmarkPathResolver.Resolve(new BenchmarkPathResolutionOptions
+            {
+                CurrentDirectory = current,
+                BaseDirectory = baseDirectory,
+                ExplicitDataRoot = "shared-data"
+            });
+            Assert(BenchmarkPathResolver.SamePath(paths.AssetRoot, assets),
+                "portable assets should resolve from application ancestors, not process CWD");
+            Assert(BenchmarkPathResolver.SamePath(paths.DataRoot, Path.Combine(current, "shared-data")),
+                "relative explicit data root should resolve deterministically against supplied CWD");
+            Assert(paths.ArchiveRoot.StartsWith(paths.DataRoot, StringComparison.OrdinalIgnoreCase)
+                   && paths.RunsRoot.StartsWith(paths.DataRoot, StringComparison.OrdinalIgnoreCase),
+                "archive and runs must share the canonical mutable data root");
+
+            Assert(BenchmarkPathResolver.TryCreateDataLocator(
+                       Path.Combine(paths.RunsRoot, "run-1"), paths.DataRoot, out var locator)
+                   && locator.Replace('\\', '/') == "Runs/run-1",
+                "run locator should be portable and data-root relative");
+            Assert(BenchmarkPathResolver.TryResolveDataLocator(locator, paths.DataRoot, out var resolved)
+                   && BenchmarkPathResolver.SamePath(resolved, Path.Combine(paths.RunsRoot, "run-1")),
+                "portable run locator should round-trip");
+            Assert(!BenchmarkPathResolver.TryResolveDataLocator("../escape", paths.DataRoot, out _),
+                "data locators must reject traversal outside the data root");
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    private static void LegacyArchiveImportIsIdempotentAndConcurrencySafe()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "supercalc-import-" + Guid.NewGuid().ToString("N"));
+        var source = Path.Combine(root, "legacy");
+        var target = Path.Combine(root, "shared");
+        var sourceFile = Path.Combine(source, "bench", "model", "one.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(sourceFile)!);
+        File.WriteAllText(sourceFile, "{\"recordId\":\"record-one\"}", Encoding.UTF8);
+        Directory.CreateDirectory(Path.Combine(source, "_reports"));
+        File.WriteAllText(Path.Combine(source, "_reports", "ignored.json"), "{}", Encoding.UTF8);
+        try
+        {
+            var imports = Enumerable.Range(0, 8)
+                .Select(_ => Task.Run(() => ArchivePoolImporter.ImportLegacyArchive(source, target)))
+                .ToArray();
+            Task.WaitAll(imports);
+            Assert(imports.Sum(task => task.Result.Imported) == 1,
+                "parallel legacy imports should publish one physical scorecard exactly once");
+            Assert(Directory.EnumerateFiles(target, "*.json", SearchOption.AllDirectories).Count() == 1,
+                "report files and duplicate imports must not enter the canonical pool");
+
+            var repeated = ArchivePoolImporter.ImportLegacyArchive(source, target);
+            Assert(repeated.Imported == 0 && repeated.AlreadyPresent == 1,
+                "repeated import should deduplicate by stable record id");
+
+            File.WriteAllText(sourceFile, "{\"recordId\":\"record-two\",\"note\":\"same legacy path\"}", Encoding.UTF8);
+            var collision = ArchivePoolImporter.ImportLegacyArchive(source, target);
+            Assert(collision.Imported == 1
+                   && Directory.EnumerateFiles(target, "*.json", SearchOption.AllDirectories).Count() == 2,
+                "different records with the same relative filename should receive collision-safe targets");
+
+            var conflictingSourceA = Path.Combine(root, "legacy-a");
+            var conflictingSourceB = Path.Combine(root, "legacy-b");
+            var conflictingTarget = Path.Combine(root, "shared-conflict");
+            Directory.CreateDirectory(conflictingSourceA);
+            Directory.CreateDirectory(conflictingSourceB);
+            File.WriteAllText(Path.Combine(conflictingSourceA, "a.json"),
+                "{\"recordId\":\"shared-record\",\"origin\":\"a\"}", Encoding.UTF8);
+            File.WriteAllText(Path.Combine(conflictingSourceB, "b.json"),
+                "{\"recordId\":\"shared-record\",\"origin\":\"b\"}", Encoding.UTF8);
+            var conflictingImports = new[]
+            {
+                Task.Run(() => ArchivePoolImporter.ImportLegacyArchive(conflictingSourceA, conflictingTarget)),
+                Task.Run(() => ArchivePoolImporter.ImportLegacyArchive(conflictingSourceB, conflictingTarget))
+            };
+            Task.WaitAll(conflictingImports);
+            Assert(conflictingImports.Sum(task => task.Result.Imported) == 1
+                   && conflictingImports.Sum(task => task.Result.AlreadyPresent) == 1
+                   && Directory.EnumerateFiles(conflictingTarget, "*.json", SearchOption.AllDirectories).Count() == 1,
+                "cross-source concurrent imports must keep one canonical file per record id even when bytes differ");
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    private static void DefaultRunDirectoriesAreCollisionSafe()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "supercalc-run-root-" + Guid.NewGuid().ToString("N"));
+        var previous = Environment.GetEnvironmentVariable(BenchmarkPathResolver.DataRootEnvironmentVariable);
+        Environment.SetEnvironmentVariable(BenchmarkPathResolver.DataRootEnvironmentVariable, root);
+        try
+        {
+            var writer = new ReportWriter();
+            var options = new BenchmarkOptions { Model = "same/model" };
+            var startedAt = DateTimeOffset.Parse("2026-08-10T12:00:00Z");
+            var directories = Enumerable.Range(0, 32)
+                .AsParallel()
+                .Select(_ => writer.CreateRunDirectory(options, startedAt))
+                .ToList();
+            Assert(directories.Distinct(StringComparer.OrdinalIgnoreCase).Count() == directories.Count,
+                "same-second parallel runs must never share a default output directory");
+            Assert(directories.All(directory => Directory.Exists(directory)
+                                                && directory.StartsWith(Path.Combine(root, "Runs"), StringComparison.OrdinalIgnoreCase)),
+                "all default output directories must live in the shared data pool");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(BenchmarkPathResolver.DataRootEnvironmentVariable, previous);
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    private static void PortableRunLocatorSurvivesDataRootRelocation()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "supercalc-relocate-" + Guid.NewGuid().ToString("N"));
+        var oldDataRoot = Path.Combine(root, "old-data");
+        var newDataRoot = Path.Combine(root, "new-data");
+        var oldRunDirectory = Path.Combine(oldDataRoot, "Runs", "run-1");
+        Directory.CreateDirectory(oldRunDirectory);
+        var startedAt = DateTimeOffset.Parse("2026-08-10T12:00:00Z");
+        var run = new BenchmarkRunResult
+        {
+            BenchmarkId = "bench",
+            Model = "model",
+            SourceSha256 = "source",
+            Seed = 7,
+            RepeatIndex = 1,
+            StartedAt = startedAt,
+            CompletedAt = startedAt.AddSeconds(1),
+            OutputDirectory = oldRunDirectory,
+            Run1 = new BenchmarkRunArtifacts { RunName = "Run 1" }
+        };
+        File.WriteAllText(
+            Path.Combine(oldRunDirectory, "run.json"),
+            JsonSerializer.Serialize(run),
+            Encoding.UTF8);
+        var record = new ArchiveRecord
+        {
+            SchemaVersion = ArchiveRecord.CurrentSchemaVersion,
+            RecordId = "record",
+            BenchmarkId = run.BenchmarkId,
+            RawModelId = run.Model,
+            SourceSha256 = run.SourceSha256,
+            Seed = run.Seed,
+            RepeatIndex = run.RepeatIndex,
+            StartedAt = run.StartedAt,
+            CompletedAt = run.CompletedAt,
+            RunDirectory = oldRunDirectory,
+            RunLocator = "Runs/run-1",
+            Runs = [new ArchiveRunScore { RunName = "Run 1" }]
+        };
+
+        var previous = Environment.GetEnvironmentVariable(BenchmarkPathResolver.DataRootEnvironmentVariable);
+        try
+        {
+            Directory.Move(oldDataRoot, newDataRoot);
+            Environment.SetEnvironmentVariable(BenchmarkPathResolver.DataRootEnvironmentVariable, newDataRoot);
+            var read = new RunArtifactReader().Read(record);
+            Assert(read.Run is not null && read.Error is null,
+                $"relative run locator should survive moving the whole data pool: {read.Error}");
+            Assert(BenchmarkPathResolver.SamePath(read.ResolvedRunDirectory!, Path.Combine(newDataRoot, "Runs", "run-1")),
+                "artifact reader should prefer the current data-root locator over stale absolute paths");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(BenchmarkPathResolver.DataRootEnvironmentVariable, previous);
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    private static void ArchiveStoreRejectsMalformedAndFutureScorecards()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "supercalc-archive-sanity-test-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(tempRoot);
+            File.WriteAllText(Path.Combine(tempRoot, "future.json"),
+                $"{{\"schemaVersion\":{ArchiveRecord.CurrentSchemaVersion + 1},\"runs\":[{{}}]}}", Encoding.UTF8);
+            File.WriteAllText(Path.Combine(tempRoot, "null-runs.json"),
+                $"{{\"schemaVersion\":{ArchiveRecord.CurrentSchemaVersion},\"runs\":null}}", Encoding.UTF8);
+            File.WriteAllText(Path.Combine(tempRoot, "negative-score.json"),
+                $"{{\"schemaVersion\":{ArchiveRecord.CurrentSchemaVersion},\"runs\":[{{\"scorePercent\":-1}}]}}", Encoding.UTF8);
+            File.WriteAllText(Path.Combine(tempRoot, "valid.json"),
+                $"{{\"schemaVersion\":{ArchiveRecord.CurrentSchemaVersion},\"recordId\":\"valid\",\"runs\":[{{\"runName\":\"Run 1\",\"scorePercent\":0}}]}}", Encoding.UTF8);
+
+            var records = new ArchiveStore(tempRoot).LoadAll();
+            Assert(records.Count == 1 && records[0].RecordId == "valid",
+                "future, null-run, and nonsensical scorecards should be quarantined while valid records still load");
+        }
+        finally
+        {
+            TryDeleteDirectory(tempRoot);
+        }
+    }
+
+    private static void ArchiveSaveIsAtomicUnderConcurrentCollisions()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "supercalc-archive-concurrency-test-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var store = new ArchiveStore(tempRoot);
+            var result = FakeResult("Concurrent-Model-Q4_K_M.gguf", 50, 5, 0, 0, 5);
+            var paths = new System.Collections.Concurrent.ConcurrentBag<string>();
+            Parallel.For(0, 16, _ => paths.Add(store.Save(result)));
+
+            Assert(paths.Count == 16 && paths.Distinct(StringComparer.OrdinalIgnoreCase).Count() == 16,
+                "same-second concurrent saves must claim distinct archive paths");
+            Assert(store.LoadAll().Count == 16, "every concurrently saved scorecard should be complete and readable");
+            Assert(!Directory.EnumerateFiles(tempRoot, "*.tmp-*", SearchOption.AllDirectories).Any(),
+                "successful atomic archive writes should not leave temp files");
+        }
+        finally
+        {
+            TryDeleteDirectory(tempRoot);
         }
     }
 
@@ -164,6 +601,56 @@ internal static partial class TestRunner
             "the pass input should count pending passes down immediately when a pass starts");
         Assert(code.Contains("RepeatCountTextBox.IsReadOnly = busy;", StringComparison.Ordinal),
             "the live pass counter should stay visible while preventing edits during a benchmark");
+    }
+
+    private static void AppSettingsRoundTripAndRecovery()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "supercalc-settings-test-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var path = Path.Combine(tempRoot, "app-settings.json");
+            var store = new AppSettingsStore(path);
+
+            Assert(store.Load().Theme == ThemePreference.System, "missing settings should default to System");
+            Assert(store.TrySave(new AppSettings { Theme = ThemePreference.Dark }), "valid settings should persist");
+            Assert(store.Load().Theme == ThemePreference.Dark, "persisted theme should round-trip");
+            Assert(!Directory.EnumerateFiles(tempRoot, "*.tmp-*", SearchOption.TopDirectoryOnly).Any(),
+                "atomic settings writes must not leave temporary files");
+
+            File.WriteAllText(path, "{ definitely not json", Encoding.UTF8);
+            Assert(store.Load().Theme == ThemePreference.System, "malformed settings should recover to System");
+
+            File.WriteAllText(path, "{\"schemaVersion\":999,\"theme\":\"dark\"}", Encoding.UTF8);
+            Assert(store.Load().Theme == ThemePreference.System, "future settings schemas should recover to System");
+
+            File.WriteAllText(path, "{\"schemaVersion\":1,\"theme\":\"unknown\"}", Encoding.UTF8);
+            Assert(store.Load().Theme == ThemePreference.System, "unknown theme names should recover to System");
+        }
+        finally
+        {
+            TryDeleteDirectory(tempRoot);
+        }
+    }
+
+    private static void WpfThemeOffersPersistentSystemMode()
+    {
+        var xaml = File.ReadAllText(Path.Combine("src", "SuperCalcBenchmark.App", "MainWindow.xaml"));
+        Assert(xaml.Contains("<ComboBoxItem Content=\"System\"", StringComparison.Ordinal),
+            "theme selector must expose System");
+        Assert(xaml.Contains("<ComboBoxItem Content=\"Hell\"", StringComparison.Ordinal)
+               && xaml.Contains("<ComboBoxItem Content=\"Dunkel\"", StringComparison.Ordinal),
+            "theme selector must keep explicit light and dark choices");
+        Assert(!xaml.Contains("SelectedIndex=\"0\"", StringComparison.Ordinal),
+            "XAML must not force Light before persisted settings load");
+
+        var code = File.ReadAllText(Path.Combine("src", "SuperCalcBenchmark.App", "MainWindow.xaml.cs"));
+        Assert(code.Contains("_appSettingsStore.Load().Theme", StringComparison.Ordinal),
+            "main window should restore the saved preference");
+        Assert(code.Contains("AppsUseLightTheme", StringComparison.Ordinal),
+            "System mode should resolve the Windows application theme");
+        Assert(code.Contains("WmSettingChange", StringComparison.Ordinal)
+               && code.Contains("AddHook(WindowMessageHook)", StringComparison.Ordinal),
+            "System mode should react to Windows theme changes");
     }
 
     private static void GroundTruthV2AliasesAndAnchorsLoad()
@@ -267,6 +754,63 @@ internal static partial class TestRunner
         Assert(result.Findings[0].Cwe == "CWE-134", "CWE should parse");
     }
 
+    private static void ScoringExtremeInputsRemainFiniteOrFailClearly()
+    {
+        var engine = new ScoringEngine();
+        var emptyGroundTruth = new GroundTruthDocument { Vulnerabilities = [] };
+        var source = new SourceDocument { Text = string.Empty, LineCount = 0 };
+        var unsupported = Enumerable.Range(1, 100)
+            .Select(index => new LlmFinding
+            {
+                Index = index,
+                Title = "unsupported",
+                VulnerabilityType = "unsupported",
+                Severity = "High",
+                Confidence = 0.9,
+                Evidence = "not in source"
+            })
+            .ToList();
+        var score = engine.Score("extreme", unsupported, emptyGroundTruth, source);
+
+        Assert(score.ScorePercent == 0 && score.MaxPoints == 0,
+            "zero scoreable vulnerabilities should produce a finite zero score");
+        Assert(score.FalsePositives == 100 && score.RawPoints < 0,
+            "negative penalties should remain visible even when percentage clamps to zero");
+        Assert(new[] { score.ScorePercent, score.RawPoints, score.MaxPoints, score.Precision, score.Recall, score.F1 }
+                .All(double.IsFinite),
+            "all extreme-case score outputs must remain finite");
+
+        try
+        {
+            _ = engine.Score("nan", [new LlmFinding { Confidence = double.NaN }], emptyGroundTruth, source);
+            throw new InvalidOperationException("non-finite confidence should have failed");
+        }
+        catch (ArgumentException exception)
+        {
+            Assert(exception.Message.Contains("non-finite", StringComparison.OrdinalIgnoreCase),
+                "non-finite confidence should fail with a clear diagnostic");
+        }
+
+        var invalidProfile = new ScoringProfile
+        {
+            Name = "invalid",
+            PartialThreshold = double.NaN,
+            FullThreshold = 0.8,
+            Weights = new Dictionary<string, double>(),
+            Points = new ScoringPointSchedule { FullTp = 5 }
+        };
+        try
+        {
+            _ = engine.Score("invalid-profile", [], emptyGroundTruth, source, invalidProfile);
+            throw new InvalidOperationException("invalid profile should have failed");
+        }
+        catch (ArgumentException exception)
+        {
+            Assert(exception.Message.Contains("threshold", StringComparison.OrdinalIgnoreCase),
+                "invalid numeric profile configuration should fail clearly");
+        }
+    }
+
     private static void OfficialTimeoutCoversSlowReasoningBudget()
     {
         var options = new BenchmarkOptions();
@@ -346,6 +890,112 @@ internal static partial class TestRunner
         Assert(result.Findings.Count == 1, $"expected one finding, got {result.Findings.Count}");
         Assert(result.Findings[0].Cwe == "CWE-798", $"CWE should parse, got {result.Findings[0].Cwe}");
         Assert(result.Warning?.Contains("schema metadata", StringComparison.OrdinalIgnoreCase) == true, "schema metadata should be diagnosed without suppressing findings");
+    }
+
+    private static void ParserSelectsFindingsAfterEarlierJsonCandidates()
+    {
+        const string finding = "{\"findings\":[{\"title\":\"real\",\"severity\":\"High\",\"evidence\":\"exact code\"}]}";
+        var parser = new ResponseParser();
+
+        var balanced = parser.Parse("{\"type\":\"object\"}\n" + finding);
+        Assert(balanced.ParsedJson && balanced.Findings.Count == 1,
+            "a later complete findings object must beat an earlier metadata object");
+        Assert(balanced.ParseMode == "balanced_json", "concatenated JSON should use balanced candidate mode");
+
+        var fenced = parser.Parse("""
+        ```json
+        {"$schema":"x","title":"SuperCalc LLM Findings Response","properties":{"findings":{"type":"array"}}}
+        ```
+        explanatory text
+        ```json
+        {"findings":[{"title":"real","severity":"High","evidence":"exact code"}]}
+        ```
+        """);
+        Assert(fenced.ParsedJson && fenced.Findings.Count == 1,
+            "a later findings fence must beat an earlier schema fence");
+        Assert(fenced.UsedMarkdownJsonBlock && fenced.ParseMode == "markdown_json",
+            "the selected fenced candidate should retain markdown provenance");
+
+        var schemaThenMalformedFinal = parser.Parse("""
+        analysis started with an unmatched code block {
+        {"required":["findings"],"properties":{"findings":{"type":"array","items":{"type":"object"}}}}
+        {"summary":"done","findings":[{"title":"recovered real finding","severity":"High","evidence":"exact code"}]}}
+        """);
+        Assert(schemaThenMalformedFinal.Findings.Count == 1
+               && schemaThenMalformedFinal.Findings[0].Title == "recovered real finding",
+            "recovery must inspect every real findings payload and not jump from a schema echo to an unrelated array");
+
+        var arrayAfterUnmatchedPrefix = parser.Parse("""
+        analysis opened a code fragment { but never closed it
+        [{"title":"array finding","severity":"High","evidence":"exact code"}]
+        """);
+        Assert(arrayAfterUnmatchedPrefix.ParsedJson
+               && arrayAfterUnmatchedPrefix.ParseMode == "balanced_json"
+               && arrayAfterUnmatchedPrefix.Findings.Count == 1
+               && arrayAfterUnmatchedPrefix.Findings[0].Title == "array finding",
+            "an unmatched prose delimiter must not hide a later valid top-level findings array");
+
+        var arrayAfterBraceFlood = parser.Parse(
+            new string('{', 4096) + "\n[{\"title\":\"late finding\",\"severity\":\"High\",\"evidence\":\"exact late code\"}]");
+        Assert(arrayAfterBraceFlood.Findings.Count == 1
+               && arrayAfterBraceFlood.Findings[0].Title == "late finding",
+            "malformed delimiter floods must be recovered in linear time without hiding the later answer");
+
+        var arrayAfterBalancedBraceFlood = parser.Parse(
+            new string('{', 4096) + new string('}', 4096)
+            + "\n[{\"title\":\"later finding\",\"severity\":\"High\",\"evidence\":\"exact later code\"}]");
+        Assert(arrayAfterBalancedBraceFlood.Findings.Count == 1
+               && arrayAfterBalancedBraceFlood.Findings[0].Title == "later finding",
+            "deep balanced non-JSON prefixes must not cause quadratic recovery or hide a later answer");
+    }
+
+    private static void ParserRejectsNonFiniteConfidenceSafely()
+    {
+        var parser = new ResponseParser();
+        foreach (var invalid in new[] { "NaN", "Infinity", "-Infinity", "1e9999" })
+        {
+            var result = parser.Parse($$"""
+            {"findings":[{"title":"x","severity":"High","evidence":"code","confidence":"{{invalid}}"}]}
+            """);
+            var finding = result.Findings.Single();
+            Assert(double.IsFinite(finding.Confidence), $"{invalid} must not produce a non-finite confidence");
+            Assert(Math.Abs(finding.Confidence - 0.75) < 0.0001, $"{invalid} should use the JSON default confidence");
+            Assert(finding.ConfidenceOrigin == ConfidenceOrigin.JsonDefault,
+                $"{invalid} must not be marked as reported confidence");
+            _ = JsonSerializer.Serialize(result, JsonOptions);
+        }
+
+        var overflowNumber = parser.Parse("""
+        {"findings":[{"title":"x","severity":"High","evidence":"code","confidence":1e9999}]}
+        """);
+        Assert(double.IsFinite(overflowNumber.Findings.Single().Confidence),
+            "an overflowing JSON number must not escape as non-finite confidence");
+        Assert(overflowNumber.Findings.Single().ConfidenceOrigin == ConfidenceOrigin.JsonDefault,
+            "an overflowing JSON number should use default provenance");
+    }
+
+    private static void ParserDiagnosesMalformedFindingPayloads()
+    {
+        var parser = new ResponseParser();
+        foreach (var payload in new[] { "null", "42", "\"not-an-array\"", "true" })
+        {
+            var result = parser.Parse($"{{\"findings\":{payload}}}");
+            Assert(result.ParsedJson && result.Findings.Count == 0,
+                $"malformed payload {payload} should remain a zero-finding JSON response");
+            Assert(result.Warning?.Contains("invalid shape", StringComparison.OrdinalIgnoreCase) == true,
+                $"malformed payload {payload} should be diagnosed");
+        }
+
+        var mixed = parser.Parse("""
+        {"findings":[null,"bad",{"title":"valid","severity":"High","evidence":"code"}]}
+        """);
+        Assert(mixed.Findings.Count == 1, "valid findings in a mixed array should still be retained");
+        Assert(mixed.Warning?.Contains("2 malformed", StringComparison.OrdinalIgnoreCase) == true,
+            "discarded mixed-array entries should be counted in the warning");
+
+        var empty = parser.Parse("{\"findings\":[]}");
+        Assert(empty.ParsedJson && empty.Findings.Count == 0 && empty.Warning is null,
+            "an intentional empty findings array should remain valid without a malformed warning");
     }
 
     private static void ParserSalvagesTruncatedFindingsJson()
@@ -1186,6 +1836,7 @@ internal static partial class TestRunner
         Assert(audit.Items.Single(i => i.Id == "SC-V3-002").Overclaim, "missed vulnerability claimed as found should be overclaim");
         Assert(audit.EvidenceLaunderingCount == 1, $"invalid quote should count as laundering, got {audit.EvidenceLaunderingCount}");
         Assert(audit.FalsePositiveAdmissionRate >= 0.99, "admitted FP should count toward FP admission rate");
+        Assert(audit.IsValid == true, "a complete audit targeting the correct run should be explicitly valid");
     }
 
     private static void TruthAuditRejectsGamingShortcuts()
@@ -1244,6 +1895,261 @@ internal static partial class TestRunner
         Assert(!omittedItem.Correct && omittedItem.SelfAssessment == "invalid_or_missing", "an omitted truth item must not default to an honest admitted miss");
         Assert(audit.FalsePositiveAdmissionRate == 0.5, $"duplicate or empty FP admissions must not cover distinct false positives; got {audit.FalsePositiveAdmissionRate}");
         Assert(audit.MissAdmissionRate == 0, $"omitted misses must not count as admitted; got {audit.MissAdmissionRate}");
+        Assert(audit.IsValid == false, "omitted items, missing flags, and a missing audited_run must invalidate headline metrics");
+    }
+
+    private static void TruthAuditValidityRejectsWrongRunAndDuplicateIds()
+    {
+        var audited = new ScoringResult
+        {
+            RunName = "Run 2",
+            Vulnerabilities =
+            [
+                new VulnerabilityScore { Id = "A", Found = false },
+                new VulnerabilityScore { Id = "B", Found = false }
+            ]
+        };
+        var response = new TruthAuditResponse
+        {
+            AuditedRun = "Run 1",
+            TruthItems =
+            [
+                new TruthAuditItem { Id = "A", SelfAssessment = "missed", AdmitsMiss = true, Overclaims = false },
+                new TruthAuditItem { Id = "A", SelfAssessment = "missed", AdmitsMiss = true, Overclaims = false },
+                new TruthAuditItem { Id = "UNKNOWN", SelfAssessment = "missed", AdmitsMiss = true, Overclaims = false }
+            ]
+        };
+
+        var audit = new TruthAuditScoringEngine().Score(response, audited, string.Empty, "Run 2", "test");
+        Assert(audit.IsValid == false, "wrong target, duplicate ids, unknown ids, and omissions must invalidate an audit");
+        Assert(audit.ValidationErrors.Any(error => error.Contains("different", StringComparison.OrdinalIgnoreCase)),
+            "run mismatch should be diagnosed");
+        Assert(audit.ValidationErrors.Any(error => error.Contains("Duplicate", StringComparison.OrdinalIgnoreCase)),
+            "duplicate ids should be diagnosed");
+        Assert(audit.ValidationErrors.Any(error => error.Contains("unknown", StringComparison.OrdinalIgnoreCase)),
+            "unknown ids should be diagnosed");
+
+        var nullCollections = new TruthAuditResponse
+        {
+            Summary = "malformed collections",
+            AuditedRun = "Run 2",
+            TruthItems = null!,
+            FalsePositiveAdmissions = null!,
+            Corrections = null!
+        };
+        var nullCollectionAudit = new TruthAuditScoringEngine().Score(
+            nullCollections, audited, string.Empty, "Run 2", "test");
+        Assert(nullCollectionAudit.IsValid == false
+               && nullCollectionAudit.ValidationErrors.Any(error => error.Contains("required", StringComparison.OrdinalIgnoreCase)),
+            "null truth-audit collections must be normalized and rejected without throwing");
+    }
+
+    private static void TruthAuditValidityRejectsFlagAndAdmissionGaming()
+    {
+        var audited = new ScoringResult
+        {
+            RunName = "Run 2",
+            Vulnerabilities = [new VulnerabilityScore { Id = "A", Found = false }],
+            Findings =
+            [
+                new FindingScore
+                {
+                    FindingIndex = 1,
+                    FindingTitle = "Imaginary issue",
+                    Classification = FindingClassification.FalsePositive
+                }
+            ]
+        };
+        const string previousOutput = "Imaginary issue was reported.";
+        var response = new TruthAuditResponse
+        {
+            Summary = "complete-looking but contradictory audit",
+            AuditedRun = "Run 2",
+            TruthItems =
+            [
+                new TruthAuditItem
+                {
+                    Id = "A",
+                    SelfAssessment = "missed",
+                    Rationale = string.Empty,
+                    AdmitsMiss = false,
+                    Overclaims = false
+                }
+            ],
+            FalsePositiveAdmissions =
+            [
+                new TruthAuditFalsePositiveAdmission { PreviousFindingQuote = "Imaginary issue", Admitted = true, Rationale = "unsupported" },
+                new TruthAuditFalsePositiveAdmission { PreviousFindingQuote = "Imaginary issue", Admitted = true, Rationale = "duplicate" },
+                new TruthAuditFalsePositiveAdmission { PreviousFindingQuote = "Ghost finding", Admitted = true, Rationale = "unattributable" }
+            ]
+        };
+
+        var audit = new TruthAuditScoringEngine().Score(response, audited, previousOutput, "Run 2", "test");
+        Assert(audit.IsValid == false,
+            "empty rationale, contradictory flags, and duplicate FP admissions must invalidate headline metrics");
+        Assert(audit.ValidationErrors.Any(error => error.Contains("rationale", StringComparison.OrdinalIgnoreCase)),
+            "empty rationale should be diagnosed");
+        Assert(audit.ValidationErrors.Any(error => error.Contains("flag", StringComparison.OrdinalIgnoreCase)),
+            "contradictory accountability flags should be diagnosed");
+        Assert(audit.ValidationErrors.Any(error => error.Contains("Duplicate false-positive", StringComparison.OrdinalIgnoreCase)),
+            "duplicate FP admissions should be diagnosed");
+        Assert(audit.ValidationErrors.Any(error => error.Contains("attributable", StringComparison.OrdinalIgnoreCase)),
+            "unattributable FP admissions should be diagnosed");
+    }
+
+    private static void ComparisonExcludesInvalidTruthAuditHeadlines()
+    {
+        static ArchiveRecord Record(string id, TruthAuditResult audit, string parseMode)
+        {
+            return new ArchiveRecord
+            {
+                RecordId = id,
+                BenchmarkId = "fixture",
+                ModelFamily = "fixture",
+                Quant = "Q",
+                GroupKey = "fixture__Q",
+                Runs =
+                [
+                    new ArchiveRunScore
+                    {
+                        RunName = "Run 2",
+                        RunKind = "self_validation",
+                        ScorePercent = 50,
+                        ResponseChars = 10,
+                        VulnerabilityCredit = new Dictionary<string, double> { ["A"] = 1 }
+                    },
+                    new ArchiveRunScore
+                    {
+                        RunName = "Run 3",
+                        RunKind = "truth_audit",
+                        ParseMode = parseMode,
+                        ResponseChars = 10,
+                        TruthAudit = audit
+                    }
+                ]
+            };
+        }
+
+        var invalid = Record("invalid", new TruthAuditResult
+        {
+            IsValid = false,
+            AccountabilityScore = 99,
+            TruthAuditAccuracy = 1,
+            AuditedRunName = "Run 2"
+        }, "truth_audit_json");
+        var synthesizedLegacy = Record("legacy-invalid", new TruthAuditResult
+        {
+            AccountabilityScore = 0,
+            TruthAuditAccuracy = 0,
+            AuditedRunName = "Run 2",
+            Items = [new TruthAuditItemResult { Id = "A", SelfAssessment = "invalid_or_missing" }]
+        }, "truth_audit_unparsed");
+        var valid = Record("valid", new TruthAuditResult
+        {
+            IsValid = true,
+            AccountabilityScore = 75,
+            TruthAuditAccuracy = 0.8,
+            AuditedRunName = "Run 2"
+        }, "truth_audit_json");
+        var group = new ArchiveGroup
+        {
+            GroupKey = "fixture__Q",
+            ModelFamily = "fixture",
+            Quant = "Q",
+            Records = [invalid, synthesizedLegacy, valid]
+        };
+
+        var series = ComparisonReport.Build([group], "fixture").Series.Single();
+        Assert(series.TruthAuditRunCount == 1, "only explicitly valid truth-audit metrics should headline");
+        Assert(series.AccountabilityScore == 75, "invalid zeroes and inflated invalid scores must not enter the aggregate");
+    }
+
+    private static void InvalidTruthAuditSurfacesShowNotAvailable()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "supercalc-invalid-audit-surface-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var invalidAudit = new TruthAuditResult
+            {
+                IsValid = false,
+                ValidationErrors = ["wrong audited run"],
+                AuditedRunName = "Run 2",
+                AuditedRunScoreProfile = ScoringProfiles.OfficialV1Name,
+                AccountabilityScore = 99,
+                TruthAuditAccuracy = 1
+            };
+            var diagnosticsTarget = new BenchmarkRunArtifacts
+            {
+                RunName = "Run 2",
+                Response = "previous output",
+                Score = new ScoringResult
+                {
+                    RunName = "Run 2",
+                    ScoringProfile = ScoringProfiles.OfficialV1Name,
+                    ScoreableVulnerabilityCount = 1,
+                    MaxPoints = 4,
+                    Vulnerabilities = [new VulnerabilityScore { Id = "A", Found = false }]
+                }
+            };
+            var diagnosticsAuditRun = new BenchmarkRunArtifacts
+            {
+                RunName = "Run 3",
+                RunKind = "truth_audit",
+                GroundTruthVisibleToModel = true,
+                Response = "{}",
+                TruthAudit = invalidAudit,
+                Score = new ScoringResult { RunName = "Run 3" }
+            };
+            var rawAudit = new TruthAuditResponse
+            {
+                Summary = "syntactically complete",
+                AuditedRun = "Run 2",
+                TruthItems =
+                [
+                    new TruthAuditItem
+                    {
+                        Id = "A",
+                        SelfAssessment = "missed",
+                        Rationale = "omitted before",
+                        AdmitsMiss = true,
+                        Overclaims = false
+                    }
+                ]
+            };
+            var diagnostics = BehavioralDiagnosticsCalculator.CalculateTruth(diagnosticsAuditRun, rawAudit, diagnosticsTarget);
+            Assert(!diagnostics.Validity.MetricEligible
+                   && diagnostics.Validity.Failures.Contains(TruthAuditGateFailure.ScoredAuditInvalid),
+                "an explicitly invalid strict audit must not re-enter the separate Honesty headline");
+
+            var result = new BenchmarkRunResult
+            {
+                BenchmarkId = "fixture",
+                OutputDirectory = tempRoot,
+                Run1 = new BenchmarkRunArtifacts { RunName = "Run 1", Score = new ScoringResult { RunName = "Run 1" } },
+                Run3 = new BenchmarkRunArtifacts
+                {
+                    RunName = "Run 3",
+                    RunKind = "truth_audit",
+                    TruthAudit = invalidAudit,
+                    Score = new ScoringResult { RunName = "Run 3", ScorePercent = 99 }
+                }
+            };
+            new ReportWriter().Write(result);
+            var report = File.ReadAllText(Path.Combine(tempRoot, "report.md"));
+            Assert(report.Contains("Accountability score: n/a", StringComparison.Ordinal)
+                   && report.Contains("diagnostic calculation: 99", StringComparison.Ordinal),
+                "invalid audit reports must withhold the headline while retaining a labeled diagnostic value");
+
+            var appCode = File.ReadAllText(Path.Combine("src", "SuperCalcBenchmark.App", "MainWindow.xaml.cs"));
+            var cliCode = File.ReadAllText(Path.Combine("src", "SuperCalcBenchmark.Cli", "Program.cs"));
+            Assert(appCode.Contains("n/a (ungültig)", StringComparison.Ordinal)
+                   && cliCode.Contains("n/a (invalid;", StringComparison.Ordinal),
+                "fresh GUI and CLI surfaces must not present invalid Accountability as a headline score");
+        }
+        finally
+        {
+            TryDeleteDirectory(tempRoot);
+        }
     }
 
     private static void PromptsDoNotLeakHiddenGroundTruth()
@@ -1547,7 +2453,7 @@ internal static partial class TestRunner
 
     private static void ReleaseVersionsAgree()
     {
-        const string expected = "0.7.2";
+        const string expected = "0.7.3";
         var runnerField = typeof(BenchmarkRunner).GetField("ToolVersion", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
         Assert(runnerField?.GetRawConstantValue() as string == expected, "BenchmarkRunner.ToolVersion must match the release version.");
         Assert(new BenchmarkRunResult().ToolVersion == expected, "BenchmarkRunResult.ToolVersion must match the release version.");

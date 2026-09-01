@@ -25,13 +25,13 @@
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                     <TextBlock Text="SuperCalc Security Benchmark" FontSize="24" FontWeight="SemiBold" VerticalAlignment="Center" />
                     <ComboBox x:Name="ThemeComboBox"
-                              Width="118"
+                              Width="120"
                               Margin="16,0,0,0"
-                              SelectedIndex="0"
                               SelectionChanged="ThemeComboBox_SelectionChanged"
-                              ToolTip="Theme wählen">
-                        <ComboBoxItem Content="Light" />
-                        <ComboBoxItem Content="Dark" />
+                              ToolTip="Farbschema wählen; System folgt automatisch der Windows-Einstellung">
+                        <ComboBoxItem Content="System" />
+                        <ComboBoxItem Content="Hell" />
+                        <ComboBoxItem Content="Dunkel" />
                     </ComboBox>
                 </StackPanel>
                 <TextBlock Text="Llama.cpp-Server refreshen, Modell auswählen, Benchmark starten — Run 3 Truth-Audit läuft automatisch mit." Foreground="{DynamicResource TextSecondaryBrush}" />
@@ -94,7 +94,7 @@
                         <TextBox x:Name="QuantTextBox" Width="110" ToolTip="Leer lassen für Auto-Erkennung. Nur setzen, wenn Modell-ID/Server den Quant nicht liefern; Refresh Models leert manuelle Werte." />
                         <Button x:Name="PreviewPromptButton" Content="Prompt anzeigen" Margin="16,4,4,4" Click="PreviewPromptButton_Click" ToolTip="Zeigt den generierten Prompt und die erste Request-JSON, ohne den Server aufzurufen." />
                         <TextBlock Text="Output-Ordner optional" VerticalAlignment="Center" Margin="16,4,4,4" />
-                        <TextBox x:Name="OutputDirectoryTextBox" Width="320" ToolTip="Leer lassen für %LOCALAPPDATA%\SuperCalcBenchmark\Runs" />
+                        <TextBox x:Name="OutputDirectoryTextBox" Width="320" ToolTip="Leer = gemeinsamer Datenpool/Runs; relative Pfade werden gegen den Datenpool aufgelöst" />
                     </WrapPanel>
                 </Expander>
             </Grid>
@@ -385,6 +385,7 @@
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
                             <DataGridTextColumn Header="Runs" Binding="{Binding RunCount}" IsReadOnly="True" Width="Auto" />
+                            <DataGridTextColumn Header="Aktuell" Binding="{Binding CurrentDisplay}" IsReadOnly="True" Width="Auto" />
                             <DataGridTextColumn Header="Score" Binding="{Binding ScorePercent, StringFormat=0.##}" IsReadOnly="True" Width="Auto" />
                             <DataGridTextColumn Header="Critical" Binding="{Binding CriticalRecall, StringFormat=P1}" IsReadOnly="True" Width="Auto" />
                             <DataGridTextColumn Header="Stability" Binding="{Binding Stability, StringFormat=P1}" IsReadOnly="True" Width="Auto" />

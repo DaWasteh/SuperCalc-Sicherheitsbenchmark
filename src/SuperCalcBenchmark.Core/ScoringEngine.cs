@@ -17,8 +17,23 @@ public sealed class ScoringEngine
         ScoringProfile? profile = null,
         ScoreComputationContext? context = null)
     {
+        ArgumentNullException.ThrowIfNull(findings);
+        ArgumentNullException.ThrowIfNull(groundTruth);
+        ArgumentNullException.ThrowIfNull(source);
         profile ??= _defaultProfile;
         context ??= new ScoreComputationContext();
+        ValidateProfile(profile);
+
+        if (groundTruth.Vulnerabilities is null
+            || groundTruth.Vulnerabilities.Any(vulnerability => vulnerability is null))
+        {
+            throw new ArgumentException("Ground truth contains a null vulnerabilities collection or entry.", nameof(groundTruth));
+        }
+
+        if (findings.Any(finding => finding is null || !double.IsFinite(finding.Confidence)))
+        {
+            throw new ArgumentException("Findings must not contain null entries or non-finite confidence values.", nameof(findings));
+        }
 
         var scoreable = groundTruth.Vulnerabilities.Where(v => v.StrictScoreable).ToList();
         var candidates = findings.Select(f => BuildBestCandidate(f, scoreable, source, profile)).ToList();
@@ -240,6 +255,47 @@ public sealed class ScoringEngine
             VulnerabilityChanges = vulnerabilityChanges,
             FindingChanges = falsePositiveMatches.FindingChanges
         };
+    }
+
+    private static void ValidateProfile(ScoringProfile profile)
+    {
+        if (!double.IsFinite(profile.PartialThreshold)
+            || !double.IsFinite(profile.FullThreshold)
+            || profile.PartialThreshold is < 0 or > 1
+            || profile.FullThreshold is < 0 or > 1
+            || profile.PartialThreshold > profile.FullThreshold)
+        {
+            throw new ArgumentException("Scoring profile thresholds must be finite, ordered, and within 0..1.", nameof(profile));
+        }
+
+        if (profile.Weights is null
+            || profile.Weights.Values.Any(weight => !double.IsFinite(weight) || weight < 0))
+        {
+            throw new ArgumentException("Scoring profile weights must be finite and non-negative.", nameof(profile));
+        }
+
+        var gates = profile.Gates
+            ?? throw new ArgumentException("Scoring profile gates are required.", nameof(profile));
+        if (!double.IsFinite(gates.AliasEvidenceMinimum)
+            || !double.IsFinite(gates.MinimumAliasForTp)
+            || !double.IsFinite(gates.GenericAliasOnlyCap)
+            || gates.AliasEvidenceMinimum is < 0 or > 1
+            || gates.MinimumAliasForTp is < 0 or > 1
+            || gates.GenericAliasOnlyCap is < 0 or > 1)
+        {
+            throw new ArgumentException("Scoring profile gate thresholds must be finite and within 0..1.", nameof(profile));
+        }
+
+        var points = profile.Points
+            ?? throw new ArgumentException("Scoring profile point schedule is required.", nameof(profile));
+        if (!double.IsFinite(points.FullTp) || points.FullTp <= 0
+            || !double.IsFinite(points.PartialTp)
+            || !double.IsFinite(points.FalsePositive)
+            || !double.IsFinite(points.Duplicate)
+            || !double.IsFinite(points.SeverityMismatch))
+        {
+            throw new ArgumentException("Scoring profile point values must be finite and full-TP points must be positive.", nameof(profile));
+        }
     }
 
     private static double CalculateEvaluationConfidence(IReadOnlyList<FindingScore> findings, ScoringProfile profile)

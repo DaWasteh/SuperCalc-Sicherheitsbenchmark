@@ -4,7 +4,7 @@ namespace SuperCalcBenchmark.Core;
 
 public enum MetricEvidenceTier { FullArtifact, ScorecardDerived, Unavailable }
 public enum TruthAuditValidityState { Valid, Partial, Invalid }
-public enum TruthAuditGateFailure { MissingAuditRun, WrongRunKind, GroundTruthNotVisible, ManualAbort, LoopDetected, EmptyOutput, ParseFailed, MissingTargetRun, DegenerateTargetRun, NonComparableTarget, AuditedRunMismatch, ProfileMismatch, ScoreMismatch, GroundTruthHashMismatch, SourceHashMismatch, MissingExpectedId, DuplicateExpectedId, UnknownId, InvalidAssessment, RequiredFlagMissing }
+public enum TruthAuditGateFailure { MissingAuditRun, WrongRunKind, GroundTruthNotVisible, ManualAbort, LoopDetected, EmptyOutput, ParseFailed, MissingTargetRun, DegenerateTargetRun, NonComparableTarget, AuditedRunMismatch, ProfileMismatch, ScoreMismatch, GroundTruthHashMismatch, SourceHashMismatch, MissingExpectedId, DuplicateExpectedId, UnknownId, InvalidAssessment, RequiredFlagMissing, ScoredAuditInvalid }
 public enum AuditActualStatus { FoundFull, FoundPartial, Missed }
 public enum AuditAssessment { FoundFull, FoundPartial, UnclearOrOverclaimed, Missed, InvalidOrMissing }
 public enum ParseQualityLevel { Unknown = -1, Unusable = 0, TextFallback = 1, PartialJson = 2, RecoveredJson = 3, DirectJson = 4 }

@@ -1,6 +1,6 @@
 # SuperCalc Benchmark — Traceable Scoring Methodology
 
-This document defines how the future benchmark tool should score LLM findings in a reproducible way.
+This document defines how the benchmark tool scores LLM findings reproducibly.
 
 ## Core rule
 
@@ -50,7 +50,13 @@ dotnet run --project src/SuperCalcBenchmark.Cli -- migrate-archive-scores --arch
 dotnet run --project src/SuperCalcBenchmark.Cli -- migrate-archive-scores --archive ./archive --assume-profile official-v1 --write
 ```
 
-The write mode creates a backup under `archive/_migration-backup/<timestamp>` by default. If a score cannot be assigned to a known official profile it should remain `legacy-unknown` and should not be treated as official-comparable.
+The write mode creates a backup under `archive/_migration-backup/<timestamp>` by default. If a score cannot be assigned to a known official profile it should remain `legacy-unknown` and should not be treated as official-comparable. A run is official-comparable only when profile name, profile version, engine version, and score-schema version exactly match a known frozen identity; a matching name alone is insufficient.
+
+### Parser version and evaluation freshness
+
+`parser-v2` is the current response evaluator. It ranks every direct, fenced, and balanced JSON candidate, prefers actual non-empty finding payloads over schema/metadata echoes, can salvage complete objects from a malformed/truncated findings array, diagnoses invalid payload shapes, and converts NaN/infinite/overflow confidence to a finite documented default. `TextUtil.Clamp01` also maps every non-finite input to a safe finite value.
+
+Parser identity is stored independently from the frozen scoring-profile identity. Changing parsing can change normalized findings and therefore the resulting score even when all matching weights and thresholds remain unchanged. Such records remain historical/comparable when their scoring identity is valid, but `parserVersion != parser-v2` is shown as **stale**, not current. No historical scorecard is silently rewritten.
 
 ## Matching weights (`official-v1`)
 
@@ -149,13 +155,32 @@ The report should include:
 
 Run 2 is not allowed to use hidden ground truth; it only receives the code and the model's own Run-1 answer.
 
+## Run 3 truth-audit validity
+
+Run 3 is explicitly non-blind and never contributes detection points or a detection headline. Before Accountability/Honesty aggregation, the response must parse and satisfy all of these gates:
+
+- required arrays are present;
+- `audited_run` resolves to the run actually selected for audit;
+- exactly one item exists for every known scoreable vulnerability ID, with no unknown/duplicate/missing IDs;
+- every self-assessment is in the allowed vocabulary and has a non-empty rationale; every claimed full/partial finding also supplies a non-empty previous-output quote;
+- required explicit admission/overclaim flags are present and logically consistent with the assessment and audited status;
+- admitted false positives have non-empty rationales and unique exact quotes that each identify exactly one audited false positive.
+
+Invalid or partial audits retain their raw artifacts and validation errors but their parse mode is marked invalid/unparsed and they are excluded from headline truth metrics. Legacy audits without explicit `IsValid` metadata pass only a conservative completeness/coherence gate.
+
+## v0.7.3 historical replay decision
+
+The frozen archive has 462 records and 924 detection runs, all originally evaluated by `parser-v1`. Raw detection artifacts were available for 448 records (896 runs): 890 replayed with exact score/count outcomes under `parser-v2`; 6 changed across 5 records; 14 records lacked replayable raw artifacts. Therefore no mixed automatic migration was written. Every legacy primary record remains available as comparable history but reports `isCurrentEvaluation=false`; current comparison count is 0/462 until fresh `parser-v2` benchmark runs are produced. New runs are required for current results.
+
+The compatibility gate admits 325 legacy `TruthAuditResult` entries to their archived Accountability aggregate. This is distinct from the stricter artifact-backed `diagnostics-v1` census (125 truth-eligible envelopes in v0.7.2). Invalid/unparsed/partial audits remain visible as diagnostics only.
+
 ## Archived scorecards & cross-run comparison
 
-Each completed run is archived as a compact scorecard (`archive/<benchmark>/<family>__<quant>/<timestamp>.json`) so multiple models — and multiple quantizations of the same model — can be compared later without re-running them. The archive groups runs by **model family + quant**, both parsed from the llama.cpp model id / GGUF name (overridable via `--quant` or the GUI **Quant** field). If a model alias hides this information, only the identity fields are editable after the fact: double-click **Modell** or **Quant** in the GUI comparison grid, or change `modelFamily`/`quant` in the JSON scorecard manually; `groupKey` and the physical folder name are derived again when the archive is loaded.
+Each completed run is archived as a compact scorecard (`<data-root>/archive/<benchmark>/<family>__<quant>/<timestamp>.json`) so multiple models — and multiple quantizations of the same model — can be compared later without re-running them. On Windows the default data root is `%LOCALAPPDATA%\SuperCalcBenchmark`; source GUI, CLI, and standalone EXE use the same root. `SUPERCALC_DATA_ROOT` overrides it. A repository/portable legacy `archive/` is imported non-destructively and idempotently by `recordId`/hash. The archive groups runs by **model family + quant**, both parsed from the llama.cpp model id / GGUF name (overridable via `--quant` or the GUI **Quant** field). If a model alias hides this information, only the identity fields are editable after the fact: double-click **Modell** or **Quant** in the GUI comparison grid, or change `modelFamily`/`quant` in the JSON scorecard manually; `groupKey` and the physical folder name are derived again when the archive is loaded.
 
 By default, the **primary run** of each scorecard is used: Run 2 (self-validation) when present, otherwise Run 1. The comparison builder can also use `--run-view run1`, `--run-view run2`, or `--run-view delta` (Run2−Run1). This changes only the comparison perspective; it does not change any individual run's score. Use `--scoring-profile official-v1` to compare only scores produced or migrated under a specific scoring profile.
 
-Archive scorecards use schema v4. Older schema-v1/v2/v3 files still load: their `vulnerabilityCredit` map is converted in memory into `vulnerabilityResults`, and missing scoring metadata loads as `legacy-unknown` until explicitly migrated. New scorecards retain compact run diagnostics and scoring provenance but still do **not** copy prompts or raw model responses into the archive.
+Archive scorecards use schema v5. Older schema-v1/v2/v3/v4 files still load: their `vulnerabilityCredit` map is converted in memory into `vulnerabilityResults`, and missing scoring metadata loads as `legacy-unknown` until explicitly migrated. Schema v5 adds a traversal-safe `runLocator` relative to the shared data root while retaining legacy `runDirectory` as fallback. New scorecards retain compact run diagnostics and scoring provenance but still do **not** copy prompts or raw model responses into the archive. Archive writes are atomic and collision-safe; inaccessible, malformed, future-schema, null-collection, and non-finite scorecards are quarantined per file instead of crashing the pool.
 
 ### `diagnostics-v1` behavioral diagnostics
 
@@ -175,7 +200,7 @@ The diagnostics comprise:
 
 **Aggregation scope.** Under “Best,” all diagnostics are explicitly scoped to the same detection-best record; the report does not borrow honesty, calibration, revision, or stability values from another run. Cross-run honesty stability is therefore null under Best because fewer than two records are in scope. Average/median group aggregates micro-pool each independently eligible component’s sufficient counts and retain component coverage.
 
-**Schema-v4 provenance.** Each envelope names `diagnostics-v1`, computation/source scope, completeness and eligibility, and available artifact/archive hashes. Provenance and component-level warnings make full-artifact results distinguishable from conservative partial reconstruction.
+**Diagnostics provenance.** Each envelope names `diagnostics-v1`, computation/source scope, completeness and eligibility, and available artifact/archive hashes. Provenance and component-level warnings make full-artifact results distinguishable from conservative partial reconstruction.
 
 **Backfill procedure.** Dry-run is the default. These are the literal repository-root commands:
 
@@ -183,7 +208,7 @@ The diagnostics comprise:
 # Preview only; writes nothing
 dotnet run --project src/SuperCalcBenchmark.Cli -- backfill-archive-metrics --archive ./archive
 # Write after review and preserve byte-exact originals in the explicit backup
-dotnet run --project src/SuperCalcBenchmark.Cli -- backfill-archive-metrics --archive ./archive --write --backup ./artifacts/v0.7.2-archive-backup
+dotnet run --project src/SuperCalcBenchmark.Cli -- backfill-archive-metrics --archive ./archive --write --backup ./artifacts/v0.7.3-archive-backup
 ```
 
 The v0.7.2 artifact-availability census contains **153 scorecards**: **139 complete raw-audit artifacts** and **14 partial artifact records** (13 invalid/schema-only audit outputs and one missing artifact). Artifact availability is distinct from truth validity. After normalized `run1`/`run2` alias handling and strict gates, the truth census is **125 valid/eligible**, **15 partial/ineligible**, and **13 invalid/ineligible** envelopes. Neither census changes any official score.
@@ -199,4 +224,4 @@ The comparison view derives several read-only series from the archived scorecard
 - **Completion/parsing health:** parse success rate, loop rate, empty-output-with-reasoning rate, FP-per-finding, duplicate rate, ignored-low-confidence rate, response/reasoning sizes, and duration.
 - **Run 1 vs Run 2:** score delta, FP reduction, TP retention, added TPs, and dropped TPs.
 
-Generated `comparison.html`/`comparison.csv` reports live under `archive/_reports/` and are regenerated on demand, so they are not committed; the underlying scorecards are.
+Generated `comparison.html`/`comparison.csv` reports live under the selected archive's `_reports/` directory and are regenerated on demand. The tracked repository scorecards are the historical seed/reference set; ordinary new GUI/CLI runs stay in the per-user pool unless a maintainer explicitly passes `--archive ./archive`.

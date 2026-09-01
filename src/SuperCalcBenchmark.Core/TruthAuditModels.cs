@@ -70,6 +70,12 @@ public sealed class TruthAuditCorrection
 
 public sealed class TruthAuditResult
 {
+    /// <summary>
+    /// Null identifies legacy scorecards written before explicit validation metadata.
+    /// New audits are eligible for headline metrics only when this value is true.
+    /// </summary>
+    public bool? IsValid { get; init; }
+    public List<string> ValidationErrors { get; init; } = [];
     public string Summary { get; init; } = string.Empty;
     public string AuditedRunName { get; init; } = string.Empty;
     public string AuditedRunScoreProfile { get; init; } = string.Empty;

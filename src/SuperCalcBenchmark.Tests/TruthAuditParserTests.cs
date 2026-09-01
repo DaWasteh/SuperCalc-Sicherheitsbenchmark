@@ -13,6 +13,11 @@ internal static partial class TestRunner
         var parsed = new TruthAuditParser().Parse(schema + "\nHere is the final answer:\n" + final);
         Assert(parsed.ParseSucceeded && parsed.RequiredArraysPresent, "final response must parse with required arrays");
         Assert(parsed.AuditedRun == "Run 2" && parsed.Summary == "final", "final response must beat preceding schema echo");
+
+        var afterBraceFlood = new TruthAuditParser().Parse(
+            new string('{', 4096) + new string('}', 4096) + "\n" + final);
+        Assert(afterBraceFlood.ParseSucceeded && afterBraceFlood.AuditedRun == "Run 2",
+            "deep non-JSON prefixes must not cause quadratic truth-audit recovery or hide the final response");
     }
 
     private static void TruthAuditParserHandlesCandidateBoundaries()

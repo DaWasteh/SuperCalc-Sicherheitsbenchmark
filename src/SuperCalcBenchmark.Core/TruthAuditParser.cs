@@ -99,9 +99,42 @@ public sealed class TruthAuditParser
             else if (ch == '}' && starts.Count > 0)
             {
                 var start = starts.Pop();
-                yield return content[start..(i + 1)];
+                var end = i + 1;
+                if (CouldBeTruthAuditObject(content, start, end))
+                {
+                    yield return content[start..end];
+                }
             }
         }
+    }
+
+    private static bool CouldBeTruthAuditObject(string content, int start, int end)
+    {
+        var contentStart = start + 1;
+        while (contentStart < end && char.IsWhiteSpace(content[contentStart]))
+        {
+            contentStart++;
+        }
+
+        var length = Math.Min(512, Math.Max(0, end - contentStart));
+        if (length == 0)
+        {
+            return false;
+        }
+
+        var prefix = content.AsSpan(contentStart, length);
+        var firstQuote = prefix.IndexOf('"');
+        if (firstQuote < 0)
+        {
+            return false;
+        }
+
+        prefix = prefix[firstQuote..];
+        return prefix.Contains("\"summary\"", StringComparison.OrdinalIgnoreCase)
+               || prefix.Contains("\"truth_items\"", StringComparison.OrdinalIgnoreCase)
+               || prefix.Contains("\"audited_run\"", StringComparison.OrdinalIgnoreCase)
+               || prefix.Contains("\"false_positive_admissions\"", StringComparison.OrdinalIgnoreCase)
+               || prefix.Contains("\"corrections\"", StringComparison.OrdinalIgnoreCase);
     }
 
     private sealed record Candidate(TruthAuditResponse Response, int Score, int Ordinal);

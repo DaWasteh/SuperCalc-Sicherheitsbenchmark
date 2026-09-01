@@ -448,6 +448,7 @@ internal static partial class TestRunner
                 Response = "{\"summary\":\"ok\"}",
                 TruthAudit = new TruthAuditResult
                 {
+                    IsValid = true,
                     AuditedRunName = "Run 1",
                     AuditedRunScoreProfile = ScoringProfiles.OfficialV1Name,
                     AuditedRunScorePercent = 70,
@@ -526,6 +527,7 @@ internal static partial class TestRunner
                 Response = "{\"summary\":\"ok\"}",
                 TruthAudit = new TruthAuditResult
                 {
+                    IsValid = true,
                     AuditedRunName = "Run 1",
                     AuditedRunScoreProfile = ScoringProfiles.OfficialV1Name,
                     AuditedRunScorePercent = 29,
@@ -661,7 +663,7 @@ internal static partial class TestRunner
             var record = store.LoadAll().Single();
             Assert(record.SchemaVersion == ArchiveRecord.CurrentSchemaVersion, "new archives should use current schema version");
             Assert(record.TimeoutSeconds == BenchmarkDefaults.OfficialRequestTimeoutSeconds, "request timeout should be archived for slow-model diagnostics");
-            Assert(File.ReadAllText(path).Contains("\"schemaVersion\": 4", StringComparison.Ordinal), "saved JSON should declare schema v4");
+            Assert(File.ReadAllText(path).Contains($"\"schemaVersion\": {ArchiveRecord.CurrentSchemaVersion}", StringComparison.Ordinal), "saved JSON should declare the current schema");
             var run = record.Runs.Single();
             Assert(run.FinishReason == "length", "finish reason should be archived");
             Assert(run.LoopDetected, "loop flag should be archived");
@@ -948,6 +950,7 @@ internal static partial class TestRunner
 
     private static ScoringResult FakeScore(string runName, double scorePercent, int fullTp, int partialTp, int fp, int missed)
     {
+        var scoreableCount = Math.Max(FakeVulnIds.Length, fullTp + partialTp + missed);
         var vulnerabilities = new List<VulnerabilityScore>();
         for (var i = 0; i < FakeVulnIds.Length; i++)
         {
@@ -971,8 +974,8 @@ internal static partial class TestRunner
         return new ScoringResult
         {
             RunName = runName,
-            ScoreableVulnerabilityCount = FakeVulnIds.Length,
-            FindingCount = fullTp + partialTp + fp,
+            ScoreableVulnerabilityCount = scoreableCount,
+            FindingCount = fullTp + partialTp + fp + 2,
             FullTruePositives = fullTp,
             PartialTruePositives = partialTp,
             FalsePositives = fp,
@@ -982,7 +985,7 @@ internal static partial class TestRunner
             RawPoints = fullTp * 5.0 + partialTp * 2.5,
             ScorePercent = scorePercent,
             Precision = (fullTp + partialTp + fp) == 0 ? 0 : (fullTp + partialTp * 0.5) / (fullTp + partialTp + fp),
-            Recall = FakeVulnIds.Length == 0 ? 0 : (fullTp + partialTp * 0.5) / FakeVulnIds.Length,
+            Recall = scoreableCount == 0 ? 0 : (fullTp + partialTp * 0.5) / scoreableCount,
             F1 = 0.5,
             Vulnerabilities = vulnerabilities
         };

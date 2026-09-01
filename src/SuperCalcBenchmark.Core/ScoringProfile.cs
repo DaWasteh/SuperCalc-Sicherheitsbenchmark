@@ -166,9 +166,25 @@ public static class ScoringProfiles
     }
 
     public static bool IsOfficialComparableProfile(string? profile)
-        => !string.IsNullOrWhiteSpace(profile)
-           && profile.StartsWith("official-", StringComparison.OrdinalIgnoreCase)
-           && !string.Equals(profile, "legacy-unknown", StringComparison.OrdinalIgnoreCase);
+        => string.Equals(profile, OfficialV1Name, StringComparison.OrdinalIgnoreCase)
+           || string.Equals(profile, OfficialV2Name, StringComparison.OrdinalIgnoreCase);
+
+    public static bool IsOfficialComparableIdentity(
+        string? profile,
+        int profileVersion,
+        string? engineVersion,
+        int scoreSchemaVersion)
+    {
+        if (scoreSchemaVersion != ScoreSchemaVersion
+            || !IsOfficialComparableProfile(profile)
+            || !TryGet(profile, out var known))
+        {
+            return false;
+        }
+
+        return profileVersion == known.Version
+               && string.Equals(engineVersion, known.EngineVersion, StringComparison.Ordinal);
+    }
 }
 
 public sealed class ScoreComputationContext

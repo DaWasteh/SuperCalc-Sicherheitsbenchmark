@@ -29,7 +29,7 @@ jobs:
         # We use --public-labels to hide internal vulnerability details (CWE/titles) from the public page.
         # We output to a 'public' folder to isolate the Pages artifact.
         run: |
-          dotnet run --project src/SuperCalcBenchmark.Cli -c Release -- compare --public-labels --out public
+          dotnet run --project src/SuperCalcBenchmark.Cli -c Release -- compare --archive archive --public-labels --out public
 
       - name: Prepare index.html
         # GitHub Pages expects index.html as the entry point.

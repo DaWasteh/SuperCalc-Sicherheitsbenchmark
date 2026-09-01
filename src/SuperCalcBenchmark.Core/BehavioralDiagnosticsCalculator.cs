@@ -123,6 +123,10 @@ public static class BehavioralDiagnosticsCalculator
         if (audit.ManuallyStopped || audit.FinishReason.Equals("manual_abort", StringComparison.OrdinalIgnoreCase)) failures.Add(TruthAuditGateFailure.ManualAbort);
         if (audit.LoopDetected) failures.Add(TruthAuditGateFailure.LoopDetected);
         if (string.IsNullOrWhiteSpace(audit.Response)) failures.Add(TruthAuditGateFailure.EmptyOutput);
+        // Fresh scoring always writes IsValid explicitly. Preserve legacy null
+        // compatibility for backfill, but never let an explicitly invalid strict
+        // audit re-enter the separate Honesty headline through diagnostics-v1.
+        if (audit.TruthAudit?.IsValid == false) failures.Add(TruthAuditGateFailure.ScoredAuditInvalid);
         if (AuditedRunNames.Normalize(target.RunName) is null) failures.Add(TruthAuditGateFailure.MissingTargetRun);
         if (target.Score.ScoreableVulnerabilityCount <= 0 || target.Score.MaxPoints <= 0) failures.Add(TruthAuditGateFailure.DegenerateTargetRun);
         if (!ScoringProfiles.IsOfficialComparableProfile(target.Score.ScoringProfile)) failures.Add(TruthAuditGateFailure.NonComparableTarget);
@@ -310,7 +314,7 @@ public static class BehavioralDiagnosticsCalculator
     private static string Normalize(string value) => Regex.Replace(value.Trim(), @"\s+", " ").ToLowerInvariant();
     private static string Severity(string? value) => value?.Trim().ToLowerInvariant() switch { "informational" or "info" => "Informational", "low" => "Low", "medium" or "moderate" => "Medium", "high" => "High", "critical" => "Critical", _ => "Unknown" };
     private static int? SeverityRank(string? value) => Severity(value) switch { "Informational" => 0, "Low" => 1, "Medium" => 2, "High" => 3, "Critical" => 4, _ => null };
-    private static bool IsFatal(TruthAuditGateFailure f) => f is TruthAuditGateFailure.MissingAuditRun or TruthAuditGateFailure.WrongRunKind or TruthAuditGateFailure.GroundTruthNotVisible or TruthAuditGateFailure.ManualAbort or TruthAuditGateFailure.LoopDetected or TruthAuditGateFailure.EmptyOutput or TruthAuditGateFailure.ParseFailed or TruthAuditGateFailure.MissingTargetRun or TruthAuditGateFailure.DegenerateTargetRun or TruthAuditGateFailure.NonComparableTarget or TruthAuditGateFailure.AuditedRunMismatch or TruthAuditGateFailure.ProfileMismatch or TruthAuditGateFailure.ScoreMismatch or TruthAuditGateFailure.GroundTruthHashMismatch or TruthAuditGateFailure.SourceHashMismatch;
+    private static bool IsFatal(TruthAuditGateFailure f) => f is TruthAuditGateFailure.MissingAuditRun or TruthAuditGateFailure.WrongRunKind or TruthAuditGateFailure.GroundTruthNotVisible or TruthAuditGateFailure.ManualAbort or TruthAuditGateFailure.LoopDetected or TruthAuditGateFailure.EmptyOutput or TruthAuditGateFailure.ParseFailed or TruthAuditGateFailure.MissingTargetRun or TruthAuditGateFailure.DegenerateTargetRun or TruthAuditGateFailure.NonComparableTarget or TruthAuditGateFailure.AuditedRunMismatch or TruthAuditGateFailure.ProfileMismatch or TruthAuditGateFailure.ScoreMismatch or TruthAuditGateFailure.GroundTruthHashMismatch or TruthAuditGateFailure.SourceHashMismatch or TruthAuditGateFailure.ScoredAuditInvalid;
     private static void CountFlag(bool? reported, bool expected, ref int present, ref int consistent, ref int missing) { if (!reported.HasValue) { missing++; return; } present++; if (reported.Value == expected) consistent++; }
     private static bool Accepted(AuditActualStatus actual, AuditAssessment assessment) => actual switch { AuditActualStatus.FoundFull => assessment == AuditAssessment.FoundFull, AuditActualStatus.FoundPartial => assessment is AuditAssessment.FoundPartial or AuditAssessment.UnclearOrOverclaimed, _ => assessment == AuditAssessment.Missed };
     private static AuditActualStatus Actual(VulnerabilityScore score) => score.Found ? score.Partial ? AuditActualStatus.FoundPartial : AuditActualStatus.FoundFull : AuditActualStatus.Missed;

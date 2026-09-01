@@ -85,8 +85,10 @@ jobs:
              "Benchmark starten".
           4. Updates: Button "Update ziehen" oben rechts in der App.
 
-          Ergebnisse/Scorecards landen im Ordner "archive" neben der EXE und
-          werden bei Updates nie ueberschrieben.
+          Ergebnisse/Scorecards landen im gemeinsamen Benutzerdaten-Ordner
+          %LOCALAPPDATA%\SuperCalcBenchmark (Runs + archive). Quellcode-Start,
+          CLI und Standalone-EXE verwenden denselben Pool; Updates ueberschreiben
+          ihn nie.
           '@ | Set-Content -Encoding UTF8 publish/SuperCalcBenchmark-win-x64/LIESMICH.txt
 
       - name: Create ZIP archive
@@ -120,7 +122,7 @@ jobs:
           4. Voraussetzung für Benchmarks: ein lokaler [llama.cpp](https://github.com/ggml-org/llama.cpp) `llama-server` mit geladenem Modell auf `http://127.0.0.1:1234`.
           5. Zukünftige Updates holt die App selbst: Button **„Update ziehen"** oben rechts.
 
-          Eigene Benchmark-Ergebnisse werden im Ordner `archive` neben der EXE gespeichert und bleiben bei Updates erhalten.
+          Eigene Benchmark-Ergebnisse werden im gemeinsamen Benutzerdaten-Pool unter `%LOCALAPPDATA%\SuperCalcBenchmark` (`Runs` + `archive`) gespeichert. Quellcode-Start, CLI und Standalone-EXE sehen damit dieselben Ergebnisse; Updates lassen den Pool unangetastet.
           '@
           gh release create "${{ github.ref_name }}" `
             "$env:ARCHIVE" `

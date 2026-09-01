@@ -81,7 +81,7 @@ internal static partial class TestRunner
             Assert(written.Written==1 && written.Backups==1, "write should update and back up exactly once");
             Assert(File.ReadAllBytes(Path.Combine(backup, Path.GetRelativePath(root, scorePath))).SequenceEqual(before), "backup must preserve exact original bytes including BOM");
             using var doc = JsonDocument.Parse(File.ReadAllBytes(scorePath));
-            Assert(doc.RootElement.GetProperty("schemaVersion").GetInt32()==4 && doc.RootElement.TryGetProperty("behavioralDiagnostics", out _), "write must create schema 4 diagnostics");
+            Assert(doc.RootElement.GetProperty("schemaVersion").GetInt32()==ArchiveRecord.CurrentSchemaVersion && doc.RootElement.TryGetProperty("behavioralDiagnostics", out _), "write must create current-schema diagnostics");
             var stableStamp=File.GetLastWriteTimeUtc(scorePath); var stableBytes=File.ReadAllBytes(scorePath);
             var second = new ArchiveMetricsBackfiller(root).Run(new() { Write=true, BackupDirectory=backup, ComputedAt=options.ComputedAt.AddDays(1) });
             Assert(second.AlreadyCurrent==1 && second.Written==0 && File.GetLastWriteTimeUtc(scorePath)==stableStamp && File.ReadAllBytes(scorePath).SequenceEqual(stableBytes), "second write must be byte/timestamp stable");

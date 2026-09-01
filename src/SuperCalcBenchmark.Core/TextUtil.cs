@@ -101,7 +101,15 @@ internal static partial class TextUtil
         return string.IsNullOrWhiteSpace(result) ? "unknown" : result;
     }
 
-    public static double Clamp01(double value) => Math.Min(1, Math.Max(0, value));
+    public static double Clamp01(double value)
+    {
+        if (double.IsNaN(value) || double.IsNegativeInfinity(value))
+        {
+            return 0;
+        }
+
+        return double.IsPositiveInfinity(value) ? 1 : Math.Min(1, Math.Max(0, value));
+    }
 
     public static double Clamp(double value, double min, double max) => Math.Min(max, Math.Max(min, value));
 

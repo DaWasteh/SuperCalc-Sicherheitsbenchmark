@@ -10,7 +10,7 @@ namespace SuperCalcBenchmark.Core;
 /// </summary>
 public sealed class ArchiveRecord
 {
-    public const int CurrentSchemaVersion = 4;
+    public const int CurrentSchemaVersion = 5;
 
     [JsonPropertyName("schemaVersion")]
     public int SchemaVersion { get; set; }
@@ -116,6 +116,10 @@ public sealed class ArchiveRecord
     [JsonPropertyName("runDirectory")]
     public string RunDirectory { get; set; } = string.Empty;
 
+    /// <summary>Portable path relative to the shared data root (preferred over runDirectory).</summary>
+    [JsonPropertyName("runLocator")]
+    public string RunLocator { get; set; } = string.Empty;
+
     /// <summary>
     /// Physical JSON path this record was loaded from. Not serialized; used by the app/CLI
     /// to persist manual identity edits back to the scorecard.
@@ -152,8 +156,7 @@ public sealed class ArchiveRecord
     [JsonIgnore]
     public ArchiveRunScore? PrimaryRun =>
         Runs.LastOrDefault(IsHeadlineEligible)
-        ?? Runs.LastOrDefault(IsDetectionRun)
-        ?? Runs.LastOrDefault();
+        ?? Runs.LastOrDefault(IsDetectionRun);
 
     private static bool IsDetectionRun(ArchiveRunScore run) =>
         !string.Equals(run.RunKind, "truth_audit", StringComparison.OrdinalIgnoreCase);
@@ -338,6 +341,17 @@ public sealed class ArchiveRunScore
 
     [JsonPropertyName("officialComparable")]
     public bool OfficialComparable { get; set; }
+
+    /// <summary>
+    /// Computed freshness marker. Parser-v1 scorecards remain readable historical
+    /// evidence but require parser-v2 re-evaluation before they are current again.
+    /// </summary>
+    [JsonIgnore]
+    public bool IsCurrentEvaluation => OfficialComparable
+                                       && string.Equals(
+                                           ParserVersion,
+                                           ResponseParser.CurrentParserVersion,
+                                           StringComparison.OrdinalIgnoreCase);
 
     [JsonPropertyName("scorePercent")]
     public double ScorePercent { get; set; }
@@ -607,7 +621,12 @@ public sealed class ArchiveRunScore
             IsRescored = score.IsRescored,
             IsAdjudicated = score.IsAdjudicated,
             AdjudicationLabel = score.AdjudicationLabel,
-            OfficialComparable = ScoringProfiles.IsOfficialComparableProfile(score.ScoringProfile) && !score.IsAdjudicated,
+            OfficialComparable = ScoringProfiles.IsOfficialComparableIdentity(
+                                     score.ScoringProfile,
+                                     score.ScoringProfileVersion,
+                                     score.ScoringEngineVersion,
+                                     score.ScoreSchemaVersion)
+                                 && !score.IsAdjudicated,
             ScorePercent = score.ScorePercent,
             RawPoints = score.RawPoints,
             MaxPoints = score.MaxPoints > 0 ? score.MaxPoints : score.ScoreableVulnerabilityCount * ScoringProfiles.OfficialV1.Points.FullTp,
@@ -640,6 +659,28 @@ public sealed class ArchiveRunScore
         VulnerabilityCredit = new Dictionary<string, double>(existingCredit, StringComparer.OrdinalIgnoreCase);
         VulnerabilityResults ??= [];
         FalsePositiveTaxonomy = new Dictionary<string, int>(FalsePositiveTaxonomy ?? new Dictionary<string, int>(), StringComparer.OrdinalIgnoreCase);
+
+        if (record is { SchemaVersion: > 0 and < 4 })
+        {
+            // v1-v3 scorecards did not consistently serialize these derived totals.
+            // Reconstruct only absent (zero) values; explicit non-zero legacy data wins.
+            if (ScoreableVulnerabilityCount == 0
+                && FullTruePositives + PartialTruePositives + Missed > 0)
+            {
+                ScoreableVulnerabilityCount = FullTruePositives + PartialTruePositives + Missed;
+            }
+
+            if (FindingCount == 0
+                && FullTruePositives + PartialTruePositives + FalsePositives + Duplicates + IgnoredLowConfidence > 0)
+            {
+                FindingCount = FullTruePositives + PartialTruePositives + FalsePositives + Duplicates + IgnoredLowConfidence;
+            }
+
+            if (MaxPoints == 0 && ScoreableVulnerabilityCount > 0)
+            {
+                MaxPoints = ScoreableVulnerabilityCount * ScoringProfiles.OfficialV1.Points.FullTp;
+            }
+        }
 
         if (HallucinationRate <= 0 && FindingCount > 0 && FalsePositives > 0)
         {
@@ -690,7 +731,17 @@ public sealed class ArchiveRunScore
             ParseMode = "unknown";
         }
 
-        if (string.IsNullOrWhiteSpace(RunKind))
+        // Prompt identity must be restored before deriving RunKind. In particular,
+        // legacy Run-3 entries often omitted both fields and must never become a
+        // blind-analysis headline merely because normalization happened out of order.
+        if (string.IsNullOrWhiteSpace(PromptVersion))
+        {
+            PromptVersion = PromptVersions.ForRunName(RunName);
+        }
+
+        if (string.IsNullOrWhiteSpace(RunKind)
+            || string.Equals(RunKind, "blind_analysis", StringComparison.OrdinalIgnoreCase)
+               && !string.Equals(PromptVersion, PromptVersions.AnalysisV1, StringComparison.OrdinalIgnoreCase))
         {
             RunKind = PromptVersion switch
             {
@@ -728,17 +779,12 @@ public sealed class ArchiveRunScore
         {
             ParserVersion = string.Equals(ScoringProfile, "legacy-unknown", StringComparison.OrdinalIgnoreCase)
                 ? "unknown"
-                : ResponseParser.CurrentParserVersion;
+                : ResponseParser.LegacyParserVersion;
         }
 
         if (string.IsNullOrWhiteSpace(SourceSha256))
         {
             SourceSha256 = record?.SourceSha256 ?? string.Empty;
-        }
-
-        if (string.IsNullOrWhiteSpace(PromptVersion))
-        {
-            PromptVersion = PromptVersions.ForRunName(RunName);
         }
 
         if (ComputedAt == default)
@@ -747,7 +793,11 @@ public sealed class ArchiveRunScore
         }
 
         var eligibleForOfficialComparison = !IsAdjudicated
-                                            && ScoringProfiles.IsOfficialComparableProfile(ScoringProfile)
+                                            && ScoringProfiles.IsOfficialComparableIdentity(
+                                                ScoringProfile,
+                                                ScoringProfileVersion,
+                                                ScoringEngineVersion,
+                                                ScoreSchemaVersion)
                                             && (record?.SourceHashMatches ?? true)
                                             && string.Equals(record?.BenchmarkProfile ?? "official", "official", StringComparison.OrdinalIgnoreCase)
                                             && !IsDegenerate

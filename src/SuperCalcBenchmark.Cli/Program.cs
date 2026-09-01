@@ -77,7 +77,7 @@ internal static class Program
 
     private static int Validate(ParsedArgs args)
     {
-        var options = BuildOptions(args, requireModel: false);
+        var options = BuildOptions(args, requireModel: false, includeArchive: false);
         var store = new GroundTruthStore();
         var result = store.Validate(options.GroundTruthPath, options.SourcePath);
 
@@ -201,7 +201,7 @@ internal static class Program
 
     private static int ArchiveList(ParsedArgs args)
     {
-        var archiveDir = Path.GetFullPath(args.Get("--archive", ArchiveStore.DefaultArchiveFolderName));
+        var archiveDir = ResolveArchiveRoot(args);
         var benchmark = args.GetNullable("--benchmark");
         var store = new ArchiveStore(archiveDir);
         var groups = store.LoadGroups(benchmark);
@@ -233,11 +233,12 @@ internal static class Program
 
     private static int MigrateArchiveScores(ParsedArgs args)
     {
-        var archiveDir = Path.GetFullPath(args.Get("--archive", ArchiveStore.DefaultArchiveFolderName));
+        var paths = BenchmarkPathResolver.Resolve();
+        var archiveDir = ResolveArchiveRoot(args, paths);
         var assumeProfile = args.Get("--assume-profile", ScoringProfiles.OfficialV1Name);
         var write = args.Has("--write") && !args.Has("--dry-run");
-        var groundTruthPath = args.Get("--ground-truth", Path.Combine("benchmarks", "supercalc-v3", "ground_truth.json"));
-        var sourcePath = args.Get("--source", "enhanced_calc.cpp");
+        var groundTruthPath = ResolveOptionPath(args, "--ground-truth", paths.GroundTruthPath);
+        var sourcePath = ResolveOptionPath(args, "--source", paths.SourcePath);
         var backupDir = args.GetNullable("--backup");
         if (write && string.IsNullOrWhiteSpace(backupDir))
         {
@@ -284,11 +285,11 @@ internal static class Program
 
     private static int BackfillArchiveMetrics(ParsedArgs args)
     {
-        var archiveDir = Path.GetFullPath(args.Get("--archive", ArchiveStore.DefaultArchiveFolderName));
+        var archiveDir = ResolveArchiveRoot(args);
         var write = args.Has("--write") && !args.Has("--dry-run");
         var backup = args.GetNullable("--backup");
         if (write && string.IsNullOrWhiteSpace(backup))
-            backup = Path.Combine(archiveDir, "_migration-backup", "v0.7.2-behavioral-metrics-" + DateTime.Now.ToString("yyyyMMdd-HHmmss"));
+            backup = Path.Combine(archiveDir, "_migration-backup", "v0.7.3-behavioral-metrics-" + DateTime.Now.ToString("yyyyMMdd-HHmmss"));
         var result = new ArchiveMetricsBackfiller(archiveDir).Run(new() { Write=write, BackupDirectory=backup });
         Console.WriteLine($"Archive: {archiveDir}"); Console.WriteLine($"Mode: {(write ? "write" : "dry-run")}");
         if (backup is not null) Console.WriteLine($"Backup: {backup}");
@@ -300,7 +301,8 @@ internal static class Program
 
     private static int Compare(ParsedArgs args)
     {
-        var archiveDir = Path.GetFullPath(args.Get("--archive", ArchiveStore.DefaultArchiveFolderName));
+        var paths = BenchmarkPathResolver.Resolve();
+        var archiveDir = ResolveArchiveRoot(args, paths);
         var benchmark = args.GetNullable("--benchmark");
         var family = args.GetNullable("--family");
         var aggregate = ParseAggregate(args.Get("--aggregate", "average"));
@@ -308,7 +310,7 @@ internal static class Program
         var metric = ParseMetric(args.Get("--metric", "score"));
         var scoringProfile = args.GetNullable("--scoring-profile");
         var publicLabels = args.Has("--public-labels");
-        var groundTruthPath = args.Get("--ground-truth", Path.Combine("benchmarks", "supercalc-v3", "ground_truth.json"));
+        var groundTruthPath = ResolveOptionPath(args, "--ground-truth", paths.GroundTruthPath);
         var metadata = VulnerabilityMetadataIndex.Load(groundTruthPath, publicLabels);
 
         var store = new ArchiveStore(archiveDir);
@@ -351,9 +353,20 @@ internal static class Program
             PrintScore(result.Run2.Score);
         }
 
-        if (result.Run3?.TruthAudit is not null)
+        if (result.Run3?.TruthAudit is { } audit)
         {
-            Console.WriteLine($"Run 3 truth-audit: accountability {result.Run3.TruthAudit.AccountabilityScore:0.##}/100 | overclaim {result.Run3.TruthAudit.OverclaimRate:P1}");
+            if (audit.IsValid == true)
+            {
+                Console.WriteLine($"Run 3 truth-audit: accountability {audit.AccountabilityScore:0.##}/100 | overclaim {audit.OverclaimRate:P1}");
+            }
+            else
+            {
+                Console.WriteLine($"Run 3 truth-audit: n/a (invalid; {audit.ValidationErrors.Count} validation error(s))");
+                foreach (var error in audit.ValidationErrors)
+                {
+                    Console.WriteLine($"  - {error}");
+                }
+            }
         }
 
         Console.WriteLine($"Report: {Path.Combine(result.OutputDirectory, "report.md")}");
@@ -427,8 +440,9 @@ internal static class Program
         };
     }
 
-    private static BenchmarkOptions BuildOptions(ParsedArgs args, bool requireModel)
+    private static BenchmarkOptions BuildOptions(ParsedArgs args, bool requireModel, bool includeArchive = true)
     {
+        var paths = BenchmarkPathResolver.Resolve();
         var model = args.Get("--model", string.Empty);
         if (requireModel && string.IsNullOrWhiteSpace(model))
         {
@@ -449,13 +463,13 @@ internal static class Program
         {
             ServerUrl = args.Get("--server", "http://127.0.0.1:1234"),
             Model = model,
-            SourcePath = args.Get("--source", "enhanced_calc.cpp"),
-            GroundTruthPath = args.Get("--ground-truth", Path.Combine("benchmarks", "supercalc-v3", "ground_truth.json")),
-            AnalysisPromptPath = args.Get("--analysis-prompt", Path.Combine("benchmarks", "supercalc-v3", "prompts", "analysis_v1.md")),
-            SelfValidatePromptPath = args.Get("--self-prompt", Path.Combine("benchmarks", "supercalc-v3", "prompts", "self_validate_v1.md")),
-            TruthAuditPromptPath = args.Get("--truth-audit-prompt", Path.Combine("benchmarks", "supercalc-v3", "prompts", "truth_audit_v1.md")),
-            SchemaPath = args.Get("--schema", Path.Combine("benchmarks", "supercalc-v3", "schemas", "llm_findings.schema.json")),
-            TruthAuditSchemaPath = args.Get("--truth-audit-schema", Path.Combine("benchmarks", "supercalc-v3", "schemas", "truth_audit.schema.json")),
+            SourcePath = ResolveOptionPath(args, "--source", paths.SourcePath),
+            GroundTruthPath = ResolveOptionPath(args, "--ground-truth", paths.GroundTruthPath),
+            AnalysisPromptPath = ResolveOptionPath(args, "--analysis-prompt", paths.AnalysisPromptPath),
+            SelfValidatePromptPath = ResolveOptionPath(args, "--self-prompt", paths.SelfValidatePromptPath),
+            TruthAuditPromptPath = ResolveOptionPath(args, "--truth-audit-prompt", paths.TruthAuditPromptPath),
+            SchemaPath = ResolveOptionPath(args, "--schema", paths.FindingsSchemaPath),
+            TruthAuditSchemaPath = ResolveOptionPath(args, "--truth-audit-schema", paths.TruthAuditSchemaPath),
             OutputDirectory = args.GetNullable("--out"),
             MaxTokens = args.GetInt("--max-tokens", -1),
             Seed = args.GetInt("--seed", seedStart ?? 12345),
@@ -473,25 +487,64 @@ internal static class Program
             WithTruthAudit = withTruthAudit,
             TruthAuditSource = args.Get("--truth-audit-source", "best"),
             AbortOnLoop = !args.Has("--no-loop-abort"),
-            ArchiveDirectory = ResolveArchiveDirectory(args),
+            ArchiveDirectory = includeArchive ? ResolveArchiveDirectory(args, paths) : null,
             QuantOverride = args.GetNullable("--quant"),
             AdjudicationPath = args.GetNullable("--adjudication")
         };
     }
 
-    // Archiving is on by default (folder: ./archive) so every run becomes comparable.
-    // --no-archive disables it; --archive <dir> picks a custom location.
-    private static string? ResolveArchiveDirectory(ParsedArgs args)
+    // Archiving is on by default in the shared per-user data pool. --no-archive
+    // disables it; --archive <dir> remains an explicit, CWD-relative override.
+    private static string? ResolveArchiveDirectory(ParsedArgs args, BenchmarkPathSet paths)
     {
         if (args.Has("--no-archive"))
         {
             return null;
         }
 
+        return ResolveArchiveRoot(args, paths);
+    }
+
+    private static string ResolveArchiveRoot(ParsedArgs args, BenchmarkPathSet? paths = null)
+    {
         var explicitPath = args.GetNullable("--archive");
-        return Path.GetFullPath(string.IsNullOrWhiteSpace(explicitPath)
-            ? ArchiveStore.DefaultArchiveFolderName
-            : explicitPath);
+        if (!string.IsNullOrWhiteSpace(explicitPath))
+        {
+            return Path.GetFullPath(explicitPath);
+        }
+
+        paths ??= TryResolvePathsForArchiveImport();
+        var archiveRoot = paths?.ArchiveRoot
+                          ?? Path.Combine(BenchmarkPathResolver.ResolveDataRoot(), ArchiveStore.DefaultArchiveFolderName);
+        if (paths is not null)
+        {
+            var import = ArchivePoolImporter.ImportLegacyArchive(paths.LegacyArchiveRoot, archiveRoot);
+            if (import.Imported > 0 || import.Failed > 0)
+            {
+                Console.Error.WriteLine($"Legacy archive import: {import.Imported} imported, {import.AlreadyPresent} already present, {import.Failed} failed.");
+            }
+        }
+
+        return archiveRoot;
+    }
+
+    private static BenchmarkPathSet? TryResolvePathsForArchiveImport()
+    {
+        try
+        {
+            return BenchmarkPathResolver.Resolve();
+        }
+        catch (DirectoryNotFoundException)
+        {
+            // archive-list/backfill can still operate on the shared pool without assets.
+            return null;
+        }
+    }
+
+    private static string ResolveOptionPath(ParsedArgs args, string option, string defaultPath)
+    {
+        var value = args.GetNullable(option);
+        return string.IsNullOrWhiteSpace(value) ? defaultPath : Path.GetFullPath(value);
     }
 
     private static ComparisonAggregate ParseAggregate(string value)
@@ -598,7 +651,7 @@ internal static class Program
         Console.WriteLine("  score-fixture    Score a saved model response without contacting llama-server");
         Console.WriteLine("  archive-list     List archived runs grouped by model family + quant");
         Console.WriteLine("  migrate-archive-scores  Version legacy archive scorecards without changing points");
-        Console.WriteLine("  backfill-archive-metrics  Explicitly backfill non-scoring schema-v4 diagnostics (dry-run by default)");
+        Console.WriteLine("  backfill-archive-metrics  Explicitly backfill non-scoring diagnostics (dry-run by default)");
         Console.WriteLine("  compare          Build an HTML comparison (bar + radar) from archived runs");
         Console.WriteLine();
         Console.WriteLine("Examples:");
@@ -609,7 +662,7 @@ internal static class Program
         Console.WriteLine("  dotnet run --project src/SuperCalcBenchmark.Cli -- archive-list");
         Console.WriteLine("  dotnet run --project src/SuperCalcBenchmark.Cli -- migrate-archive-scores --assume-profile official-v1 --dry-run");
         Console.WriteLine("  dotnet run --project src/SuperCalcBenchmark.Cli -- backfill-archive-metrics --archive ./archive  # dry-run; partial/ineligible records are retained explicitly");
-        Console.WriteLine("  dotnet run --project src/SuperCalcBenchmark.Cli -- backfill-archive-metrics --archive ./archive --write --backup ./artifacts/v0.7.2-archive-backup");
+        Console.WriteLine("  dotnet run --project src/SuperCalcBenchmark.Cli -- backfill-archive-metrics --archive ./archive --write --backup ./artifacts/v0.7.3-archive-backup");
         Console.WriteLine("  dotnet run --project src/SuperCalcBenchmark.Cli -- compare                          # all models");
         Console.WriteLine("  dotnet run --project src/SuperCalcBenchmark.Cli -- compare --family qwen3-coder-30b # quants of one model");
         Console.WriteLine("  dotnet run --project src/SuperCalcBenchmark.Cli -- score-fixture --response tools/response-fixtures/perfect.json --out results/perfect");
@@ -617,9 +670,9 @@ internal static class Program
         Console.WriteLine("Common options:");
         Console.WriteLine("  --server <url>             Default: http://127.0.0.1:1234");
         Console.WriteLine("  --model <id>               Required for run");
-        Console.WriteLine("  --source <file>            Default: enhanced_calc.cpp");
-        Console.WriteLine("  --ground-truth <file>      Default: benchmarks/supercalc-v3/ground_truth.json");
-        Console.WriteLine("  --out <dir>                Default: %LOCALAPPDATA%/SuperCalcBenchmark/Runs/<timestamp_model>");
+        Console.WriteLine("  --source <file>            Default: <asset-root>/enhanced_calc.cpp");
+        Console.WriteLine("  --ground-truth <file>      Default: <asset-root>/benchmarks/supercalc-v3/ground_truth.json");
+        Console.WriteLine("  --out <dir>                Default: <data-root>/Runs/<timestamp_model_guid>");
         Console.WriteLine("  --temperature <number>     Default: 0.0");
         Console.WriteLine("  --top-p <number>           Default: 1.0");
         Console.WriteLine("  --seed <int>               Default: 12345");
@@ -637,7 +690,7 @@ internal static class Program
         Console.WriteLine("  --allow-hash-mismatch      Development escape hatch; do not use for official scoring");
         Console.WriteLine();
         Console.WriteLine("Archive / comparison options:");
-        Console.WriteLine("  --archive <dir>            Archive folder. Default: ./archive");
+        Console.WriteLine("  --archive <dir>            Archive folder. Default: <data-root>/archive (shared by CLI and EXE)");
         Console.WriteLine("  --no-archive               Do not archive this run");
         Console.WriteLine("  --quant <label>            Manual quant label when the model id has none (e.g. Q4_K_M)");
         Console.WriteLine("  --adjudication <file>      Apply local reviewer decisions after automatic scoring (score label +adjudicated)");
@@ -650,6 +703,10 @@ internal static class Program
         Console.WriteLine("  --assume-profile <name>    migrate-archive-scores: mark legacy scores with this profile");
         Console.WriteLine("  --write / --dry-run        archive migration/backfill: dry-run is default; partial/ineligible diagnostics remain explicit");
         Console.WriteLine("  --backup <dir>             archive migration/backfill: byte-exact backup destination before writes");
+        Console.WriteLine();
+        Console.WriteLine("Path environment overrides:");
+        Console.WriteLine($"  {BenchmarkPathResolver.AssetRootEnvironmentVariable}=<dir>   Immutable benchmark assets (source, prompts, schemas)");
+        Console.WriteLine($"  {BenchmarkPathResolver.DataRootEnvironmentVariable}=<dir>    Mutable shared runs, archive, and app settings");
         Console.WriteLine("  --public-labels            compare: hide vulnerability titles/CWEs/modules in the HTML payload");
     }
 

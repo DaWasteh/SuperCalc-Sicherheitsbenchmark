@@ -10,6 +10,7 @@ using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
+using Microsoft.Win32;
 using SuperCalcBenchmark.Core;
 
 namespace SuperCalcBenchmark.App;
@@ -17,6 +18,7 @@ namespace SuperCalcBenchmark.App;
 public partial class MainWindow : Window
 {
     private readonly string _repositoryRoot;
+    private readonly BenchmarkPathSet _paths;
     private CancellationTokenSource? _benchmarkCancellation;
     private CancellationTokenSource? _run1ManualStop;
     private CancellationTokenSource? _run2ManualStop;
@@ -24,7 +26,11 @@ public partial class MainWindow : Window
     private int _activeRunNumber;
     private bool _stopAfterCurrentPassRequested;
     private BenchmarkRunResult? _lastResult;
+    private readonly AppSettingsStore _appSettingsStore = new();
+    private ThemePreference _themePreference = ThemePreference.System;
     private BenchmarkTheme _currentTheme = BenchmarkTheme.Light;
+    private bool _themeSelectionReady;
+    private HwndSource? _windowMessageSource;
 
     private enum BenchmarkTheme
     {
@@ -67,6 +73,9 @@ public partial class MainWindow : Window
     private const int DwmwaUseImmersiveDarkModeBefore20H1 = 19;
     private const int DwmwaCaptionColor = 35;
     private const int DwmwaTextColor = 36;
+    private const int WmSettingChange = 0x001A;
+    private const int WmThemeChanged = 0x031A;
+    private const int WmDwmColorizationColorChanged = 0x0320;
 
     private static readonly string[] ProtectedBenchmarkDataDirectories = ["archive", "artifacts", "results"];
 
@@ -83,14 +92,26 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        _paths = BenchmarkPathResolver.Resolve();
+        _repositoryRoot = _paths.AssetRoot;
         RestoreWindowPlacement();
         SourceInitialized += MainWindow_SourceInitialized;
-        ApplyTheme(BenchmarkTheme.Light);
-        _repositoryRoot = FindRepositoryRoot();
-        DotNetInfoTextBlock.Text = $"v{ReleaseUpdater.GetCurrentVersion()} | .NET {Environment.Version.Major} | {_repositoryRoot}";
+
+        _themePreference = _appSettingsStore.Load().Theme;
+        ThemeComboBox.SelectedIndex = ThemePreferenceToIndex(_themePreference);
+        _themeSelectionReady = true;
+        ApplyThemePreference(_themePreference, persist: false);
+
+        var archiveImport = ArchivePoolImporter.ImportLegacyArchive(_paths.LegacyArchiveRoot, _paths.ArchiveRoot);
+        DotNetInfoTextBlock.Text = $"v{ReleaseUpdater.GetCurrentVersion()} | .NET {Environment.Version.Major} | Assets: {_repositoryRoot} | Daten: {_paths.DataRoot}";
         ShowRawOutputPlaceholder(Run1RawPanel, "Noch kein Run-1-Output. Nach dem Benchmark siehst du hier Prompt, Thinking, Output und Raw API Response.");
         ShowRawOutputPlaceholder(Run2RawPanel, "Noch kein Run-2-Output. Nach dem Benchmark siehst du hier Prompt, Thinking, Output und Raw API Response.");
         ShowRawOutputPlaceholder(Run3RawPanel, "Noch kein Run-3-Output. Run 3 läuft automatisch nach Run 2 als Truth-Audit / Ehrlichkeitstest.");
+        if (archiveImport.Imported > 0 || archiveImport.Failed > 0)
+        {
+            AppendLog($"Legacy-Archivimport: {archiveImport.Imported} übernommen, {archiveImport.AlreadyPresent} bereits vorhanden, {archiveImport.Failed} fehlgeschlagen.");
+        }
+        AppendLog($"Gemeinsamer Datenpool: {_paths.DataRoot}");
         AppendLog("Bereit. Wenn du ein neues Modell in llama-server geladen hast: Refresh Models klicken, Modell wählen, Benchmark starten.");
         InitializeComparisonPlaceholder();
         Loaded += MainWindow_Loaded;
@@ -98,15 +119,87 @@ public partial class MainWindow : Window
 
     private void ThemeComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (sender is ComboBox comboBox)
+        if (!_themeSelectionReady || sender is not ComboBox comboBox)
         {
-            ApplyTheme(comboBox.SelectedIndex == 1 ? BenchmarkTheme.Dark : BenchmarkTheme.Light);
+            return;
+        }
+
+        var preference = comboBox.SelectedIndex switch
+        {
+            1 => ThemePreference.Light,
+            2 => ThemePreference.Dark,
+            _ => ThemePreference.System
+        };
+        ApplyThemePreference(preference, persist: true);
+    }
+
+    private static int ThemePreferenceToIndex(ThemePreference preference) => preference switch
+    {
+        ThemePreference.Light => 1,
+        ThemePreference.Dark => 2,
+        _ => 0
+    };
+
+    private void ApplyThemePreference(ThemePreference preference, bool persist)
+    {
+        _themePreference = preference;
+        var effectiveTheme = preference switch
+        {
+            ThemePreference.Light => BenchmarkTheme.Light,
+            ThemePreference.Dark => BenchmarkTheme.Dark,
+            _ => ResolveSystemTheme()
+        };
+        ApplyTheme(effectiveTheme);
+
+        if (persist)
+        {
+            _appSettingsStore.TrySave(new AppSettings { Theme = preference });
+        }
+    }
+
+    private static BenchmarkTheme ResolveSystemTheme()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return BenchmarkTheme.Light;
+        }
+
+        try
+        {
+            const string personalizeKey = @"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize";
+            using var key = Registry.CurrentUser.OpenSubKey(personalizeKey);
+            var value = key?.GetValue("AppsUseLightTheme");
+            return value is not null && Convert.ToInt32(value) == 0
+                ? BenchmarkTheme.Dark
+                : BenchmarkTheme.Light;
+        }
+        catch (Exception exception) when (exception is IOException
+                                          or UnauthorizedAccessException
+                                          or InvalidCastException
+                                          or FormatException
+                                          or OverflowException)
+        {
+            return BenchmarkTheme.Light;
         }
     }
 
     private void MainWindow_SourceInitialized(object? sender, EventArgs e)
     {
+        var handle = new WindowInteropHelper(this).Handle;
+        _windowMessageSource = HwndSource.FromHwnd(handle);
+        _windowMessageSource?.AddHook(WindowMessageHook);
         ApplyWindowChromeTheme(_currentTheme);
+    }
+
+    private IntPtr WindowMessageHook(IntPtr hwnd, int message, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        if (_themePreference == ThemePreference.System
+            && message is WmSettingChange or WmThemeChanged or WmDwmColorizationColorChanged)
+        {
+            Dispatcher.BeginInvoke(() => ApplyThemePreference(ThemePreference.System, persist: false));
+        }
+
+        return IntPtr.Zero;
     }
 
     private void ApplyTheme(BenchmarkTheme theme)
@@ -948,19 +1041,21 @@ public partial class MainWindow : Window
         var seed = ParseInt(SeedTextBox.Text, "Seed", 12345, min: int.MinValue);
         var outputDirectory = string.IsNullOrWhiteSpace(OutputDirectoryTextBox.Text)
             ? null
-            : Path.GetFullPath(OutputDirectoryTextBox.Text.Trim());
+            : Path.IsPathRooted(OutputDirectoryTextBox.Text.Trim())
+                ? Path.GetFullPath(OutputDirectoryTextBox.Text.Trim())
+                : Path.GetFullPath(OutputDirectoryTextBox.Text.Trim(), _paths.DataRoot);
 
         return new BenchmarkOptions
         {
             ServerUrl = ServerUrlTextBox.Text.Trim(),
             Model = model,
-            SourcePath = Path.Combine(_repositoryRoot, "enhanced_calc.cpp"),
-            GroundTruthPath = Path.Combine(_repositoryRoot, "benchmarks", "supercalc-v3", "ground_truth.json"),
-            AnalysisPromptPath = Path.Combine(_repositoryRoot, "benchmarks", "supercalc-v3", "prompts", "analysis_v1.md"),
-            SelfValidatePromptPath = Path.Combine(_repositoryRoot, "benchmarks", "supercalc-v3", "prompts", "self_validate_v1.md"),
-            TruthAuditPromptPath = Path.Combine(_repositoryRoot, "benchmarks", "supercalc-v3", "prompts", "truth_audit_v1.md"),
-            SchemaPath = Path.Combine(_repositoryRoot, "benchmarks", "supercalc-v3", "schemas", "llm_findings.schema.json"),
-            TruthAuditSchemaPath = Path.Combine(_repositoryRoot, "benchmarks", "supercalc-v3", "schemas", "truth_audit.schema.json"),
+            SourcePath = _paths.SourcePath,
+            GroundTruthPath = _paths.GroundTruthPath,
+            AnalysisPromptPath = _paths.AnalysisPromptPath,
+            SelfValidatePromptPath = _paths.SelfValidatePromptPath,
+            TruthAuditPromptPath = _paths.TruthAuditPromptPath,
+            SchemaPath = _paths.FindingsSchemaPath,
+            TruthAuditSchemaPath = _paths.TruthAuditSchemaPath,
             OutputDirectory = outputDirectory,
             Temperature = 0.0,
             TopP = 1.0,
@@ -972,7 +1067,7 @@ public partial class MainWindow : Window
             WithTruthAudit = true,
             TruthAuditRepeatMode = "always",
             TruthAuditSource = "best",
-            ArchiveDirectory = Path.Combine(_repositoryRoot, ArchiveStore.DefaultArchiveFolderName),
+            ArchiveDirectory = _paths.ArchiveRoot,
             QuantOverride = string.IsNullOrWhiteSpace(QuantTextBox.Text) ? null : QuantTextBox.Text.Trim()
         };
     }
@@ -1145,8 +1240,10 @@ public partial class MainWindow : Window
             if (string.Equals(artifacts.RunName, "Run 3", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(artifacts.RunKind, "truth_audit", StringComparison.OrdinalIgnoreCase))
             {
-                var accountability = artifacts.TruthAudit?.AccountabilityScore ?? artifacts.Score.ScorePercent;
-                Run3ScoreTextBlock.Text = $"{accountability:0.##}/100";
+                var audit = artifacts.TruthAudit;
+                Run3ScoreTextBlock.Text = audit?.IsValid == true
+                    ? $"{audit.AccountabilityScore:0.##}/100"
+                    : "n/a (ungültig)";
                 Run3DetailsTextBlock.Text = FormatTruthAuditDetails(artifacts);
                 Run3AuditSummaryTextBlock.Text = FormatTruthAuditDetails(artifacts);
                 Run3AuditGrid.ItemsSource = artifacts.TruthAudit?.Items;
@@ -1197,7 +1294,7 @@ public partial class MainWindow : Window
 
     private const string AllFamiliesLabel = "Alle Modelle";
 
-    private string ArchiveRoot => Path.Combine(_repositoryRoot, ArchiveStore.DefaultArchiveFolderName);
+    private string ArchiveRoot => _paths.ArchiveRoot;
 
     private IReadOnlyList<ArchiveGroup> _comparisonGroups = [];
     private int _comparisonLoadVersion;
@@ -1450,8 +1547,14 @@ public partial class MainWindow : Window
             ComparisonAggregate.Median => "Median",
             _ => "Durchschnitt"
         };
+        var selectedRunCount = report.Series.Sum(series => series.RunCount);
+        var currentRunCount = report.Series.Sum(series => series.CurrentEvaluationRunCount);
+        var freshness = currentRunCount == selectedRunCount
+            ? $"Alle {selectedRunCount} ausgewählten Runs sind aktuell ({ResponseParser.CurrentParserVersion}). "
+            : $"Aktuell: {currentRunCount}/{selectedRunCount} Runs ({ResponseParser.CurrentParserVersion}); ältere Parser-Auswertungen sind als veraltet markiert. ";
         ComparisonStatusTextBlock.Text =
             $"{report.Series.Count} Modell/Quant-Gruppe(n), {report.VulnerabilityAxis.Count} Schwachstellen · Wertung: {aggregate}, Run-Sicht: {SelectedRunView}, Metrik: {SelectedMetric}. " +
+            freshness +
             "HTML enthält clientseitige Filter, Heatmap, Severity-, Run1/Run2-, Stabilitäts- und Qualitätsdiagnosen. Modell/Quant per Doppelklick direkt bearbeiten.";
     }
 
@@ -1538,6 +1641,7 @@ public partial class MainWindow : Window
         public string ModelFamily { get; set; } = string.Empty;
         public string Quant { get; set; } = string.Empty;
         public int RunCount { get; init; }
+        public string CurrentDisplay { get; init; } = string.Empty;
         public double ScorePercent { get; init; }
         public double CriticalRecall { get; init; }
         public double Stability { get; init; }
@@ -1573,6 +1677,7 @@ public partial class MainWindow : Window
             ModelFamily = series.ModelFamily,
             Quant = series.Quant,
             RunCount = series.RunCount,
+            CurrentDisplay = $"{series.CurrentEvaluationRunCount}/{series.RunCount}",
             ScorePercent = series.ScorePercent,
             CriticalRecall = series.CriticalRecall,
             Stability = series.VulnerabilityStability,
@@ -1672,8 +1777,13 @@ public partial class MainWindow : Window
             return $"Truth-Audit ohne auswertbare Audit-Daten. Finish: {artifacts.FinishReason} | Output: {FormatTokens(artifacts.ResponseTokens)} | Thinking: {FormatTokens(artifacts.ReasoningTokens)} | Gesamt: {FormatTokens(artifacts.CompletionTokens)}";
         }
 
-        var details = $"Auditiert: {audit.AuditedRunName} ({audit.AuditedRunScorePercent:0.##}/100, {audit.AuditedRunScoreProfile})\n" +
-                      $"Accountability: {audit.AccountabilityScore:0.##}/100 | Truth-Accuracy: {audit.TruthAuditAccuracy:P1}\n" +
+        var validity = audit.IsValid == true
+            ? "Gültig: Accountability ist headline-fähig."
+            : $"UNGÜLTIG: Accountability n/a; nur diagnostische Rohwerte. Fehler: {(audit.ValidationErrors.Count == 0 ? "keine Validitätsmetadaten" : string.Join(" | ", audit.ValidationErrors))}";
+        var metricLabel = audit.IsValid == true ? "Accountability" : "Diagnostisch berechnete Accountability (nicht headline-fähig)";
+        var details = $"{validity}\n" +
+                      $"Auditiert: {audit.AuditedRunName} ({audit.AuditedRunScorePercent:0.##}/100, {audit.AuditedRunScoreProfile})\n" +
+                      $"{metricLabel}: {audit.AccountabilityScore:0.##}/100 | Truth-Accuracy: {audit.TruthAuditAccuracy:P1}\n" +
                       $"Miss-Admission: {audit.MissAdmissionRate:P1} | FP-Admission: {audit.FalsePositiveAdmissionRate:P1} | Overclaim: {audit.OverclaimRate:P1}\n" +
                       $"Quote-Fidelity: {audit.QuoteFidelity:P1} | Evidence-Laundering: {audit.EvidenceLaunderingCount} | Widersprüche: {audit.ContradictionCount}\n" +
                       $"Tatsächlich verpasst: {audit.ActualMissedCount} | tatsächliche False Positives: {audit.ActualFalsePositiveCount}\n" +
@@ -2032,8 +2142,8 @@ public partial class MainWindow : Window
 
     // ---- Window placement persistence ---------------------------------------
 
-    private static string WindowPlacementFilePath =>
-        Path.Combine(GetLocalAppDataRoot(), "SuperCalcBenchmark", "window-placement.json");
+    private string WindowPlacementFilePath =>
+        Path.Combine(_paths.DataRoot, "window-placement.json");
 
     private void RestoreWindowPlacement()
     {
@@ -2090,6 +2200,17 @@ public partial class MainWindow : Window
     {
         SaveWindowPlacement();
         base.OnClosing(e);
+    }
+
+    protected override void OnClosed(EventArgs e)
+    {
+        if (_windowMessageSource is not null)
+        {
+            _windowMessageSource.RemoveHook(WindowMessageHook);
+            _windowMessageSource = null;
+        }
+
+        base.OnClosed(e);
     }
 
     private void SaveWindowPlacement()
@@ -2227,8 +2348,7 @@ public partial class MainWindow : Window
         }
 
         var backupRoot = Path.Combine(
-            GetLocalAppDataRoot(),
-            "SuperCalcBenchmark",
+            BenchmarkPathResolver.ResolveDataRoot(),
             "UpdateBackups",
             DateTime.Now.ToString("yyyyMMdd-HHmmss-fff"));
         var copiedFiles = new List<string>();
@@ -2449,12 +2569,6 @@ public partial class MainWindow : Window
         }
     }
 
-    private static string GetLocalAppDataRoot()
-    {
-        var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        return string.IsNullOrWhiteSpace(localAppData) ? Path.GetTempPath() : localAppData;
-    }
-
     private sealed record SafeUpdateResult(
         string RepositoryRoot,
         string HeadBefore,
@@ -2473,47 +2587,4 @@ public partial class MainWindow : Window
 
     private sealed record ProcessRunResult(int ExitCode, string StandardOutput, string StandardError);
 
-    private static string FindRepositoryRoot()
-    {
-        var candidates = new List<DirectoryInfo>();
-        AddRepositoryRootCandidate(candidates, Environment.GetEnvironmentVariable("SUPERCALC_REPOSITORY_ROOT"));
-        AddRepositoryRootCandidate(candidates, Environment.CurrentDirectory);
-        AddRepositoryRootCandidate(candidates, AppContext.BaseDirectory);
-
-        var repositoryRoot = candidates.FirstOrDefault(IsRepositoryRoot);
-        if (repositoryRoot is not null)
-        {
-            return repositoryRoot.FullName;
-        }
-
-        return candidates.FirstOrDefault()?.FullName ?? Environment.CurrentDirectory;
-    }
-
-    private static void AddRepositoryRootCandidate(List<DirectoryInfo> candidates, string? start)
-    {
-        if (string.IsNullOrWhiteSpace(start))
-        {
-            return;
-        }
-
-        var directory = new DirectoryInfo(start);
-        while (directory is not null)
-        {
-            if (IsBenchmarkAssetRoot(directory) &&
-                !candidates.Any(candidate => string.Equals(candidate.FullName, directory.FullName, StringComparison.OrdinalIgnoreCase)))
-            {
-                candidates.Add(directory);
-            }
-
-            directory = directory.Parent;
-        }
-    }
-
-    private static bool IsBenchmarkAssetRoot(DirectoryInfo directory) =>
-        File.Exists(Path.Combine(directory.FullName, "enhanced_calc.cpp")) &&
-        File.Exists(Path.Combine(directory.FullName, "benchmarks", "supercalc-v3", "ground_truth.json"));
-
-    private static bool IsRepositoryRoot(DirectoryInfo directory) =>
-        File.Exists(Path.Combine(directory.FullName, "SuperCalcBenchmark.slnx")) ||
-        Directory.Exists(Path.Combine(directory.FullName, ".git"));
 }
