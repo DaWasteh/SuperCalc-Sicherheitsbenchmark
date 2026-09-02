@@ -24,6 +24,15 @@ public sealed class BenchmarkPathSet
     public string FindingsSchemaPath => Path.Combine(AssetRoot, "benchmarks", "supercalc-v3", "schemas", "llm_findings.schema.json");
     public string TruthAuditSchemaPath => Path.Combine(AssetRoot, "benchmarks", "supercalc-v3", "schemas", "truth_audit.schema.json");
     public string LegacyArchiveRoot => Path.Combine(AssetRoot, ArchiveStore.DefaultArchiveFolderName);
+
+    /// <summary>
+    /// Tracked archive in a Git checkout. Null for standalone/portable asset folders, where
+    /// benchmark results must remain exclusively in the shared per-user data pool.
+    /// </summary>
+    public string? RepositoryArchiveRoot => Directory.Exists(Path.Combine(AssetRoot, ".git"))
+                                            || File.Exists(Path.Combine(AssetRoot, ".git"))
+        ? LegacyArchiveRoot
+        : null;
 }
 
 /// <summary>

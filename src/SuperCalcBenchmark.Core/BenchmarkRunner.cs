@@ -4,7 +4,7 @@ namespace SuperCalcBenchmark.Core;
 
 public sealed class BenchmarkRunner
 {
-    private const string ToolVersion = "0.7.3";
+    private const string ToolVersion = "0.7.4";
 
     private readonly GroundTruthStore _groundTruthStore;
     private readonly PromptBuilder _promptBuilder;
@@ -562,6 +562,7 @@ public sealed class BenchmarkRunner
                 TruthAuditSource = original.TruthAuditSource,
                 AbortOnLoop = original.AbortOnLoop,
                 ArchiveDirectory = original.ArchiveDirectory,
+                ArchiveMirrorDirectory = original.ArchiveMirrorDirectory,
                 QuantOverride = original.QuantOverride,
                 AdjudicationPath = original.AdjudicationPath
             };
@@ -767,6 +768,30 @@ public sealed class BenchmarkRunner
             var store = new ArchiveStore(options.ArchiveDirectory);
             result.ArchivedRecordPath = store.Save(result, options.QuantOverride);
             progress?.Invoke($"Archived scorecard: {result.ArchivedRecordPath}");
+
+            if (!string.IsNullOrWhiteSpace(options.ArchiveMirrorDirectory)
+                && !BenchmarkPathResolver.SamePath(options.ArchiveDirectory, options.ArchiveMirrorDirectory))
+            {
+                try
+                {
+                    var mirror = ArchivePoolImporter.ImportScorecard(
+                        result.ArchivedRecordPath,
+                        options.ArchiveDirectory,
+                        options.ArchiveMirrorDirectory);
+                    if (mirror.Imported > 0)
+                    {
+                        progress?.Invoke($"Mirrored scorecard into repository archive: {options.ArchiveMirrorDirectory}");
+                    }
+                    else if (mirror.Failed > 0)
+                    {
+                        progress?.Invoke($"Warning: scorecard was saved locally but repository mirroring failed ({string.Join("; ", mirror.Warnings)}).");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    progress?.Invoke($"Warning: scorecard was saved locally but repository mirroring failed ({ex.Message}).");
+                }
+            }
         }
         catch (Exception ex)
         {

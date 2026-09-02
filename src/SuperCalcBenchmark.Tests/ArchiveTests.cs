@@ -360,10 +360,14 @@ internal static partial class TestRunner
         try
         {
             var store = new ArchiveStore(tempRoot);
-            store.Save(FakeResult("Qwen3-Coder-30B-Q4_K_M.gguf", 70, 7, 0, 0, 3, includeReasoning: true));
+            store.Save(FakeResult("Qwen3-Coder-30B-Q4_K_M.gguf", 70, 7, 0, 0, 3, includeReasoning: true, parserVersion: ResponseParser.LegacyParserVersion));
             store.Save(FakeResult("Qwen3-Coder-30B-Q4_K_M.gguf", 82, 8, 0, 0, 2));
 
             var report = ComparisonReport.Build(store.LoadGroups(), "supercalc-v3");
+            Assert(report.Series.Single().RunCount == 2, "full comparison should retain current and deprecated scores");
+            Assert(report.CurrentEvaluationSeries.Single().RunCount == 1
+                   && Math.Abs(report.CurrentEvaluationSeries.Single().ScorePercent - 82) < 0.001,
+                "current projection should recompute aggregates from parser-v2 scores only");
             var writer = new ComparisonHtmlWriter();
             var html = writer.BuildHtml(report);
 
@@ -387,6 +391,10 @@ internal static partial class TestRunner
             Assert(html.Contains("{key:\"scoreMedian\",title:\"Median\",kind:\"num\"}", StringComparison.Ordinal), "generated script must contain a valid scoreMedian column object");
             Assert(!html.Contains("{key:\"scoreMedian\"},title:", StringComparison.Ordinal), "generated script must not close the scoreMedian object early");
             Assert(html.Contains("s.run1Score ?? s.score", StringComparison.Ordinal) && html.Contains("s.run2Delta ?? 0", StringComparison.Ordinal), "browser count/value fallback must preserve measured zero");
+            Assert(html.Contains("include deprecated scores", StringComparison.Ordinal), "html should expose the requested deprecated-score filter");
+            Assert(html.Contains("st.includeDeprecated ? allSeries : currentSeries", StringComparison.Ordinal), "deprecated-score filter should switch between recomputed all/current projections");
+            Assert(html.Contains("${esc(d.scoringProfile||\"legacy-unknown\")} - ${esc(d.parserVersion||\"parser-unbekannt\")}", StringComparison.Ordinal), "score versions should read official-v1 - parser-vN without a duplicate profile version");
+            Assert(!html.Contains(" v${d.scoringProfileVersion", StringComparison.Ordinal), "score-version labels must not append the confusing duplicate v1");
 
             const string open = "<script id=\"data\" type=\"application/json\">";
             var start = html.IndexOf(open, StringComparison.Ordinal);
@@ -395,10 +403,15 @@ internal static partial class TestRunner
             var end = html.IndexOf("</script>", start, StringComparison.Ordinal);
             var json = html[start..end].Trim();
             using var doc = JsonDocument.Parse(json);
-            Assert(doc.RootElement.GetProperty("series").GetArrayLength() == 1, "payload should contain one series");
+            var payloadSeries = doc.RootElement.GetProperty("series");
+            Assert(payloadSeries.GetArrayLength() == 2, "payload should contain all-score and current-only projections");
             Assert(doc.RootElement.TryGetProperty("axis", out _), "payload should expose vulnerability metadata axis");
-            var series = doc.RootElement.GetProperty("series")[0];
-            Assert(series.GetProperty("runCount").GetInt32() == 2, "payload should preserve repeated-run count for uncertainty bars");
+            var series = payloadSeries.EnumerateArray().Single(item => item.GetProperty("scope").GetString() == "all");
+            var currentSeries = payloadSeries.EnumerateArray().Single(item => item.GetProperty("scope").GetString() == "current");
+            Assert(series.GetProperty("runCount").GetInt32() == 2, "all-score payload should preserve repeated-run count for uncertainty bars");
+            Assert(currentSeries.GetProperty("runCount").GetInt32() == 1
+                   && currentSeries.GetProperty("score").GetDouble() == 82,
+                "current payload should exclude parser-v1 scores and preserve parser-v2 values");
             Assert(series.TryGetProperty("scoreMedian", out _), "payload should expose scoreMedian for uncertainty tables");
             Assert(series.TryGetProperty("scoreMin", out var scoreMin), "payload should expose scoreMin for uncertainty bars");
             Assert(series.TryGetProperty("scoreMax", out var scoreMax), "payload should expose scoreMax for uncertainty bars");
@@ -909,9 +922,9 @@ internal static partial class TestRunner
 
     // Minimal but realistic BenchmarkRunResult with a single primary run whose per-vulnerability
     // credit is derived from the requested TP/partial/missed counts.
-    private static BenchmarkRunResult FakeResult(string model, double scorePercent, int fullTp, int partialTp, int fp, int missed, bool includeReasoning = false, string repeatGroupId = "", int repeatIndex = 1, int repeatCount = 1)
+    private static BenchmarkRunResult FakeResult(string model, double scorePercent, int fullTp, int partialTp, int fp, int missed, bool includeReasoning = false, string repeatGroupId = "", int repeatIndex = 1, int repeatCount = 1, string parserVersion = ResponseParser.CurrentParserVersion)
     {
-        var score = FakeScore("Run 1", scorePercent, fullTp, partialTp, fp, missed);
+        var score = FakeScore("Run 1", scorePercent, fullTp, partialTp, fp, missed, parserVersion);
         var reasoningDisclosure = FakeReasoningDisclosure(fullTp, partialTp, fp, includeReasoning);
         var now = DateTimeOffset.Now;
         return new BenchmarkRunResult
@@ -948,7 +961,7 @@ internal static partial class TestRunner
         };
     }
 
-    private static ScoringResult FakeScore(string runName, double scorePercent, int fullTp, int partialTp, int fp, int missed)
+    private static ScoringResult FakeScore(string runName, double scorePercent, int fullTp, int partialTp, int fp, int missed, string parserVersion = ResponseParser.CurrentParserVersion)
     {
         var scoreableCount = Math.Max(FakeVulnIds.Length, fullTp + partialTp + missed);
         var vulnerabilities = new List<VulnerabilityScore>();
@@ -974,6 +987,7 @@ internal static partial class TestRunner
         return new ScoringResult
         {
             RunName = runName,
+            ParserVersion = parserVersion,
             ScoreableVulnerabilityCount = scoreableCount,
             FindingCount = fullTp + partialTp + fp + 2,
             FullTruePositives = fullTp,

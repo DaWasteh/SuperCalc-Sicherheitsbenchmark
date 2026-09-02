@@ -459,7 +459,7 @@ public sealed class BenchmarkRunArtifacts
 
 public sealed class BenchmarkRunResult
 {
-    public string ToolVersion { get; init; } = "0.7.3";
+    public string ToolVersion { get; init; } = "0.7.4";
     public BehavioralDiagnosticsEnvelope? BehavioralDiagnostics { get; set; }
     public string BenchmarkId { get; init; } = string.Empty;
     public string BenchmarkProfile { get; init; } = "official";
@@ -544,6 +544,13 @@ public sealed class BenchmarkOptions
     /// (grouped by model family + quant) for later comparison. Null disables archiving.
     /// </summary>
     public string? ArchiveDirectory { get; init; }
+
+    /// <summary>
+    /// Optional secondary archive used by Git checkouts. A completed compact scorecard is
+    /// mirrored here after the canonical per-user archive write; prompts/raw responses are
+    /// never copied. Null keeps standalone and non-repository runs local-only.
+    /// </summary>
+    public string? ArchiveMirrorDirectory { get; init; }
 
     /// <summary>
     /// Optional manual quant label (e.g. "Q4_K_M") used when the model id does not encode the

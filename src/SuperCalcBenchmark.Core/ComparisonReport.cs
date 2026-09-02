@@ -21,7 +21,14 @@ public sealed class ComparisonReport
     /// <summary>Shared vulnerability axis enriched with local-only metadata where available.</summary>
     public List<VulnerabilityAxisItem> VulnerabilityMetadata { get; init; } = [];
 
+    /// <summary>All selected scores, including historical/deprecated parser evaluations.</summary>
     public List<ComparisonSeries> Series { get; init; } = [];
+
+    /// <summary>
+    /// The same comparison recomputed from current parser evaluations only. The HTML report
+    /// uses this projection by default and can opt into <see cref="Series"/> interactively.
+    /// </summary>
+    public List<ComparisonSeries> CurrentEvaluationSeries { get; init; } = [];
 
     public bool IsEmpty => Series.Count == 0;
 
@@ -39,8 +46,32 @@ public sealed class ComparisonReport
         ComparisonRunView runView = ComparisonRunView.Primary,
         ComparisonMetric metric = ComparisonMetric.Score,
         string? scoringProfile = null)
+        => BuildCore(
+            groups,
+            benchmarkId,
+            aggregate,
+            familyFilter,
+            metadataIndex ?? VulnerabilityMetadataIndex.Empty,
+            runView,
+            metric,
+            scoringProfile,
+            currentEvaluationOnly: false,
+            fixedAxis: null,
+            fixedAxisMetadata: null);
+
+    private static ComparisonReport BuildCore(
+        IReadOnlyList<ArchiveGroup> groups,
+        string benchmarkId,
+        ComparisonAggregate aggregate,
+        string? familyFilter,
+        VulnerabilityMetadataIndex metadataIndex,
+        ComparisonRunView runView,
+        ComparisonMetric metric,
+        string? scoringProfile,
+        bool currentEvaluationOnly,
+        IReadOnlyList<string>? fixedAxis,
+        IReadOnlyList<VulnerabilityAxisItem>? fixedAxisMetadata)
     {
-        metadataIndex ??= VulnerabilityMetadataIndex.Empty;
         var selected = string.IsNullOrWhiteSpace(familyFilter)
             ? groups
             : groups.Where(g => string.Equals(g.ModelFamily, familyFilter, StringComparison.OrdinalIgnoreCase)).ToList();
@@ -53,21 +84,24 @@ public sealed class ComparisonReport
                     .Select(record => ComparisonSample.TryCreate(record, runView, scoringProfile))
                     .Where(sample => sample is not null)
                     .Select(sample => sample!)
+                    .Where(sample => !currentEvaluationOnly || sample.Run.IsCurrentEvaluation)
                     .ToList()
             })
             .Where(item => item.Samples.Count > 0)
             .ToList();
 
-        var axis = selectedWithSamples
-            .SelectMany(item => item.Samples)
-            .SelectMany(sample => sample.CreditIds)
-            .Concat(metadataIndex.Items.Select(i => i.Id))
-            .Where(id => !string.IsNullOrWhiteSpace(id))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(id => id, StringComparer.OrdinalIgnoreCase)
-            .ToList();
+        var axis = fixedAxis?.ToList()
+                   ?? selectedWithSamples
+                       .SelectMany(item => item.Samples)
+                       .SelectMany(sample => sample.CreditIds)
+                       .Concat(metadataIndex.Items.Select(i => i.Id))
+                       .Where(id => !string.IsNullOrWhiteSpace(id))
+                       .Distinct(StringComparer.OrdinalIgnoreCase)
+                       .OrderBy(id => id, StringComparer.OrdinalIgnoreCase)
+                       .ToList();
 
-        var axisMetadata = axis.Select(metadataIndex.GetOrCreate).ToList();
+        var axisMetadata = fixedAxisMetadata?.ToList()
+                           ?? axis.Select(metadataIndex.GetOrCreate).ToList();
         var series = new List<ComparisonSeries>();
         foreach (var item in selectedWithSamples)
         {
@@ -80,7 +114,7 @@ public sealed class ComparisonReport
             var perVuln = axis.Select(id => AggregateCredit(samples, id, aggregate, bestSample)).ToList();
             IReadOnlyList<ComparisonSample> rateSamples = aggregate == ComparisonAggregate.Best ? [bestSample] : samples;
             var visibleReasoningRunCount = rateSamples.Count(s => s.Run.ReasoningDisclosure?.HasVisibleReasoning == true);
-            var pairMetrics = BuildPairMetrics(samples, aggregate, bestSample, scoringProfile);
+            var pairMetrics = BuildPairMetrics(samples, aggregate, bestSample, scoringProfile, currentEvaluationOnly);
             var truthAudit = BuildTruthAuditMetrics(samples, aggregate, bestSample);
             var diagnostics = BuildDiagnosticsMetrics(samples, aggregate, bestSample);
             var severity = BuildBucketMetrics(axisMetadata, perVuln, item => item.Severity);
@@ -224,6 +258,25 @@ public sealed class ComparisonReport
             });
         }
 
+        var orderedSeries = series
+            .OrderByDescending(s => SortMetricValue(s, metric))
+            .ThenBy(s => s.Label, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        List<ComparisonSeries> currentSeries = currentEvaluationOnly
+            ? []
+            : BuildCore(
+                groups,
+                benchmarkId,
+                aggregate,
+                familyFilter,
+                metadataIndex,
+                runView,
+                metric,
+                scoringProfile,
+                currentEvaluationOnly: true,
+                fixedAxis: axis,
+                fixedAxisMetadata: axisMetadata).Series;
+
         return new ComparisonReport
         {
             BenchmarkId = benchmarkId,
@@ -233,10 +286,8 @@ public sealed class ComparisonReport
             ScoringProfile = scoringProfile,
             VulnerabilityAxis = axis,
             VulnerabilityMetadata = axisMetadata,
-            Series = series
-                .OrderByDescending(s => SortMetricValue(s, metric))
-                .ThenBy(s => s.Label, StringComparer.OrdinalIgnoreCase)
-                .ToList()
+            Series = orderedSeries,
+            CurrentEvaluationSeries = currentSeries
         };
     }
 
@@ -366,7 +417,12 @@ public sealed class ComparisonReport
         return aggregate == ComparisonAggregate.Median ? Median(values) : values.Average();
     }
 
-    private static PairMetrics BuildPairMetrics(IReadOnlyList<ComparisonSample> samples, ComparisonAggregate aggregate, ComparisonSample bestSample, string? scoringProfile)
+    private static PairMetrics BuildPairMetrics(
+        IReadOnlyList<ComparisonSample> samples,
+        ComparisonAggregate aggregate,
+        ComparisonSample bestSample,
+        string? scoringProfile,
+        bool currentEvaluationOnly)
     {
         var records = aggregate == ComparisonAggregate.Best ? new[] { bestSample.Record } : samples.Select(s => s.Record);
         var pairs = records
@@ -376,7 +432,9 @@ public sealed class ComparisonReport
                            && !pair.Run1.IsDegenerate
                            && !pair.Run2.IsDegenerate
                            && MatchesProfile(pair.Run1, scoringProfile)
-                           && MatchesProfile(pair.Run2, scoringProfile))
+                           && MatchesProfile(pair.Run2, scoringProfile)
+                           && (!currentEvaluationOnly
+                               || (pair.Run1.IsCurrentEvaluation && pair.Run2.IsCurrentEvaluation)))
             .Select(pair => (Run1: pair.Run1!, Run2: pair.Run2!))
             .ToList();
         if (pairs.Count == 0)

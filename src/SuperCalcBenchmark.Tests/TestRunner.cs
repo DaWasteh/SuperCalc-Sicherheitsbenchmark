@@ -326,6 +326,7 @@ internal static partial class TestRunner
         var baseDirectory = Path.Combine(assets, "bin", "win-x64");
         Directory.CreateDirectory(current);
         Directory.CreateDirectory(baseDirectory);
+        Directory.CreateDirectory(Path.Combine(assets, ".git"));
         try
         {
             foreach (var relative in new[]
@@ -357,6 +358,18 @@ internal static partial class TestRunner
             Assert(paths.ArchiveRoot.StartsWith(paths.DataRoot, StringComparison.OrdinalIgnoreCase)
                    && paths.RunsRoot.StartsWith(paths.DataRoot, StringComparison.OrdinalIgnoreCase),
                 "archive and runs must share the canonical mutable data root");
+            Assert(paths.RepositoryArchiveRoot is not null
+                   && BenchmarkPathResolver.SamePath(paths.RepositoryArchiveRoot, Path.Combine(assets, "archive")),
+                "Git checkouts should expose their tracked archive as a compact-scorecard mirror");
+            Directory.Delete(Path.Combine(assets, ".git"));
+            var portablePaths = BenchmarkPathResolver.Resolve(new BenchmarkPathResolutionOptions
+            {
+                CurrentDirectory = current,
+                BaseDirectory = baseDirectory,
+                ExplicitDataRoot = "shared-data"
+            });
+            Assert(portablePaths.RepositoryArchiveRoot is null,
+                "portable asset folders without .git must keep scorecards in the per-user pool only");
 
             Assert(BenchmarkPathResolver.TryCreateDataLocator(
                        Path.Combine(paths.RunsRoot, "run-1"), paths.DataRoot, out var locator)
@@ -399,10 +412,20 @@ internal static partial class TestRunner
             Assert(repeated.Imported == 0 && repeated.AlreadyPresent == 1,
                 "repeated import should deduplicate by stable record id");
 
+            var secondSourceFile = Path.Combine(source, "bench", "model", "two.json");
+            File.WriteAllText(secondSourceFile, "{\"recordId\":\"record-fast-mirror\"}", Encoding.UTF8);
+            var mirrored = ArchivePoolImporter.ImportScorecard(secondSourceFile, source, target);
+            Assert(mirrored.Imported == 1
+                   && File.Exists(Path.Combine(target, "bench", "model", "two.json")),
+                "single-scorecard mirroring should preserve the archive-relative path");
+            var mirroredAgain = ArchivePoolImporter.ImportScorecard(secondSourceFile, source, target);
+            Assert(mirroredAgain.Imported == 0 && mirroredAgain.AlreadyPresent == 1,
+                "single-scorecard mirroring should be idempotent without a full archive scan");
+
             File.WriteAllText(sourceFile, "{\"recordId\":\"record-two\",\"note\":\"same legacy path\"}", Encoding.UTF8);
             var collision = ArchivePoolImporter.ImportLegacyArchive(source, target);
             Assert(collision.Imported == 1
-                   && Directory.EnumerateFiles(target, "*.json", SearchOption.AllDirectories).Count() == 2,
+                   && Directory.EnumerateFiles(target, "*.json", SearchOption.AllDirectories).Count() == 3,
                 "different records with the same relative filename should receive collision-safe targets");
 
             var conflictingSourceA = Path.Combine(root, "legacy-a");
@@ -2453,7 +2476,7 @@ internal static partial class TestRunner
 
     private static void ReleaseVersionsAgree()
     {
-        const string expected = "0.7.3";
+        const string expected = "0.7.4";
         var runnerField = typeof(BenchmarkRunner).GetField("ToolVersion", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
         Assert(runnerField?.GetRawConstantValue() as string == expected, "BenchmarkRunner.ToolVersion must match the release version.");
         Assert(new BenchmarkRunResult().ToolVersion == expected, "BenchmarkRunResult.ToolVersion must match the release version.");

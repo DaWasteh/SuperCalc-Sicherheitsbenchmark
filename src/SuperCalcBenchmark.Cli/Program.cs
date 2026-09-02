@@ -114,7 +114,7 @@ internal static class Program
 
     private static async Task<int> RunBenchmarkAsync(ParsedArgs args)
     {
-        var options = BuildOptions(args, requireModel: true);
+        var options = BuildOptions(args, requireModel: true, mirrorArchive: true);
         using var cts = new CancellationTokenSource();
         Console.CancelKeyPress += (_, eventArgs) =>
         {
@@ -189,6 +189,7 @@ internal static class Program
             foreach (var result in results)
             {
                 result.ArchivedRecordPath = store.Save(result, options.QuantOverride);
+                MirrorScorecardToRepository(result.ArchivedRecordPath, options);
                 Console.WriteLine($"Archived: {result.ArchivedRecordPath}");
             }
         }
@@ -345,6 +346,36 @@ internal static class Program
         return 0;
     }
 
+    private static void MirrorScorecardToRepository(string sourcePath, BenchmarkOptions options)
+    {
+        if (string.IsNullOrWhiteSpace(options.ArchiveDirectory)
+            || string.IsNullOrWhiteSpace(options.ArchiveMirrorDirectory)
+            || BenchmarkPathResolver.SamePath(options.ArchiveDirectory, options.ArchiveMirrorDirectory))
+        {
+            return;
+        }
+
+        try
+        {
+            var mirror = ArchivePoolImporter.ImportScorecard(
+                sourcePath,
+                options.ArchiveDirectory,
+                options.ArchiveMirrorDirectory);
+            if (mirror.Imported > 0)
+            {
+                Console.Error.WriteLine($"Mirrored scorecard into repository archive: {options.ArchiveMirrorDirectory}");
+            }
+            else if (mirror.Failed > 0)
+            {
+                Console.Error.WriteLine($"Warning: scorecard was saved locally but repository mirroring failed ({string.Join("; ", mirror.Warnings)}).");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Warning: scorecard was saved locally but repository mirroring failed ({ex.Message}).");
+        }
+    }
+
     private static void PrintCompletedRun(BenchmarkRunResult result)
     {
         PrintScore(result.Run1.Score);
@@ -435,12 +466,17 @@ internal static class Program
             TruthAuditSource = original.TruthAuditSource,
             AbortOnLoop = original.AbortOnLoop,
             ArchiveDirectory = archiveDirectory is null ? original.ArchiveDirectory : (archiveDirectory.Length == 0 ? null : archiveDirectory),
+            ArchiveMirrorDirectory = original.ArchiveMirrorDirectory,
             QuantOverride = original.QuantOverride,
             AdjudicationPath = original.AdjudicationPath
         };
     }
 
-    private static BenchmarkOptions BuildOptions(ParsedArgs args, bool requireModel, bool includeArchive = true)
+    private static BenchmarkOptions BuildOptions(
+        ParsedArgs args,
+        bool requireModel,
+        bool includeArchive = true,
+        bool mirrorArchive = false)
     {
         var paths = BenchmarkPathResolver.Resolve();
         var model = args.Get("--model", string.Empty);
@@ -458,6 +494,13 @@ internal static class Program
         var seedStart = args.GetNullable("--seed-start") is string seedStartText && int.TryParse(seedStartText, out var parsedSeedStart)
             ? parsedSeedStart
             : (int?)null;
+
+        var archiveDirectory = includeArchive ? ResolveArchiveDirectory(args, paths) : null;
+        var archiveMirrorDirectory = mirrorArchive
+                                     && !string.IsNullOrWhiteSpace(archiveDirectory)
+                                     && BenchmarkPathResolver.SamePath(archiveDirectory, paths.ArchiveRoot)
+            ? paths.RepositoryArchiveRoot
+            : null;
 
         return new BenchmarkOptions
         {
@@ -487,7 +530,8 @@ internal static class Program
             WithTruthAudit = withTruthAudit,
             TruthAuditSource = args.Get("--truth-audit-source", "best"),
             AbortOnLoop = !args.Has("--no-loop-abort"),
-            ArchiveDirectory = includeArchive ? ResolveArchiveDirectory(args, paths) : null,
+            ArchiveDirectory = archiveDirectory,
+            ArchiveMirrorDirectory = archiveMirrorDirectory,
             QuantOverride = args.GetNullable("--quant"),
             AdjudicationPath = args.GetNullable("--adjudication")
         };
@@ -522,6 +566,16 @@ internal static class Program
             if (import.Imported > 0 || import.Failed > 0)
             {
                 Console.Error.WriteLine($"Legacy archive import: {import.Imported} imported, {import.AlreadyPresent} already present, {import.Failed} failed.");
+            }
+
+            if (paths.RepositoryArchiveRoot is not null
+                && !BenchmarkPathResolver.SamePath(archiveRoot, paths.RepositoryArchiveRoot))
+            {
+                var export = ArchivePoolImporter.ImportLegacyArchive(archiveRoot, paths.RepositoryArchiveRoot);
+                if (export.Imported > 0 || export.Failed > 0)
+                {
+                    Console.Error.WriteLine($"Repository archive sync: {export.Imported} new scorecard(s), {export.AlreadyPresent} already present, {export.Failed} failed.");
+                }
             }
         }
 

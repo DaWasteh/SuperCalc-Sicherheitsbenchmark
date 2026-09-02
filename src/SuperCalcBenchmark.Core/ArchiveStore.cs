@@ -6,7 +6,8 @@ namespace SuperCalcBenchmark.Core;
 
 /// <summary>
 /// Persists a compact <see cref="ArchiveRecord"/> for every run and reads them back grouped
-/// by model family + quant. Layout inside the repository:
+/// by model family + quant. Layout inside either the canonical per-user pool or its
+/// compact-scorecard repository mirror:
 ///
 ///   archive/
 ///     &lt;benchmarkId&gt;/
@@ -36,7 +37,7 @@ public sealed class ArchiveStore
     private readonly string _archiveRoot;
 
     /// <param name="archiveRoot">
-    /// Absolute path to the archive folder (typically &lt;repoRoot&gt;/archive). Created on demand.
+    /// Absolute path to the archive folder (typically &lt;dataRoot&gt;/archive). Created on demand.
     /// </param>
     public ArchiveStore(string archiveRoot)
     {

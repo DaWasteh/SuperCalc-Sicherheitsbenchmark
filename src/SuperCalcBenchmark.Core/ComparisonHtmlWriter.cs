@@ -38,6 +38,9 @@ public sealed class ComparisonHtmlWriter
     public string BuildHtml(ComparisonReport report)
     {
         var palette = BuildPalette(report.Series.Count);
+        var colorsByGroup = report.Series
+            .Select((series, index) => (series.GroupKey, Color: palette[index]))
+            .ToDictionary(item => item.GroupKey, item => item.Color, StringComparer.OrdinalIgnoreCase);
         var payload = new
         {
             benchmarkId = report.BenchmarkId,
@@ -56,177 +59,213 @@ public sealed class ComparisonHtmlWriter
                 category = a.Category,
                 module = a.Module
             }),
-            series = report.Series.Select((s, i) => new
-            {
-                groupKey = s.GroupKey,
-                label = s.Label,
-                family = s.ModelFamily,
-                quant = s.Quant,
-                runCount = s.RunCount,
-                officialRunCount = s.OfficialRunCount,
-                officialComparableRunCount = s.OfficialComparableRunCount,
-                currentEvaluationRunCount = s.CurrentEvaluationRunCount,
-                legacyMigratedRunCount = s.LegacyMigratedRunCount,
-                rescoredRunCount = s.RescoredRunCount,
-                sourceHashMatchCount = s.SourceHashMatchCount,
-                aggregate = s.Aggregate.ToString(),
-                runView = s.RunView.ToString(),
-                score = Math.Round(s.ScorePercent, 2),
-                scoreMean = Math.Round(s.ScoreMean, 2),
-                scoreMedian = Math.Round(s.ScoreMedian, 2),
-                scoreStdDev = Math.Round(s.ScoreStdDev, 2),
-                scoreIqr = Math.Round(s.ScoreIqr, 2),
-                scoreCi95 = s.ScoreCi95.HasValue ? Math.Round(s.ScoreCi95.Value, 2) : (double?)null,
-                scoreMin = Math.Round(s.ScoreMin, 2),
-                scoreMax = Math.Round(s.ScoreMax, 2),
-                precision = Math.Round(s.Precision * 100, 1),
-                recall = Math.Round(s.Recall * 100, 1),
-                f1 = Math.Round(s.F1 * 100, 1),
-                fullTp = s.FullTruePositives,
-                partialTp = s.PartialTruePositives,
-                falsePositives = s.FalsePositives,
-                duplicates = s.Duplicates,
-                ignoredLowConfidence = s.IgnoredLowConfidence,
-                missed = s.Missed,
-                visibleReasoningRuns = s.VisibleReasoningRunCount,
-                thinkingParsedFindings = Math.Round(s.ReasoningParsedFindings, 1),
-                outputParsedFindings = Math.Round(s.OutputParsedFindings, 1),
-                thinkingTp = Math.Round(s.ReasoningTruePositives, 1),
-                outputTp = Math.Round(s.OutputTruePositives, 1),
-                thinkingOnlyTp = Math.Round(s.ReasoningOnlyTruePositives, 1),
-                outputOnlyTp = Math.Round(s.OutputOnlyTruePositives, 1),
-                thinkingToOutputCoverage = s.ReasoningToOutputCoverage.HasValue ? Math.Round(s.ReasoningToOutputCoverage.Value * 100, 1) : (double?)null,
-                criticalRecall = Math.Round(s.CriticalRecall * 100, 1),
-                highRecall = Math.Round(s.HighRecall * 100, 1),
-                mediumRecall = Math.Round(s.MediumRecall * 100, 1),
-                lowRecall = Math.Round(s.LowRecall * 100, 1),
-                highCriticalRecall = Math.Round(s.HighCriticalRecall * 100, 1),
-                memorySafetyScore = Math.Round(s.MemorySafetyScore * 100, 1),
-                concurrencyScore = Math.Round(s.ConcurrencyScore * 100, 1),
-                injectionScore = Math.Round(s.InjectionScore * 100, 1),
-                authCryptoScore = Math.Round(s.AuthCryptoScore * 100, 1),
-                numericDosScore = Math.Round(s.NumericDosScore * 100, 1),
-                fileIoScore = Math.Round(s.FileIoScore * 100, 1),
-                cweCoverage = Math.Round(s.CweCoverage * 100, 1),
-                stability = Math.Round(s.VulnerabilityStability * 100, 1),
-                evidenceFidelity = Math.Round(s.EvidenceFidelity * 100, 1),
-                locationAccuracy = Math.Round(s.LocationAccuracy * 100, 1),
-                hallucinationRate = Math.Round(s.HallucinationRate * 100, 1),
-                evaluationConfidence = Math.Round(s.EvaluationConfidence * 100, 1),
-                falsePositiveTaxonomy = CountDictionary(s.FalsePositiveTaxonomy),
-                fpRate = Math.Round(s.FpPerFinding * 100, 1),
-                duplicateRate = Math.Round(s.DuplicateRate * 100, 1),
-                ignoredRate = Math.Round(s.IgnoredLowConfidenceRate * 100, 1),
-                parseSuccessRate = Math.Round(s.ParseSuccessRate * 100, 1),
-                loopRate = Math.Round(s.LoopRate * 100, 1),
-                emptyOutputRate = Math.Round(s.EmptyOutputRate * 100, 1),
-                visibleReasoningRate = Math.Round(s.VisibleReasoningRate * 100, 1),
-                run1Score = Math.Round(s.Run1Score, 2),
-                run2Score = Math.Round(s.Run2Score, 2),
-                run2Delta = Math.Round(s.Run2ScoreDelta, 2),
-                run2FpReduction = Math.Round(s.Run2FpReduction, 2),
-                run2TpRetention = Math.Round(s.Run2TpRetention * 100, 1),
-                run2DroppedTpCount = Math.Round(s.Run2DroppedTpCount, 1),
-                run2AddedTpCount = Math.Round(s.Run2AddedTpCount, 1),
-                truthAuditRunCount = s.TruthAuditRunCount,
-                accountabilityScore = Math.Round(s.AccountabilityScore, 2),
-                truthAuditAccuracy = Math.Round(s.TruthAuditAccuracy * 100, 1),
-                overclaimRate = Math.Round(s.OverclaimRate * 100, 1),
-                missAdmissionRate = Math.Round(s.MissAdmissionRate * 100, 1),
-                falsePositiveAdmissionRate = Math.Round(s.FalsePositiveAdmissionRate * 100, 1),
-                evidenceLaunderingCount = Math.Round(s.EvidenceLaunderingCount, 1),
-                quoteFidelity = Math.Round(s.QuoteFidelity * 100, 1),
-                diagnosticsAvailableRunCount = s.DiagnosticsAvailableRunCount,
-                diagnosticsValidRunCount = s.DiagnosticsValidRunCount,
-                diagnosticsPartialRunCount = s.DiagnosticsPartialRunCount,
-                diagnosticsInvalidRunCount = s.DiagnosticsInvalidRunCount,
-                diagnosticsUnavailableRunCount = s.DiagnosticsUnavailableRunCount,
-                honestyEligibleCount = s.HonestyEligibleCount,
-                calibrationEligibleCount = s.CalibrationEligibleCount,
-                revisionEligibleCount = s.RevisionEligibleCount,
-                honesty = Percent(s.Honesty),
-                honestyInflationRate = Percent(s.HonestyInflationRate),
-                honestyUnderclaimRate = Percent(s.HonestyUnderclaimRate),
-                launderingPrevalence = Percent(s.LaunderingPrevalence),
-                contradictionPrevalence = Percent(s.ContradictionPrevalence),
-                honestyCalibration = Percent(s.HonestyCalibration),
-                honestyBrier = s.HonestyBrier,
-                honestyEce = s.HonestyEce,
-                calibrationObservationCount = s.CalibrationObservationCount,
-                severityAssignedCount = s.SeverityAssignedCount, severityCoverage = Percent(s.SeverityCoverage), severityExactRate = Percent(s.SeverityExactRate), severityInflationRate = Percent(s.SeverityInflationRate), severityUnderclaimRate = Percent(s.SeverityUnderclaimRate), severityMae = s.SeverityMae,
-                cweAssignedCount = s.CweAssignedCount, cweCalibrationCoverage = Percent(s.CweCalibrationCoverage), cweAnyHitRate = Percent(s.CweAnyHitRate), cweExactSetRate = Percent(s.CweExactSetRate), cweMicroPrecision = Percent(s.CweMicroPrecision), cweMicroRecall = Percent(s.CweMicroRecall),
-                triangulationReasoningAvailableCount = s.TriangulationReasoningAvailableCount, triangulationReasoningToOutputRetention = Percent(s.TriangulationReasoningToOutputRetention), triangulationOutputToAuditAcknowledgment = Percent(s.TriangulationOutputToAuditAcknowledgment), triangulationReasoningToAuditClaimRate = Percent(s.TriangulationReasoningToAuditClaimRate), triangulationEndToEndRetention = Percent(s.TriangulationEndToEndRetention), triangulationThoughtOnlyCount = s.TriangulationThoughtOnlyCount, triangulationThoughtOnlyHonestyRate = Percent(s.TriangulationThoughtOnlyHonestyRate), triangulationOutputOnlyCount = s.TriangulationOutputOnlyCount, triangulationOutputOnlyAuditAcknowledgment = Percent(s.TriangulationOutputOnlyAuditAcknowledgment),
-                revisionSelectivity = Percent(s.RevisionSelectivity), revisionHarmCount = s.RevisionHarmCount, revisionMixedCount = s.RevisionMixedCount, revisionNet = Percent(s.RevisionNet),
-                parseTransitionDelta = s.ParseTransitionDelta, parseTransitionImprovedCount = s.ParseTransitionImprovedCount, parseTransitionUnchangedCount = s.ParseTransitionUnchangedCount, parseTransitionDegradedCount = s.ParseTransitionDegradedCount,
-                flagConsistency = Percent(s.FlagConsistency), explicitFlagValidCount = s.ExplicitFlagValidCount, explicitFlagRawCount = s.ExplicitFlagRawCount,
-                correctionProvenance = Percent(s.CorrectionProvenance), correctionValidCount = s.CorrectionValidCount, correctionRawCount = s.CorrectionRawCount,
-                honestyStability = Percent(s.HonestyStability),
-                honestyStabilityN = s.HonestyStabilityN,
-                categoricalItemAgreement = Percent(s.CategoricalItemAgreement),
-                run2DroppedIds = s.Run2DroppedTruePositiveIds,
-                run2AddedIds = s.Run2AddedTruePositiveIds,
-                durationMeanSec = s.DurationMeanMs.HasValue ? Math.Round(s.DurationMeanMs.Value / 1000.0, 1) : (double?)null,
-                durationMedianSec = s.DurationMedianMs.HasValue ? Math.Round(s.DurationMedianMs.Value / 1000.0, 1) : (double?)null,
-                durationMinSec = s.DurationMinMs.HasValue ? Math.Round(s.DurationMinMs.Value / 1000.0, 1) : (double?)null,
-                durationMaxSec = s.DurationMaxMs.HasValue ? Math.Round(s.DurationMaxMs.Value / 1000.0, 1) : (double?)null,
-                tokenizedRuns = s.TokenizedRunCount,
-                outputTokens = s.OutputTokens.HasValue ? Math.Round(s.OutputTokens.Value, 1) : (double?)null,
-                reasoningTokens = s.ReasoningTokens.HasValue ? Math.Round(s.ReasoningTokens.Value, 1) : (double?)null,
-                completionTokens = s.CompletionTokens.HasValue ? Math.Round(s.CompletionTokens.Value, 1) : (double?)null,
-                scorePer1KTokens = s.ScorePer1KTokens.HasValue ? Math.Round(s.ScorePer1KTokens.Value, 2) : (double?)null,
-                severityRecall = PercentDictionary(s.SeverityRecall),
-                categoryScores = PercentDictionary(s.CategoryScores),
-                cweRecall = PercentDictionary(s.CweRecall),
-                moduleScores = PercentDictionary(s.ModuleScores),
-                perVuln = s.PerVulnerabilityCredit.Select(v => Math.Round(v, 3)),
-                details = s.Details.Select(d => new
+            series = report.Series
+                .Select(series => (Series: series, Scope: "all"))
+                .Concat(report.CurrentEvaluationSeries.Select(series => (Series: series, Scope: "current")))
+                .Select(item =>
                 {
-                    recordId = d.RecordId,
-                    benchmarkProfile = d.BenchmarkProfile,
-                    scoringProfile = d.ScoringProfile,
-                    scoringProfileVersion = d.ScoringProfileVersion,
-                    parserVersion = d.ParserVersion,
-                    isLegacyMigrated = d.IsLegacyMigrated,
-                    isRescored = d.IsRescored,
-                    officialComparable = d.OfficialComparable,
-                    isCurrentEvaluation = d.IsCurrentEvaluation,
-                    sourceHashMatches = d.SourceHashMatches,
-                    runDirectory = d.RunDirectory,
-                    runName = d.RunName,
-                    startedAt = d.StartedAt?.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture),
-                    completedAt = d.CompletedAt?.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture),
-                    score = Math.Round(d.ScorePercent, 2),
-                    run1Score = Math.Round(d.Run1Score, 2),
-                    run2Score = Math.Round(d.Run2Score, 2),
-                    run2Delta = Math.Round(d.Run2Delta, 2),
-                    finishReason = d.FinishReason,
-                    loopDetected = d.LoopDetected,
-                    parseMode = d.ParseMode,
-                    emptyOutputWithReasoning = d.EmptyOutputWithReasoning,
-                    durationSec = d.DurationMs.HasValue ? Math.Round(d.DurationMs.Value / 1000.0, 1) : (double?)null,
-                    responseChars = d.ResponseChars,
-                    reasoningChars = d.ReasoningChars,
-                    outputTokens = d.ResponseTokens,
-                    reasoningTokens = d.ReasoningTokens,
-                    completionTokens = d.CompletionTokens,
-                    falsePositives = d.FalsePositives,
-                    duplicates = d.Duplicates,
-                    ignoredLowConfidence = d.IgnoredLowConfidence,
-                    fullTruePositives = d.FullTruePositives,
-                    partialTruePositives = d.PartialTruePositives,
-                    missed = d.Missed,
-                    repeatGroupId = d.RepeatGroupId,
-                    repeatIndex = d.RepeatIndex,
-                    repeatCount = d.RepeatCount,
-                    hasVisibleReasoning = d.HasVisibleReasoning,
-                    diagnosticsValidity = d.DiagnosticsValidity?.ToString(),
-                    honesty = Percent(d.Honesty),
-                    honestyCalibration = Percent(d.HonestyCalibration),
-                    revisionSelectivity = Percent(d.RevisionSelectivity),
-                    parseTransitionDelta = d.ParseTransitionDelta
-                }),
-                color = palette[i]
-            })
+                    var s = item.Series;
+                    return new
+                    {
+                        scope = item.Scope,
+                        groupKey = s.GroupKey,
+                        label = s.Label,
+                        family = s.ModelFamily,
+                        quant = s.Quant,
+                        runCount = s.RunCount,
+                        officialRunCount = s.OfficialRunCount,
+                        officialComparableRunCount = s.OfficialComparableRunCount,
+                        currentEvaluationRunCount = s.CurrentEvaluationRunCount,
+                        legacyMigratedRunCount = s.LegacyMigratedRunCount,
+                        rescoredRunCount = s.RescoredRunCount,
+                        sourceHashMatchCount = s.SourceHashMatchCount,
+                        aggregate = s.Aggregate.ToString(),
+                        runView = s.RunView.ToString(),
+                        score = Math.Round(s.ScorePercent, 2),
+                        scoreMean = Math.Round(s.ScoreMean, 2),
+                        scoreMedian = Math.Round(s.ScoreMedian, 2),
+                        scoreStdDev = Math.Round(s.ScoreStdDev, 2),
+                        scoreIqr = Math.Round(s.ScoreIqr, 2),
+                        scoreCi95 = s.ScoreCi95.HasValue ? Math.Round(s.ScoreCi95.Value, 2) : (double?)null,
+                        scoreMin = Math.Round(s.ScoreMin, 2),
+                        scoreMax = Math.Round(s.ScoreMax, 2),
+                        precision = Math.Round(s.Precision * 100, 1),
+                        recall = Math.Round(s.Recall * 100, 1),
+                        f1 = Math.Round(s.F1 * 100, 1),
+                        fullTp = s.FullTruePositives,
+                        partialTp = s.PartialTruePositives,
+                        falsePositives = s.FalsePositives,
+                        duplicates = s.Duplicates,
+                        ignoredLowConfidence = s.IgnoredLowConfidence,
+                        missed = s.Missed,
+                        visibleReasoningRuns = s.VisibleReasoningRunCount,
+                        thinkingParsedFindings = Math.Round(s.ReasoningParsedFindings, 1),
+                        outputParsedFindings = Math.Round(s.OutputParsedFindings, 1),
+                        thinkingTp = Math.Round(s.ReasoningTruePositives, 1),
+                        outputTp = Math.Round(s.OutputTruePositives, 1),
+                        thinkingOnlyTp = Math.Round(s.ReasoningOnlyTruePositives, 1),
+                        outputOnlyTp = Math.Round(s.OutputOnlyTruePositives, 1),
+                        thinkingToOutputCoverage = s.ReasoningToOutputCoverage.HasValue ? Math.Round(s.ReasoningToOutputCoverage.Value * 100, 1) : (double?)null,
+                        criticalRecall = Math.Round(s.CriticalRecall * 100, 1),
+                        highRecall = Math.Round(s.HighRecall * 100, 1),
+                        mediumRecall = Math.Round(s.MediumRecall * 100, 1),
+                        lowRecall = Math.Round(s.LowRecall * 100, 1),
+                        highCriticalRecall = Math.Round(s.HighCriticalRecall * 100, 1),
+                        memorySafetyScore = Math.Round(s.MemorySafetyScore * 100, 1),
+                        concurrencyScore = Math.Round(s.ConcurrencyScore * 100, 1),
+                        injectionScore = Math.Round(s.InjectionScore * 100, 1),
+                        authCryptoScore = Math.Round(s.AuthCryptoScore * 100, 1),
+                        numericDosScore = Math.Round(s.NumericDosScore * 100, 1),
+                        fileIoScore = Math.Round(s.FileIoScore * 100, 1),
+                        cweCoverage = Math.Round(s.CweCoverage * 100, 1),
+                        stability = Math.Round(s.VulnerabilityStability * 100, 1),
+                        evidenceFidelity = Math.Round(s.EvidenceFidelity * 100, 1),
+                        locationAccuracy = Math.Round(s.LocationAccuracy * 100, 1),
+                        hallucinationRate = Math.Round(s.HallucinationRate * 100, 1),
+                        evaluationConfidence = Math.Round(s.EvaluationConfidence * 100, 1),
+                        falsePositiveTaxonomy = CountDictionary(s.FalsePositiveTaxonomy),
+                        fpRate = Math.Round(s.FpPerFinding * 100, 1),
+                        duplicateRate = Math.Round(s.DuplicateRate * 100, 1),
+                        ignoredRate = Math.Round(s.IgnoredLowConfidenceRate * 100, 1),
+                        parseSuccessRate = Math.Round(s.ParseSuccessRate * 100, 1),
+                        loopRate = Math.Round(s.LoopRate * 100, 1),
+                        emptyOutputRate = Math.Round(s.EmptyOutputRate * 100, 1),
+                        visibleReasoningRate = Math.Round(s.VisibleReasoningRate * 100, 1),
+                        run1Score = Math.Round(s.Run1Score, 2),
+                        run2Score = Math.Round(s.Run2Score, 2),
+                        run2Delta = Math.Round(s.Run2ScoreDelta, 2),
+                        run2FpReduction = Math.Round(s.Run2FpReduction, 2),
+                        run2TpRetention = Math.Round(s.Run2TpRetention * 100, 1),
+                        run2DroppedTpCount = Math.Round(s.Run2DroppedTpCount, 1),
+                        run2AddedTpCount = Math.Round(s.Run2AddedTpCount, 1),
+                        truthAuditRunCount = s.TruthAuditRunCount,
+                        accountabilityScore = Math.Round(s.AccountabilityScore, 2),
+                        truthAuditAccuracy = Math.Round(s.TruthAuditAccuracy * 100, 1),
+                        overclaimRate = Math.Round(s.OverclaimRate * 100, 1),
+                        missAdmissionRate = Math.Round(s.MissAdmissionRate * 100, 1),
+                        falsePositiveAdmissionRate = Math.Round(s.FalsePositiveAdmissionRate * 100, 1),
+                        evidenceLaunderingCount = Math.Round(s.EvidenceLaunderingCount, 1),
+                        quoteFidelity = Math.Round(s.QuoteFidelity * 100, 1),
+                        diagnosticsAvailableRunCount = s.DiagnosticsAvailableRunCount,
+                        diagnosticsValidRunCount = s.DiagnosticsValidRunCount,
+                        diagnosticsPartialRunCount = s.DiagnosticsPartialRunCount,
+                        diagnosticsInvalidRunCount = s.DiagnosticsInvalidRunCount,
+                        diagnosticsUnavailableRunCount = s.DiagnosticsUnavailableRunCount,
+                        honestyEligibleCount = s.HonestyEligibleCount,
+                        calibrationEligibleCount = s.CalibrationEligibleCount,
+                        revisionEligibleCount = s.RevisionEligibleCount,
+                        honesty = Percent(s.Honesty),
+                        honestyInflationRate = Percent(s.HonestyInflationRate),
+                        honestyUnderclaimRate = Percent(s.HonestyUnderclaimRate),
+                        launderingPrevalence = Percent(s.LaunderingPrevalence),
+                        contradictionPrevalence = Percent(s.ContradictionPrevalence),
+                        honestyCalibration = Percent(s.HonestyCalibration),
+                        honestyBrier = s.HonestyBrier,
+                        honestyEce = s.HonestyEce,
+                        calibrationObservationCount = s.CalibrationObservationCount,
+                        severityAssignedCount = s.SeverityAssignedCount,
+                        severityCoverage = Percent(s.SeverityCoverage),
+                        severityExactRate = Percent(s.SeverityExactRate),
+                        severityInflationRate = Percent(s.SeverityInflationRate),
+                        severityUnderclaimRate = Percent(s.SeverityUnderclaimRate),
+                        severityMae = s.SeverityMae,
+                        cweAssignedCount = s.CweAssignedCount,
+                        cweCalibrationCoverage = Percent(s.CweCalibrationCoverage),
+                        cweAnyHitRate = Percent(s.CweAnyHitRate),
+                        cweExactSetRate = Percent(s.CweExactSetRate),
+                        cweMicroPrecision = Percent(s.CweMicroPrecision),
+                        cweMicroRecall = Percent(s.CweMicroRecall),
+                        triangulationReasoningAvailableCount = s.TriangulationReasoningAvailableCount,
+                        triangulationReasoningToOutputRetention = Percent(s.TriangulationReasoningToOutputRetention),
+                        triangulationOutputToAuditAcknowledgment = Percent(s.TriangulationOutputToAuditAcknowledgment),
+                        triangulationReasoningToAuditClaimRate = Percent(s.TriangulationReasoningToAuditClaimRate),
+                        triangulationEndToEndRetention = Percent(s.TriangulationEndToEndRetention),
+                        triangulationThoughtOnlyCount = s.TriangulationThoughtOnlyCount,
+                        triangulationThoughtOnlyHonestyRate = Percent(s.TriangulationThoughtOnlyHonestyRate),
+                        triangulationOutputOnlyCount = s.TriangulationOutputOnlyCount,
+                        triangulationOutputOnlyAuditAcknowledgment = Percent(s.TriangulationOutputOnlyAuditAcknowledgment),
+                        revisionSelectivity = Percent(s.RevisionSelectivity),
+                        revisionHarmCount = s.RevisionHarmCount,
+                        revisionMixedCount = s.RevisionMixedCount,
+                        revisionNet = Percent(s.RevisionNet),
+                        parseTransitionDelta = s.ParseTransitionDelta,
+                        parseTransitionImprovedCount = s.ParseTransitionImprovedCount,
+                        parseTransitionUnchangedCount = s.ParseTransitionUnchangedCount,
+                        parseTransitionDegradedCount = s.ParseTransitionDegradedCount,
+                        flagConsistency = Percent(s.FlagConsistency),
+                        explicitFlagValidCount = s.ExplicitFlagValidCount,
+                        explicitFlagRawCount = s.ExplicitFlagRawCount,
+                        correctionProvenance = Percent(s.CorrectionProvenance),
+                        correctionValidCount = s.CorrectionValidCount,
+                        correctionRawCount = s.CorrectionRawCount,
+                        honestyStability = Percent(s.HonestyStability),
+                        honestyStabilityN = s.HonestyStabilityN,
+                        categoricalItemAgreement = Percent(s.CategoricalItemAgreement),
+                        run2DroppedIds = s.Run2DroppedTruePositiveIds,
+                        run2AddedIds = s.Run2AddedTruePositiveIds,
+                        durationMeanSec = s.DurationMeanMs.HasValue ? Math.Round(s.DurationMeanMs.Value / 1000.0, 1) : (double?)null,
+                        durationMedianSec = s.DurationMedianMs.HasValue ? Math.Round(s.DurationMedianMs.Value / 1000.0, 1) : (double?)null,
+                        durationMinSec = s.DurationMinMs.HasValue ? Math.Round(s.DurationMinMs.Value / 1000.0, 1) : (double?)null,
+                        durationMaxSec = s.DurationMaxMs.HasValue ? Math.Round(s.DurationMaxMs.Value / 1000.0, 1) : (double?)null,
+                        tokenizedRuns = s.TokenizedRunCount,
+                        outputTokens = s.OutputTokens.HasValue ? Math.Round(s.OutputTokens.Value, 1) : (double?)null,
+                        reasoningTokens = s.ReasoningTokens.HasValue ? Math.Round(s.ReasoningTokens.Value, 1) : (double?)null,
+                        completionTokens = s.CompletionTokens.HasValue ? Math.Round(s.CompletionTokens.Value, 1) : (double?)null,
+                        scorePer1KTokens = s.ScorePer1KTokens.HasValue ? Math.Round(s.ScorePer1KTokens.Value, 2) : (double?)null,
+                        severityRecall = PercentDictionary(s.SeverityRecall),
+                        categoryScores = PercentDictionary(s.CategoryScores),
+                        cweRecall = PercentDictionary(s.CweRecall),
+                        moduleScores = PercentDictionary(s.ModuleScores),
+                        perVuln = s.PerVulnerabilityCredit.Select(v => Math.Round(v, 3)),
+                        details = s.Details.Select(d => new
+                        {
+                            recordId = d.RecordId,
+                            benchmarkProfile = d.BenchmarkProfile,
+                            scoringProfile = d.ScoringProfile,
+                            scoringProfileVersion = d.ScoringProfileVersion,
+                            parserVersion = d.ParserVersion,
+                            isLegacyMigrated = d.IsLegacyMigrated,
+                            isRescored = d.IsRescored,
+                            officialComparable = d.OfficialComparable,
+                            isCurrentEvaluation = d.IsCurrentEvaluation,
+                            sourceHashMatches = d.SourceHashMatches,
+                            runDirectory = d.RunDirectory,
+                            runName = d.RunName,
+                            startedAt = d.StartedAt?.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture),
+                            completedAt = d.CompletedAt?.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture),
+                            score = Math.Round(d.ScorePercent, 2),
+                            run1Score = Math.Round(d.Run1Score, 2),
+                            run2Score = Math.Round(d.Run2Score, 2),
+                            run2Delta = Math.Round(d.Run2Delta, 2),
+                            finishReason = d.FinishReason,
+                            loopDetected = d.LoopDetected,
+                            parseMode = d.ParseMode,
+                            emptyOutputWithReasoning = d.EmptyOutputWithReasoning,
+                            durationSec = d.DurationMs.HasValue ? Math.Round(d.DurationMs.Value / 1000.0, 1) : (double?)null,
+                            responseChars = d.ResponseChars,
+                            reasoningChars = d.ReasoningChars,
+                            outputTokens = d.ResponseTokens,
+                            reasoningTokens = d.ReasoningTokens,
+                            completionTokens = d.CompletionTokens,
+                            falsePositives = d.FalsePositives,
+                            duplicates = d.Duplicates,
+                            ignoredLowConfidence = d.IgnoredLowConfidence,
+                            fullTruePositives = d.FullTruePositives,
+                            partialTruePositives = d.PartialTruePositives,
+                            missed = d.Missed,
+                            repeatGroupId = d.RepeatGroupId,
+                            repeatIndex = d.RepeatIndex,
+                            repeatCount = d.RepeatCount,
+                            hasVisibleReasoning = d.HasVisibleReasoning,
+                            diagnosticsValidity = d.DiagnosticsValidity?.ToString(),
+                            honesty = Percent(d.Honesty),
+                            honestyCalibration = Percent(d.HonestyCalibration),
+                            revisionSelectivity = Percent(d.RevisionSelectivity),
+                            parseTransitionDelta = d.ParseTransitionDelta
+                        }),
+                        color = colorsByGroup[s.GroupKey]
+                    };
+                })
         };
 
         var json = JsonSerializer.Serialize(payload, PayloadOptions);
@@ -304,6 +343,9 @@ public sealed class ComparisonHtmlWriter
 <script>
 (function () {
   const data = JSON.parse(document.getElementById("data").textContent);
+  const allSeries = data.series.filter(s => s.scope === "all");
+  const currentSeries = data.series.filter(s => s.scope === "current");
+  data.series = allSeries;
   const meta = document.getElementById("meta");
   const content = document.getElementById("content");
   const charts = {};
@@ -345,7 +387,7 @@ public sealed class ComparisonHtmlWriter
   let sortKey = "score";
   let sortDir = -1;
 
-  meta.textContent = `Benchmark: ${data.benchmarkId} · erzeugt ${data.generatedAt} · Aggregation: ${data.aggregate} · Run-Sicht: ${data.runView} · Scoring-Profil: ${data.scoringProfile || "alle"} · ${data.series.length} Modell(e)/Quants · ${data.axis.length} Schwachstellen`;
+  meta.textContent = `Benchmark: ${data.benchmarkId} · erzeugt ${data.generatedAt} · Aggregation: ${data.aggregate} · Run-Sicht: ${data.runView} · Scoring-Profil: ${data.scoringProfile || "alle"} · ${currentSeries.length} aktuelle Modell(e)/Quants (${allSeries.length} inkl. veralteter Scores) · ${data.axis.length} Schwachstellen`;
   if (!data.series.length) {
     content.innerHTML = '<div class="card empty">Noch keine archivierten Runs gefunden. Starte einen Benchmark, danach erscheinen hier die Vergleiche.</div>';
     return;
@@ -405,6 +447,7 @@ public sealed class ComparisonHtmlWriter
         <label>Top-N Charts<input id="topN" type="number" min="1" step="1" value="24" /></label>
       </div>
       <div class="checks">
+        <label class="inline"><input id="includeDeprecated" type="checkbox" /> include deprecated scores</label>
         <label class="inline"><input id="onlyOfficial" type="checkbox" /> nur offizielle Runs</label>
         <label class="inline"><input id="onlyHash" type="checkbox" checked /> nur Source-Hash-Matches</label>
         <label class="inline"><input id="noLoop" type="checkbox" /> nur ohne Loop-Abbruch</label>
@@ -451,7 +494,7 @@ public sealed class ComparisonHtmlWriter
   document.getElementById("metric").value = data.metric || "score";
   document.getElementById("runView").value = (data.runView || "primary").toLowerCase();
 
-  const inputs = ["q","family","quant","severity","category","cwe","metric","runView","minScore","maxScore","minRuns","maxStd","maxFp","maxHallucination","minCritical","topN","onlyOfficial","onlyHash","noLoop","withReasoning","repeated","hideUnknown","fillToggle"];
+  const inputs = ["q","family","quant","severity","category","cwe","metric","runView","minScore","maxScore","minRuns","maxStd","maxFp","maxHallucination","minCritical","topN","includeDeprecated","onlyOfficial","onlyHash","noLoop","withReasoning","repeated","hideUnknown","fillToggle"];
   inputs.forEach(id => document.getElementById(id)?.addEventListener("input", render));
   inputs.forEach(id => document.getElementById(id)?.addEventListener("change", render));
   document.getElementById("csvButton").addEventListener("click", exportFilteredCsv);
@@ -461,10 +504,12 @@ public sealed class ComparisonHtmlWriter
   function render() {
     const state = readState();
     const axisIdx = filteredAxisIndices(state);
-    const rows = data.series.filter(s => includeSeries(s, state)).sort((a,b) => metricValue(b,state) - metricValue(a,state) || a.label.localeCompare(b.label));
+    const availableSeries = state.includeDeprecated ? allSeries : currentSeries;
+    const rows = availableSeries.filter(s => includeSeries(s, state)).sort((a,b) => metricValue(b,state) - metricValue(a,state) || a.label.localeCompare(b.label));
     const expandedMetricId = activeMovedCard?.getAttribute("data-metric-id") || null;
     const chartRows = expandedMetricId ? rows : rows.slice(0, Math.max(1, state.topN || 24));
-    document.getElementById("summary").textContent = `${rows.length} von ${data.series.length} Gruppen sichtbar · ${axisIdx.length} von ${data.axis.length} Schwachstellenachsen im Heatmap/Radar-Filter`;
+    const deprecatedCount = Math.max(0, allSeries.reduce((sum,s)=>sum+s.runCount,0) - currentSeries.reduce((sum,s)=>sum+s.runCount,0));
+    document.getElementById("summary").textContent = `${rows.length} von ${availableSeries.length} Gruppen sichtbar · ${axisIdx.length} von ${data.axis.length} Schwachstellenachsen im Heatmap/Radar-Filter · ${state.includeDeprecated ? "veraltete Scores eingeblendet" : "nur aktuelle Scores"} (${deprecatedCount} veraltet verfügbar)`;
     renderTable(rows, state);
     renderHeatmap(rows, axisIdx, state);
     if (activeMovedCard) {
@@ -480,7 +525,7 @@ public sealed class ComparisonHtmlWriter
       families: selected("family"), quants: selected("quant"), severities: selected("severity"), categories: selected("category"), cwes: selected("cwe"),
       metric: document.getElementById("metric").value, runView: document.getElementById("runView").value,
       minScore: num("minScore"), maxScore: num("maxScore"), minRuns: num("minRuns"), maxStd: num("maxStd"), maxFp: num("maxFp"), maxHallucination: num("maxHallucination"), minCritical: num("minCritical"), topN: num("topN"),
-      onlyOfficial: checked("onlyOfficial"), onlyHash: checked("onlyHash"), noLoop: checked("noLoop"), withReasoning: checked("withReasoning"), repeated: checked("repeated"), hideUnknown: checked("hideUnknown"), fill: checked("fillToggle")
+      includeDeprecated: checked("includeDeprecated"), onlyOfficial: checked("onlyOfficial"), onlyHash: checked("onlyHash"), noLoop: checked("noLoop"), withReasoning: checked("withReasoning"), repeated: checked("repeated"), hideUnknown: checked("hideUnknown"), fill: checked("fillToggle")
     };
   }
 
@@ -639,7 +684,7 @@ public sealed class ComparisonHtmlWriter
   }
   const auditMetricKeys = new Set(["accountabilityScore","truthAuditAccuracy","overclaimRate","missAdmissionRate","falsePositiveAdmissionRate","quoteFidelity","evidenceLaunderingCount"]);
   function cell(s,c,st) { if (c.kind === "detail") return detailCell(s); if (auditMetricKeys.has(c.key) && !(s.truthAuditRunCount > 0)) return "n/a"; const v = valueForSort(s,c.key,st); return typeof v === "number" && Number.isFinite(v) ? (Number.isInteger(v) ? v : v.toFixed(1)) : "n/a"; }
-  function detailCell(s) { const details = s.details || []; const rows = details.map(d => { const version = `${esc(d.scoringProfile||"legacy-unknown")} v${d.scoringProfileVersion||"?"} · ${esc(d.parserVersion||"parser-unbekannt")}${d.isLegacyMigrated ? " · legacy-migriert" : ""}${d.isRescored ? " · rescored" : ""}`; return `<tr><td>${esc(d.completedAt||"")}</td><td>${esc(d.runName)}</td><td>${version}</td><td>${d.officialComparable?'ja':'nein'}</td><td>${d.isCurrentEvaluation?'aktuell':'veraltet'}</td><td>${fmt(d.score)}</td><td>${fmtSigned(d.run2Delta)}</td><td>${esc(d.finishReason||"")}</td><td>${esc(d.parseMode||"")}</td><td>${d.loopDetected?'ja':'nein'}</td><td>${fmt(d.durationSec)}</td><td>${fmt(d.outputTokens)}/${fmt(d.reasoningTokens)}/${fmt(d.completionTokens)}</td><td>${esc(d.repeatGroupId||'—')} ${d.repeatCount>1 ? '('+d.repeatIndex+'/'+d.repeatCount+')' : ''}</td></tr>`; }).join(""); const fpTax = Object.entries(s.falsePositiveTaxonomy||{}).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`${esc(k)}=${fmt(v)}`).join(', ') || '—'; return `<details><summary>${esc(s.label)}</summary><div class="note">Profil: ${s.officialRunCount}/${s.runCount} offiziell · official comparable: ${s.officialComparableRunCount}/${s.runCount} · aktuell (${esc(data.parserVersion||'parser-v2')}): ${s.currentEvaluationRunCount}/${s.runCount} · legacy-migriert: ${s.legacyMigratedRunCount}/${s.runCount} · rescored: ${s.rescoredRunCount}/${s.runCount} · Source-Hash: ${s.sourceHashMatchCount}/${s.runCount} · FP-Taxonomie: ${fpTax} · Run2 dropped: ${(s.run2DroppedIds||[]).join(', ')||'—'} · added: ${(s.run2AddedIds||[]).join(', ')||'—'}</div><table class="detail-table"><thead><tr><th>Datum</th><th>Run</th><th>Score-Version</th><th>Official</th><th>Aktualität</th><th>Score</th><th>Run2 Δ</th><th>Finish</th><th>Parse</th><th>Loop</th><th>s</th><th>Out/Think/Gesamt Tokens</th><th>Repeat</th></tr></thead><tbody>${rows}</tbody></table></details>`; }
+  function detailCell(s) { const details = s.details || []; const rows = details.map(d => { const version = `${esc(d.scoringProfile||"legacy-unknown")} - ${esc(d.parserVersion||"parser-unbekannt")}${d.isLegacyMigrated ? " · legacy-migriert" : ""}${d.isRescored ? " · rescored" : ""}`; return `<tr><td>${esc(d.completedAt||"")}</td><td>${esc(d.runName)}</td><td>${version}</td><td>${d.officialComparable?'ja':'nein'}</td><td>${d.isCurrentEvaluation?'aktuell':'veraltet'}</td><td>${fmt(d.score)}</td><td>${fmtSigned(d.run2Delta)}</td><td>${esc(d.finishReason||"")}</td><td>${esc(d.parseMode||"")}</td><td>${d.loopDetected?'ja':'nein'}</td><td>${fmt(d.durationSec)}</td><td>${fmt(d.outputTokens)}/${fmt(d.reasoningTokens)}/${fmt(d.completionTokens)}</td><td>${esc(d.repeatGroupId||'—')} ${d.repeatCount>1 ? '('+d.repeatIndex+'/'+d.repeatCount+')' : ''}</td></tr>`; }).join(""); const fpTax = Object.entries(s.falsePositiveTaxonomy||{}).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`${esc(k)}=${fmt(v)}`).join(', ') || '—'; return `<details><summary>${esc(s.label)}</summary><div class="note">Profil: ${s.officialRunCount}/${s.runCount} offiziell · official comparable: ${s.officialComparableRunCount}/${s.runCount} · aktuell (${esc(data.parserVersion||'parser-v2')}): ${s.currentEvaluationRunCount}/${s.runCount} · legacy-migriert: ${s.legacyMigratedRunCount}/${s.runCount} · rescored: ${s.rescoredRunCount}/${s.runCount} · Source-Hash: ${s.sourceHashMatchCount}/${s.runCount} · FP-Taxonomie: ${fpTax} · Run2 dropped: ${(s.run2DroppedIds||[]).join(', ')||'—'} · added: ${(s.run2AddedIds||[]).join(', ')||'—'}</div><table class="detail-table"><thead><tr><th>Datum</th><th>Run</th><th>Score-Version</th><th>Official</th><th>Aktualität</th><th>Score</th><th>Run2 Δ</th><th>Finish</th><th>Parse</th><th>Loop</th><th>s</th><th>Out/Think/Gesamt Tokens</th><th>Repeat</th></tr></thead><tbody>${rows}</tbody></table></details>`; }
   function valueForSort(s,key,st) { if (key === "score") return scoreForRunView(s, st.runView); return s[key]; }
 
   function metricHeader(metricId, title, titleId) {
@@ -722,7 +767,7 @@ public sealed class ComparisonHtmlWriter
   function resizeChartsSoon() { setTimeout(() => Object.values(charts).forEach(chart => chart && chart.resize && chart.resize()), 40); }
 
   function exportFilteredCsv() {
-    const st = readState(); const rows = data.series.filter(s => includeSeries(s, st));
+    const st = readState(); const availableSeries = st.includeDeprecated ? allSeries : currentSeries; const rows = availableSeries.filter(s => includeSeries(s, st));
     const headers = ["model_family","quant","runs","score","critical_recall_pct","high_critical_recall_pct","evidence_fidelity_pct","location_accuracy_pct","hallucination_rate_pct","f1_pct","stability_pct","run2_delta","fp","duplicates","missed","parse_success_pct","loop_pct","diagnostics_available_runs","diagnostics_valid_runs","diagnostics_partial_runs","diagnostics_invalid_runs","diagnostics_unavailable_runs","honesty_eligible_n","calibration_eligible_n","revision_eligible_n","honesty_pct","inflation_pct","underclaim_pct","laundering_pct","contradiction_pct","confidence_n","confidence_brier","confidence_ece","severity_assigned_n","severity_coverage_pct","severity_exact_pct","severity_inflation_pct","severity_underclaim_pct","severity_mae","cwe_assigned_n","cwe_coverage_pct","cwe_any_hit_pct","cwe_exact_set_pct","cwe_micro_precision_pct","cwe_micro_recall_pct","triangulation_reasoning_available_n","reasoning_output_retention_pct","output_audit_ack_pct","reasoning_audit_claim_pct","end_to_end_retention_pct","thought_only_count","thought_only_honesty_pct","output_only_count","output_only_audit_ack_pct","revision_selectivity_pct","revision_harm_count","revision_mixed_count","revision_net_pct","parse_transition_delta","parse_improved_count","parse_unchanged_count","parse_degraded_count","correction_consistency_pct","correction_valid_count","correction_raw_count","flag_consistency_pct","flag_valid_count","flag_raw_count","honesty_stability_n","honesty_stability_pct","duration_median_sec","thinking_tokens","output_tokens","completion_tokens","score_per_1k_tokens"];
     const lines = [headers.join(",")]; rows.forEach(s => lines.push([s.family,s.quant,s.runCount,scoreForRunView(s,st.runView),s.criticalRecall,s.highCriticalRecall,s.evidenceFidelity,s.locationAccuracy,s.hallucinationRate,s.f1,s.stability,s.run2Delta,s.falsePositives,s.duplicates,s.missed,s.parseSuccessRate,s.loopRate,s.diagnosticsAvailableRunCount,s.diagnosticsValidRunCount,s.diagnosticsPartialRunCount,s.diagnosticsInvalidRunCount,s.diagnosticsUnavailableRunCount,s.honestyEligibleCount,s.calibrationEligibleCount,s.revisionEligibleCount,s.honesty??"",s.honestyInflationRate??"",s.honestyUnderclaimRate??"",s.launderingPrevalence??"",s.contradictionPrevalence??"",s.calibrationObservationCount||"",s.honestyBrier??"",s.honestyEce??"",s.severityAssignedCount||"",s.severityCoverage??"",s.severityExactRate??"",s.severityInflationRate??"",s.severityUnderclaimRate??"",s.severityMae??"",s.cweAssignedCount||"",s.cweCalibrationCoverage??"",s.cweAnyHitRate??"",s.cweExactSetRate??"",s.cweMicroPrecision??"",s.cweMicroRecall??"",s.triangulationReasoningAvailableCount||"",s.triangulationReasoningToOutputRetention??"",s.triangulationOutputToAuditAcknowledgment??"",s.triangulationReasoningToAuditClaimRate??"",s.triangulationEndToEndRetention??"",s.triangulationReasoningAvailableCount?s.triangulationThoughtOnlyCount:"",s.triangulationThoughtOnlyHonestyRate??"",s.triangulationOutputOnlyCount??"",s.triangulationOutputOnlyAuditAcknowledgment??"",s.revisionSelectivity??"",s.revisionEligibleCount?s.revisionHarmCount:"",s.revisionEligibleCount?s.revisionMixedCount:"",s.revisionNet??"",s.parseTransitionDelta??"",s.parseTransitionImprovedCount+s.parseTransitionUnchangedCount+s.parseTransitionDegradedCount?s.parseTransitionImprovedCount:"",s.parseTransitionImprovedCount+s.parseTransitionUnchangedCount+s.parseTransitionDegradedCount?s.parseTransitionUnchangedCount:"",s.parseTransitionImprovedCount+s.parseTransitionUnchangedCount+s.parseTransitionDegradedCount?s.parseTransitionDegradedCount:"",s.correctionProvenance??"",s.correctionRawCount?s.correctionValidCount:"",s.correctionRawCount||"",s.flagConsistency??"",s.explicitFlagRawCount?s.explicitFlagValidCount:"",s.explicitFlagRawCount||"",s.honestyStabilityN>=2?s.honestyStabilityN:"",s.honestyStability??"",s.durationMedianSec??"",s.reasoningTokens??"",s.outputTokens??"",s.completionTokens??"",s.scorePer1KTokens??""].map(csv).join(",")));
     const blob = new Blob([lines.join("\n")], {type:"text/csv;charset=utf-8"}); const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `supercalc-comparison-filtered-${Date.now()}.csv`; a.click(); URL.revokeObjectURL(a.href);

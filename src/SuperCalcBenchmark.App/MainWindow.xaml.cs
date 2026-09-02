@@ -396,7 +396,31 @@ public partial class MainWindow : Window
     private async void MainWindow_Loaded(object sender, RoutedEventArgs e)
     {
         Loaded -= MainWindow_Loaded;
+        await SynchronizeRepositoryArchiveAsync();
         await RefreshComparisonAsync(preserveSelection: false);
+    }
+
+    private async Task SynchronizeRepositoryArchiveAsync()
+    {
+        if (_paths.RepositoryArchiveRoot is null
+            || BenchmarkPathResolver.SamePath(_paths.ArchiveRoot, _paths.RepositoryArchiveRoot))
+        {
+            return;
+        }
+
+        try
+        {
+            var repositoryExport = await Task.Run(() =>
+                ArchivePoolImporter.ImportLegacyArchive(_paths.ArchiveRoot, _paths.RepositoryArchiveRoot));
+            if (repositoryExport.Imported > 0 || repositoryExport.Failed > 0)
+            {
+                AppendLog($"Repository-Archivabgleich: {repositoryExport.Imported} neue Scorecard(s), {repositoryExport.AlreadyPresent} bereits vorhanden, {repositoryExport.Failed} fehlgeschlagen.");
+            }
+        }
+        catch (Exception ex)
+        {
+            AppendLog("WARNUNG: Repository-Archivabgleich fehlgeschlagen: " + ex.Message);
+        }
     }
 
     private async void UpdateButton_Click(object sender, RoutedEventArgs e)
@@ -1068,6 +1092,7 @@ public partial class MainWindow : Window
             TruthAuditRepeatMode = "always",
             TruthAuditSource = "best",
             ArchiveDirectory = _paths.ArchiveRoot,
+            ArchiveMirrorDirectory = _paths.RepositoryArchiveRoot,
             QuantOverride = string.IsNullOrWhiteSpace(QuantTextBox.Text) ? null : QuantTextBox.Text.Trim()
         };
     }

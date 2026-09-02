@@ -13,13 +13,31 @@ public sealed class ArchiveImportResult
 }
 
 /// <summary>
-/// Non-destructively imports legacy archive scorecards (for example checkout/archive
-/// or archive beside an older portable EXE) into the shared per-user archive pool.
-/// Record ids and byte hashes make repeated starts idempotent.
+/// Non-destructively copies compact archive scorecards between the tracked repository seed
+/// and the shared per-user pool. Full imports deduplicate by record id/byte hash; the
+/// single-scorecard fast path mirrors a newly saved run without rescanning the whole archive.
 /// </summary>
 public static class ArchivePoolImporter
 {
     public static ArchiveImportResult ImportLegacyArchive(string sourceRoot, string targetRoot)
+        => CopyScorecards(sourceRoot, targetRoot, singleSourcePath: null);
+
+    /// <summary>
+    /// Mirrors one newly written scorecard while preserving its archive-relative path.
+    /// Unlike a full import, this fast path does not rescan every target scorecard; the
+    /// atomic destination check keeps immediate post-save retries idempotent.
+    /// </summary>
+    public static ArchiveImportResult ImportScorecard(string sourcePath, string sourceRoot, string targetRoot)
+    {
+        if (string.IsNullOrWhiteSpace(sourcePath))
+        {
+            throw new ArgumentException("Source scorecard path is required.", nameof(sourcePath));
+        }
+
+        return CopyScorecards(sourceRoot, targetRoot, Path.GetFullPath(sourcePath));
+    }
+
+    private static ArchiveImportResult CopyScorecards(string sourceRoot, string targetRoot, string? singleSourcePath)
     {
         if (string.IsNullOrWhiteSpace(sourceRoot) || string.IsNullOrWhiteSpace(targetRoot))
         {
@@ -33,6 +51,33 @@ public static class ArchivePoolImporter
             return new ArchiveImportResult();
         }
 
+        IReadOnlyList<string> sourceFiles;
+        if (singleSourcePath is null)
+        {
+            sourceFiles = EnumerateScorecards(sourceRoot)
+                .Where(path => !IsInside(targetRoot, path))
+                .ToList();
+        }
+        else
+        {
+            if (!File.Exists(singleSourcePath))
+            {
+                return new ArchiveImportResult
+                {
+                    Failed = 1,
+                    Warnings = [$"Source scorecard was not found: {singleSourcePath}"]
+                };
+            }
+
+            if (!IsInside(sourceRoot, singleSourcePath)
+                || !string.Equals(Path.GetExtension(singleSourcePath), ".json", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new ArgumentException("Source scorecard must be a JSON file inside the source archive root.", nameof(singleSourcePath));
+            }
+
+            sourceFiles = [singleSourcePath];
+        }
+
         Directory.CreateDirectory(targetRoot);
         using var importLock = TryAcquireImportLock(targetRoot, TimeSpan.FromSeconds(30));
         if (importLock is null)
@@ -44,7 +89,10 @@ public static class ArchivePoolImporter
             };
         }
 
-        var targetFiles = EnumerateScorecards(targetRoot).ToList();
+        // A full startup import deduplicates by record id across renamed/moved files. A
+        // freshly saved single scorecard cannot already exist at another relative path,
+        // so avoid reparsing the complete (potentially large) public archive on every run.
+        var targetFiles = singleSourcePath is null ? EnumerateScorecards(targetRoot).ToList() : [];
         var targetIds = targetFiles
             .Select(TryReadRecordId)
             .Where(id => !string.IsNullOrWhiteSpace(id))
@@ -55,9 +103,6 @@ public static class ArchivePoolImporter
             .Where(hash => !string.IsNullOrWhiteSpace(hash))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        var sourceFiles = EnumerateScorecards(sourceRoot)
-            .Where(path => !IsInside(targetRoot, path))
-            .ToList();
         var scanned = 0;
         var imported = 0;
         var alreadyPresent = 0;
