@@ -599,13 +599,15 @@ public sealed class ArchiveRunScore
         return new ArchiveRunScore
         {
             RunName = score.RunName,
-            RunKind = PromptVersions.ForRunName(score.RunName) switch
-            {
-                PromptVersions.SelfValidateV1 => "self_validation",
-                PromptVersions.TruthAuditV1 => "truth_audit",
-                _ => "blind_analysis"
-            },
-            GroundTruthVisibleToModel = string.Equals(score.PromptVersion, PromptVersions.TruthAuditV1, StringComparison.OrdinalIgnoreCase),
+            RunKind = PromptVersions.IsTruthAudit(score.PromptVersion)
+                ? "truth_audit"
+                : PromptVersions.ForRunName(score.RunName) switch
+                {
+                    PromptVersions.SelfValidateV1 => "self_validation",
+                    PromptVersions.TruthAuditV1 or PromptVersions.TruthAuditV2 => "truth_audit",
+                    _ => "blind_analysis"
+                },
+            GroundTruthVisibleToModel = PromptVersions.IsTruthAudit(score.PromptVersion),
             ScoreSchemaVersion = score.ScoreSchemaVersion <= 0 ? ScoringProfiles.ScoreSchemaVersion : score.ScoreSchemaVersion,
             ScoringProfile = string.IsNullOrWhiteSpace(score.ScoringProfile) ? ScoringProfiles.OfficialV1Name : score.ScoringProfile,
             ScoringProfileVersion = score.ScoringProfileVersion <= 0 ? ScoringProfiles.OfficialV1Version : score.ScoringProfileVersion,
@@ -746,7 +748,7 @@ public sealed class ArchiveRunScore
             RunKind = PromptVersion switch
             {
                 PromptVersions.SelfValidateV1 => "self_validation",
-                PromptVersions.TruthAuditV1 => "truth_audit",
+                PromptVersions.TruthAuditV1 or PromptVersions.TruthAuditV2 => "truth_audit",
                 _ => string.Equals(RunName, "Run 2", StringComparison.OrdinalIgnoreCase) ? "self_validation" : "blind_analysis"
             };
         }

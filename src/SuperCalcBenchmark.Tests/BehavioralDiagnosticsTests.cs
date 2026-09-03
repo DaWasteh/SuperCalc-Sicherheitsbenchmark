@@ -1,3 +1,4 @@
+using System.Text.Json;
 using SuperCalcBenchmark.Core;
 
 namespace SuperCalcBenchmark.Tests;
@@ -28,6 +29,24 @@ internal static partial class TestRunner
         Assert(!rows[2].ProvenanceValid && !rows[3].ProvenanceValid, "short quotes and unknown types must be rejected");
         Assert(!rows[4].ProvenanceValid && rows[4].Type == AuditCorrectionType.Invalid, "vulnerability_type is not a schema correction type and must not map to CWE");
         Assert(rows[0].PreviousClaim == "exact previous security claim", "raw value must be preserved except trimming");
+
+        Assert(PromptVersions.CurrentTruthAudit == PromptVersions.TruthAuditV2,
+            "the tightened truth-audit contract must have a distinct prompt version");
+        Assert(PromptVersions.ResolveTruthAudit(null, "truth_audit_v2.md", "truth_audit_v2.schema.json") == PromptVersions.TruthAuditV2,
+            "the bundled v2 assets must resolve to v2 provenance");
+        Assert(PromptVersions.ResolveTruthAudit(null, "custom-audit.md", "custom-audit.schema.json") == PromptVersions.Unknown,
+            "unversioned custom assets must not be mislabeled as the bundled v2 contract");
+        Assert(PromptVersions.ResolveTruthAudit(PromptVersions.TruthAuditV1, "custom-audit.md", "custom-audit.schema.json") == PromptVersions.TruthAuditV1,
+            "an explicit custom-asset provenance id must take precedence over filename inference");
+        var prompt = File.ReadAllText(Path.Combine("benchmarks", "supercalc-v3", "prompts", "truth_audit_v2.md"));
+        Assert(prompt.Contains("`previous_claim` must be an exact quote of at least 8 characters", StringComparison.Ordinal),
+            "the prompt must declare the correction-provenance rule enforced by diagnostics");
+        using var schema = JsonDocument.Parse(File.ReadAllText(Path.Combine("benchmarks", "supercalc-v3", "schemas", "truth_audit_v2.schema.json")));
+        var previousClaim = schema.RootElement.GetProperty("properties").GetProperty("corrections")
+            .GetProperty("items").GetProperty("properties").GetProperty("previous_claim");
+        Assert(previousClaim.GetProperty("minLength").GetInt32() == 8
+               && previousClaim.GetProperty("description").GetString()?.Contains("exact quote", StringComparison.OrdinalIgnoreCase) == true,
+            "the correction schema must match the exact-quote provenance validator");
     }
 
     private static void DiagnosticsRevisionSelectivityContract()

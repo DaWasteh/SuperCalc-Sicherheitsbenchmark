@@ -455,7 +455,7 @@ internal static partial class TestRunner
                 RunName = "Run 3",
                 RunKind = "truth_audit",
                 GroundTruthVisibleToModel = true,
-                PromptVersion = PromptVersions.TruthAuditV1,
+                PromptVersion = PromptVersions.CurrentTruthAudit,
                 StartedAt = now,
                 CompletedAt = now,
                 Response = "{\"summary\":\"ok\"}",
@@ -473,7 +473,7 @@ internal static partial class TestRunner
                     EvidenceLaunderingCount = 1,
                     QuoteFidelity = 0.95
                 },
-                Score = new ScoringResult { RunName = "Run 3", PromptVersion = PromptVersions.TruthAuditV1, ScorePercent = 88, RawPoints = 88 }
+                Score = new ScoringResult { RunName = "Run 3", PromptVersion = PromptVersions.CurrentTruthAudit, ScorePercent = 88, RawPoints = 88 }
             };
 
             store.Save(result);

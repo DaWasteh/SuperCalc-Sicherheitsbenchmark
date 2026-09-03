@@ -203,9 +203,45 @@ public static class PromptVersions
     public const string AnalysisV1 = "analysis_v1";
     public const string SelfValidateV1 = "self_validate_v1";
     public const string TruthAuditV1 = "truth_audit_v1";
+    public const string TruthAuditV2 = "truth_audit_v2";
+    public const string CurrentTruthAudit = TruthAuditV2;
     public const string Fixture = "fixture";
     public const string ReasoningDisclosure = "reasoning_disclosure";
     public const string Unknown = "unknown";
+
+    public static bool IsTruthAudit(string? promptVersion)
+    {
+        return string.Equals(promptVersion, TruthAuditV1, StringComparison.OrdinalIgnoreCase)
+               || string.Equals(promptVersion, TruthAuditV2, StringComparison.OrdinalIgnoreCase);
+    }
+
+    public static string ResolveTruthAudit(
+        string? explicitVersion,
+        string? promptPath,
+        string? schemaPath)
+    {
+        if (!string.IsNullOrWhiteSpace(explicitVersion))
+        {
+            return explicitVersion.Trim();
+        }
+
+        var promptFile = Path.GetFileName(promptPath ?? string.Empty);
+        var schemaFile = Path.GetFileName(schemaPath ?? string.Empty);
+        if (string.Equals(promptFile, "truth_audit_v2.md", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(schemaFile, "truth_audit_v2.schema.json", StringComparison.OrdinalIgnoreCase))
+        {
+            return TruthAuditV2;
+        }
+
+        if (string.Equals(promptFile, "truth_audit_v1.md", StringComparison.OrdinalIgnoreCase)
+            && (string.Equals(schemaFile, "truth_audit.schema.json", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(schemaFile, "truth_audit_v1.schema.json", StringComparison.OrdinalIgnoreCase)))
+        {
+            return TruthAuditV1;
+        }
+
+        return Unknown;
+    }
 
     public static string ForRunName(string? runName)
     {

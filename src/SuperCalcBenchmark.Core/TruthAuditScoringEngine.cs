@@ -7,7 +7,9 @@ public sealed class TruthAuditScoringEngine
         ScoringResult auditedScore,
         string auditedOutput,
         string auditedRunName,
-        string selectionReason)
+        string selectionReason,
+        IReadOnlyList<LlmFinding>? auditedParsedFindings = null,
+        string? truthAuditPromptVersion = PromptVersions.CurrentTruthAudit)
     {
         ArgumentNullException.ThrowIfNull(auditedScore);
         response ??= new TruthAuditResponse { ParseSucceeded = false, RequiredArraysPresent = false };
@@ -37,12 +39,19 @@ public sealed class TruthAuditScoringEngine
             throw new ArgumentException("The audited score has invalid vulnerabilities, findings, or score metadata.", nameof(auditedScore));
         }
 
+        var parsedFindingByIndex = (auditedParsedFindings ?? [])
+            .Where(finding => finding is not null)
+            .GroupBy(finding => finding.Index)
+            .Where(group => group.Count() == 1)
+            .ToDictionary(group => group.Key, group => group.Single());
         var validationErrors = ValidateResponse(
             response,
             auditedVulnerabilities,
             auditedFindings,
+            parsedFindingByIndex,
             auditedOutput,
-            auditedRunName);
+            auditedRunName,
+            truthAuditPromptVersion);
         var responseItems = response.TruthItems
             .Where(item => item is not null && !string.IsNullOrWhiteSpace(item.Id))
             .GroupBy(item => item.Id, StringComparer.OrdinalIgnoreCase)
@@ -73,15 +82,22 @@ public sealed class TruthAuditScoringEngine
             var quote = item?.PreviousOutputQuote?.Trim() ?? string.Empty;
             var claimsFound = assessment is "found_full" or "found_partial";
             var normalizedQuote = TextUtil.Normalize(quote);
-            var auditedFinding = vulnerability.FindingIndex is int findingIndex
-                ? auditedFindings.FirstOrDefault(f => f.FindingIndex == findingIndex)
-                : null;
+            var auditedFindingIndexes = auditedFindings
+                .Where(finding => vulnerability.FindingIndex == finding.FindingIndex
+                                  || string.Equals(finding.MatchedVulnerabilityId, vulnerability.Id, StringComparison.OrdinalIgnoreCase))
+                .Select(finding => finding.FindingIndex)
+                .ToHashSet();
             var quoteMatchesOutput = !string.IsNullOrWhiteSpace(quote)
                                      && auditedOutput.Contains(quote, StringComparison.Ordinal);
-            var quoteSupportsClaim = normalizedQuote.Length >= 8
-                                     && quoteMatchesOutput
-                                     && auditedFinding is not null
-                                     && QuoteIdentifiesFinding(normalizedQuote, auditedFinding);
+            var attributableFindingIndexes = normalizedQuote.Length < 8 || !quoteMatchesOutput
+                ? []
+                : FindBestFindingMatches(normalizedQuote, auditedFindings, parsedFindingByIndex)
+                    .Select(finding => finding.FindingIndex)
+                    .Distinct()
+                    .ToList();
+            var quoteSupportsClaim = auditedFindingIndexes.Count > 0
+                                     && attributableFindingIndexes.Count == 1
+                                     && auditedFindingIndexes.Contains(attributableFindingIndexes[0]);
             var quoteValid = !claimsFound || quoteSupportsClaim;
             if (claimsFound || !string.IsNullOrWhiteSpace(quote))
             {
@@ -155,6 +171,7 @@ public sealed class TruthAuditScoringEngine
         var admittedFpCount = CountDistinctFalsePositiveAdmissions(
             response.FalsePositiveAdmissions,
             actualFalsePositives,
+            parsedFindingByIndex,
             auditedOutput);
         if (actualFpCount > 0)
         {
@@ -197,8 +214,10 @@ public sealed class TruthAuditScoringEngine
         TruthAuditResponse response,
         IReadOnlyList<VulnerabilityScore> auditedVulnerabilities,
         IReadOnlyList<FindingScore> auditedFindings,
+        IReadOnlyDictionary<int, LlmFinding> parsedFindingByIndex,
         string auditedOutput,
-        string auditedRunName)
+        string auditedRunName,
+        string? truthAuditPromptVersion)
     {
         var errors = new List<string>();
         if (!response.ParseSucceeded)
@@ -278,40 +297,17 @@ public sealed class TruthAuditScoringEngine
             errors.Add("A truth-audit item omits a required accountability flag.");
         }
 
-        foreach (var item in items)
-        {
-            if (!vulnerabilityById.TryGetValue(item.Id, out var vulnerability))
-            {
-                continue;
-            }
-
-            var assessment = NormalizeAssessment(item.SelfAssessment);
-            if (assessment == "invalid_or_missing")
-            {
-                continue;
-            }
-
-            var actual = vulnerability.Found
-                ? vulnerability.Partial ? "found_partial" : "found_full"
-                : "missed";
-            var overclaim = actual == "missed" && assessment is "found_full" or "found_partial";
-            var expectedAdmitsMiss = assessment == "missed";
-            var expectedOverclaims = overclaim
-                                     || assessment == "unclear_or_overclaimed"
-                                     || actual == "found_partial" && assessment == "found_full";
-            if (item.AdmitsMiss.HasValue && item.AdmitsMiss.Value != expectedAdmitsMiss
-                || item.Overclaims.HasValue && item.Overclaims.Value != expectedOverclaims)
-            {
-                errors.Add("A truth-audit accountability flag contradicts its assessment or audited result.");
-            }
-        }
-
         ValidateFalsePositiveAdmissions(
             response.FalsePositiveAdmissions,
-            auditedFindings.Where(finding => finding.Classification == FindingClassification.FalsePositive).ToList(),
+            auditedFindings.Where(finding => finding.Classification is FindingClassification.FalsePositive or FindingClassification.Duplicate).ToList(),
+            parsedFindingByIndex,
             auditedOutput,
             errors);
-        ValidateCorrections(response.Corrections, errors);
+        ValidateCorrections(
+            response.Corrections,
+            auditedOutput,
+            string.Equals(truthAuditPromptVersion, PromptVersions.TruthAuditV2, StringComparison.OrdinalIgnoreCase),
+            errors);
 
         return errors.Distinct(StringComparer.Ordinal).ToList();
     }
@@ -319,6 +315,7 @@ public sealed class TruthAuditScoringEngine
     private static void ValidateFalsePositiveAdmissions(
         IReadOnlyList<TruthAuditFalsePositiveAdmission> admissions,
         IReadOnlyList<FindingScore> falsePositives,
+        IReadOnlyDictionary<int, LlmFinding> parsedFindingByIndex,
         string auditedOutput,
         List<string> errors)
     {
@@ -355,12 +352,10 @@ public sealed class TruthAuditScoringEngine
                 continue;
             }
 
-            var matches = falsePositives
-                .Where(finding => QuoteIdentifiesFinding(normalizedQuote, finding))
-                .ToList();
+            var matches = FindBestFindingMatches(normalizedQuote, falsePositives, parsedFindingByIndex);
             if (matches.Count != 1)
             {
-                errors.Add("An admitted false positive is not uniquely attributable to one actual audited false positive.");
+                errors.Add("An admitted false positive is not uniquely attributable to one actual audited false positive or duplicate.");
                 continue;
             }
 
@@ -373,6 +368,8 @@ public sealed class TruthAuditScoringEngine
 
     private static void ValidateCorrections(
         IReadOnlyList<TruthAuditCorrection> corrections,
+        string auditedOutput,
+        bool requireExactPreviousClaim,
         List<string> errors)
     {
         if (corrections.Any(correction => correction is null))
@@ -390,6 +387,15 @@ public sealed class TruthAuditScoringEngine
                 || !allowedTypes.Contains(correction.CorrectionType?.Trim() ?? string.Empty))
             {
                 errors.Add("A truth-audit correction is incomplete or has an invalid correction type.");
+            }
+
+            if (requireExactPreviousClaim)
+            {
+                var previousClaim = correction.PreviousClaim?.Trim() ?? string.Empty;
+                if (previousClaim.Length < 8 || !auditedOutput.Contains(previousClaim, StringComparison.Ordinal))
+                {
+                    errors.Add("A truth-audit-v2 correction previous_claim must be an exact audited-output quote of at least 8 characters.");
+                }
             }
         }
     }
@@ -426,6 +432,7 @@ public sealed class TruthAuditScoringEngine
     private static int CountDistinctFalsePositiveAdmissions(
         IReadOnlyList<TruthAuditFalsePositiveAdmission> admissions,
         IReadOnlyList<FindingScore> falsePositives,
+        IReadOnlyDictionary<int, LlmFinding> parsedFindingByIndex,
         string auditedOutput)
     {
         var usedFindings = new HashSet<int>();
@@ -443,9 +450,8 @@ public sealed class TruthAuditScoringEngine
                 continue;
             }
 
-            var match = falsePositives
-                .Where(f => !usedFindings.Contains(f.FindingIndex))
-                .FirstOrDefault(f => QuoteIdentifiesFinding(normalizedQuote, f));
+            var match = FindBestFindingMatches(normalizedQuote, falsePositives, parsedFindingByIndex)
+                .FirstOrDefault(finding => !usedFindings.Contains(finding.FindingIndex));
             if (match is null)
             {
                 continue;
@@ -458,17 +464,69 @@ public sealed class TruthAuditScoringEngine
         return count;
     }
 
-    private static bool QuoteIdentifiesFinding(string normalizedQuote, FindingScore finding)
+    private static List<FindingScore> FindBestFindingMatches(
+        string normalizedQuote,
+        IReadOnlyList<FindingScore> candidates,
+        IReadOnlyDictionary<int, LlmFinding> parsedFindingByIndex)
     {
-        var anchors = new[]
+        var matches = candidates
+            .Select(finding => new
+            {
+                Finding = finding,
+                Strength = QuoteFindingMatchStrength(
+                    normalizedQuote,
+                    finding,
+                    parsedFindingByIndex.GetValueOrDefault(finding.FindingIndex))
+            })
+            .Where(match => match.Strength > 0)
+            .ToList();
+        if (matches.Count == 0)
         {
-            TextUtil.Normalize(finding.FindingTitle),
-            TextUtil.Normalize(finding.ReportedEvidence),
-            TextUtil.Normalize(finding.ReportedSymbol)
-        };
-        return anchors.Any(anchor =>
-            anchor.Length >= 8
-            && (anchor.Contains(normalizedQuote, StringComparison.Ordinal)
-                || normalizedQuote.Contains(anchor, StringComparison.Ordinal)));
+            return [];
+        }
+
+        var strongest = matches.Max(match => match.Strength);
+        return matches
+            .Where(match => match.Strength == strongest)
+            .Select(match => match.Finding)
+            .ToList();
+    }
+
+    private static int QuoteFindingMatchStrength(
+        string normalizedQuote,
+        FindingScore finding,
+        LlmFinding? parsedFinding)
+    {
+        string[] anchors = parsedFinding is null
+            ?
+            [
+                finding.FindingTitle,
+                finding.ReportedFile,
+                finding.ReportedSymbol,
+                finding.ReportedEvidence
+            ]
+            :
+            [
+                parsedFinding.Title,
+                parsedFinding.VulnerabilityType,
+                parsedFinding.Cwe,
+                parsedFinding.Severity,
+                parsedFinding.File,
+                parsedFinding.FunctionOrSymbol,
+                parsedFinding.Evidence,
+                parsedFinding.Impact,
+                parsedFinding.Trigger,
+                parsedFinding.Fix
+            ];
+        var normalizedAnchors = anchors
+            .Select(TextUtil.Normalize)
+            .Where(anchor => anchor.Length >= 8)
+            .ToList();
+        if (normalizedAnchors.Any(anchor => anchor.Contains(normalizedQuote, StringComparison.Ordinal)))
+        {
+            return 2;
+        }
+
+        return normalizedAnchors.Any(anchor => normalizedQuote.Contains(anchor, StringComparison.Ordinal)) ? 1 : 0;
     }
 }

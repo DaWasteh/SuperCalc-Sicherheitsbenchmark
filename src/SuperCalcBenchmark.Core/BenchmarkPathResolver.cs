@@ -20,9 +20,9 @@ public sealed class BenchmarkPathSet
     public string GroundTruthPath => Path.Combine(AssetRoot, "benchmarks", "supercalc-v3", "ground_truth.json");
     public string AnalysisPromptPath => Path.Combine(AssetRoot, "benchmarks", "supercalc-v3", "prompts", "analysis_v1.md");
     public string SelfValidatePromptPath => Path.Combine(AssetRoot, "benchmarks", "supercalc-v3", "prompts", "self_validate_v1.md");
-    public string TruthAuditPromptPath => Path.Combine(AssetRoot, "benchmarks", "supercalc-v3", "prompts", "truth_audit_v1.md");
+    public string TruthAuditPromptPath => Path.Combine(AssetRoot, "benchmarks", "supercalc-v3", "prompts", "truth_audit_v2.md");
     public string FindingsSchemaPath => Path.Combine(AssetRoot, "benchmarks", "supercalc-v3", "schemas", "llm_findings.schema.json");
-    public string TruthAuditSchemaPath => Path.Combine(AssetRoot, "benchmarks", "supercalc-v3", "schemas", "truth_audit.schema.json");
+    public string TruthAuditSchemaPath => Path.Combine(AssetRoot, "benchmarks", "supercalc-v3", "schemas", "truth_audit_v2.schema.json");
     public string LegacyArchiveRoot => Path.Combine(AssetRoot, ArchiveStore.DefaultArchiveFolderName);
 
     /// <summary>
@@ -52,9 +52,9 @@ public static class BenchmarkPathResolver
         Path.Combine("benchmarks", "supercalc-v3", "ground_truth.json"),
         Path.Combine("benchmarks", "supercalc-v3", "prompts", "analysis_v1.md"),
         Path.Combine("benchmarks", "supercalc-v3", "prompts", "self_validate_v1.md"),
-        Path.Combine("benchmarks", "supercalc-v3", "prompts", "truth_audit_v1.md"),
+        Path.Combine("benchmarks", "supercalc-v3", "prompts", "truth_audit_v2.md"),
         Path.Combine("benchmarks", "supercalc-v3", "schemas", "llm_findings.schema.json"),
-        Path.Combine("benchmarks", "supercalc-v3", "schemas", "truth_audit.schema.json")
+        Path.Combine("benchmarks", "supercalc-v3", "schemas", "truth_audit_v2.schema.json")
     ];
 
     public static BenchmarkPathSet Resolve(BenchmarkPathResolutionOptions? options = null)

@@ -459,7 +459,7 @@ public sealed class BenchmarkRunArtifacts
 
 public sealed class BenchmarkRunResult
 {
-    public string ToolVersion { get; init; } = "0.7.4";
+    public string ToolVersion { get; init; } = "0.7.5";
     public BehavioralDiagnosticsEnvelope? BehavioralDiagnostics { get; set; }
     public string BenchmarkId { get; init; } = string.Empty;
     public string BenchmarkProfile { get; init; } = "official";
@@ -509,9 +509,10 @@ public sealed class BenchmarkOptions
     public string GroundTruthPath { get; init; } = Path.Combine("benchmarks", "supercalc-v3", "ground_truth.json");
     public string AnalysisPromptPath { get; init; } = Path.Combine("benchmarks", "supercalc-v3", "prompts", "analysis_v1.md");
     public string SelfValidatePromptPath { get; init; } = Path.Combine("benchmarks", "supercalc-v3", "prompts", "self_validate_v1.md");
-    public string TruthAuditPromptPath { get; init; } = Path.Combine("benchmarks", "supercalc-v3", "prompts", "truth_audit_v1.md");
+    public string TruthAuditPromptPath { get; init; } = Path.Combine("benchmarks", "supercalc-v3", "prompts", "truth_audit_v2.md");
+    public string TruthAuditPromptVersion { get; init; } = string.Empty;
     public string SchemaPath { get; init; } = Path.Combine("benchmarks", "supercalc-v3", "schemas", "llm_findings.schema.json");
-    public string TruthAuditSchemaPath { get; init; } = Path.Combine("benchmarks", "supercalc-v3", "schemas", "truth_audit.schema.json");
+    public string TruthAuditSchemaPath { get; init; } = Path.Combine("benchmarks", "supercalc-v3", "schemas", "truth_audit_v2.schema.json");
     public string? OutputDirectory { get; init; }
     public double Temperature { get; init; } = 0.0;
     public double TopP { get; init; } = 1.0;

@@ -496,6 +496,10 @@ internal static class Program
             : (int?)null;
 
         var archiveDirectory = includeArchive ? ResolveArchiveDirectory(args, paths) : null;
+        var usesCustomTruthAuditAssets = args.Has("--truth-audit-prompt") || args.Has("--truth-audit-schema");
+        var truthAuditPromptVersion = args.Get(
+            "--truth-audit-prompt-version",
+            usesCustomTruthAuditAssets ? PromptVersions.Unknown : PromptVersions.CurrentTruthAudit);
         var archiveMirrorDirectory = mirrorArchive
                                      && !string.IsNullOrWhiteSpace(archiveDirectory)
                                      && BenchmarkPathResolver.SamePath(archiveDirectory, paths.ArchiveRoot)
@@ -511,6 +515,7 @@ internal static class Program
             AnalysisPromptPath = ResolveOptionPath(args, "--analysis-prompt", paths.AnalysisPromptPath),
             SelfValidatePromptPath = ResolveOptionPath(args, "--self-prompt", paths.SelfValidatePromptPath),
             TruthAuditPromptPath = ResolveOptionPath(args, "--truth-audit-prompt", paths.TruthAuditPromptPath),
+            TruthAuditPromptVersion = truthAuditPromptVersion,
             SchemaPath = ResolveOptionPath(args, "--schema", paths.FindingsSchemaPath),
             TruthAuditSchemaPath = ResolveOptionPath(args, "--truth-audit-schema", paths.TruthAuditSchemaPath),
             OutputDirectory = args.GetNullable("--out"),
@@ -740,6 +745,7 @@ internal static class Program
         Console.WriteLine("  --scoring-profile <official-v1|official-v2>  Scoring profile for run/fixture/compare. Default: official-v1");
         Console.WriteLine("  --with-truth-audit [always|never|only-best-repeat]  Run non-blind Run 3 honesty/accountability audit after Run 1+2");
         Console.WriteLine("  --truth-audit-source <best|run1|run2>  Previous answer audited by Run 3. Default: best");
+        Console.WriteLine("  --truth-audit-prompt-version <id>  Provenance id for custom audit prompt/schema assets; custom assets default to unknown");
         Console.WriteLine("  --no-loop-abort            Disable final-output repetition guard (not recommended)");
         Console.WriteLine("  --allow-hash-mismatch      Development escape hatch; do not use for official scoring");
         Console.WriteLine();

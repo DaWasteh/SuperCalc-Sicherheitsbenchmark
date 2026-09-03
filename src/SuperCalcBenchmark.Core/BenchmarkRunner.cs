@@ -4,7 +4,7 @@ namespace SuperCalcBenchmark.Core;
 
 public sealed class BenchmarkRunner
 {
-    private const string ToolVersion = "0.7.4";
+    private const string ToolVersion = "0.7.5";
 
     private readonly GroundTruthStore _groundTruthStore;
     private readonly PromptBuilder _promptBuilder;
@@ -53,6 +53,10 @@ public sealed class BenchmarkRunner
         var groundTruth = _groundTruthStore.Load(options.GroundTruthPath);
         var groundTruthSha256 = GroundTruthStore.ComputeSha256(options.GroundTruthPath);
         var scoringProfile = ScoringProfiles.Get(options.ScoringProfile);
+        var truthAuditPromptVersion = PromptVersions.ResolveTruthAudit(
+            options.TruthAuditPromptVersion,
+            options.TruthAuditPromptPath,
+            options.TruthAuditSchemaPath);
         ValidatePreflight(options, source, groundTruth);
 
         using var client = new LlamaCppClient(options.Timeout);
@@ -291,12 +295,14 @@ public sealed class BenchmarkRunner
                 auditTarget.Artifacts.Score,
                 auditTarget.Artifacts.Response,
                 auditTarget.Artifacts.RunName,
-                auditTarget.SelectionReason);
+                auditTarget.SelectionReason,
+                auditTarget.Artifacts.Parse.Findings,
+                truthAuditPromptVersion);
             var run3CompletedAt = DateTimeOffset.UtcNow;
             result.Run3 = new BenchmarkRunArtifacts
             {
                 RunName = "Run 3",
-                PromptVersion = PromptVersions.TruthAuditV1,
+                PromptVersion = truthAuditPromptVersion,
                 RunKind = "truth_audit",
                 GroundTruthVisibleToModel = true,
                 StartedAt = run3StartedAt,
@@ -328,7 +334,7 @@ public sealed class BenchmarkRunner
                     ParserVersion = ResponseParser.CurrentParserVersion,
                     GroundTruthSha256 = groundTruthSha256,
                     SourceSha256 = source.Sha256,
-                    PromptVersion = PromptVersions.TruthAuditV1,
+                    PromptVersion = truthAuditPromptVersion,
                     ScorePercent = truthAudit.AccountabilityScore,
                     RawPoints = truthAudit.AccountabilityScore
                 },
@@ -365,6 +371,10 @@ public sealed class BenchmarkRunner
         var source = SourceDocument.Load(options.SourcePath);
         var groundTruth = _groundTruthStore.Load(options.GroundTruthPath);
         var groundTruthSha256 = GroundTruthStore.ComputeSha256(options.GroundTruthPath);
+        var truthAuditPromptVersion = PromptVersions.ResolveTruthAudit(
+            options.TruthAuditPromptVersion,
+            options.TruthAuditPromptPath,
+            options.TruthAuditSchemaPath);
         ValidatePreflight(options, source, groundTruth);
 
         using var client = new LlamaCppClient(options.Timeout);
@@ -397,12 +407,14 @@ public sealed class BenchmarkRunner
             auditTarget.Artifacts.Score,
             auditTarget.Artifacts.Response,
             auditTarget.Artifacts.RunName,
-            auditTarget.SelectionReason);
+            auditTarget.SelectionReason,
+            auditTarget.Artifacts.Parse.Findings,
+            truthAuditPromptVersion);
         var run3CompletedAt = DateTimeOffset.UtcNow;
         result.Run3 = new BenchmarkRunArtifacts
         {
             RunName = "Run 3",
-            PromptVersion = PromptVersions.TruthAuditV1,
+            PromptVersion = truthAuditPromptVersion,
             RunKind = "truth_audit",
             GroundTruthVisibleToModel = true,
             StartedAt = run3StartedAt,
@@ -434,7 +446,7 @@ public sealed class BenchmarkRunner
                 ParserVersion = ResponseParser.CurrentParserVersion,
                 GroundTruthSha256 = groundTruthSha256,
                 SourceSha256 = source.Sha256,
-                PromptVersion = PromptVersions.TruthAuditV1,
+                PromptVersion = truthAuditPromptVersion,
                 ScorePercent = truthAudit.AccountabilityScore,
                 RawPoints = truthAudit.AccountabilityScore
             },

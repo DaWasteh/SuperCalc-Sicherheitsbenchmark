@@ -38,4 +38,23 @@ internal static partial class TestRunner
         var alias = new TruthAuditParser().Parse("{\"audited_run\":\"run2\"," + EmptyAuditArrays + "}");
         Assert(alias.ParseSucceeded && alias.AuditedRun == "Run 2", "run2 alias must normalize to Run 2");
     }
+
+    private static void TruthAuditParsingRemainsSeparateFromScoringValidity()
+    {
+        var parsed = new TruthAuditParser().Parse(
+            "{\"summary\":\"clean JSON with the wrong semantic target\",\"audited_run\":\"Run 1\"," + EmptyAuditArrays + "}");
+        Assert(parsed.ParseSucceeded && parsed.RequiredArraysPresent,
+            "syntactically clean JSON with all required arrays must remain a successful parse");
+
+        var score = new ScoringResult
+        {
+            RunName = "Run 2",
+            Vulnerabilities = [new VulnerabilityScore { Id = "A", Found = false }]
+        };
+        var audit = new TruthAuditScoringEngine().Score(parsed, score, string.Empty, "Run 2", "test");
+        Assert(audit.IsValid == false && parsed.ParseSucceeded,
+            "semantic scoring invalidity must not be mislabeled as a parser failure");
+        Assert(!audit.ValidationErrors.Any(error => error.Contains("could not be parsed", StringComparison.OrdinalIgnoreCase)),
+            "a successful parse must not emit the parser-failure validation error");
+    }
 }
