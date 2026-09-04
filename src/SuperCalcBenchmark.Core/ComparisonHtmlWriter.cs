@@ -776,8 +776,13 @@ public sealed class ComparisonHtmlWriter
   document.getElementById("metric").value = data.metric || "score";
   document.getElementById("runView").value = (data.runView || "primary").toLowerCase();
   const scopeSelect = document.getElementById("scope");
-  scopeSelect.value = scopeByKey[data.defaultScope] ? data.defaultScope : (scopeByKey.current && scopeByKey.current.runCount > 0 ? "current" : "all");
+  // Default to the current-parser scope only when it actually contains runs; right after a
+  // parser bump every archived run is stale, and an empty page would look like missing data.
+  const currentHasRuns = !!(scopeByKey.current && scopeByKey.current.runCount > 0);
+  const requestedScope = data.defaultScope && scopeByKey[data.defaultScope] && (data.defaultScope !== "current" || currentHasRuns) ? data.defaultScope : null;
+  scopeSelect.value = requestedScope || (currentHasRuns ? "current" : "all");
   if (!scopeSelect.value) scopeSelect.value = "all";
+  const staleNotice = currentHasRuns ? "" : `<span class="chip">Noch keine Runs mit ${esc(data.parserVersion)}; Standard-Scope ist „Alle Versionen“</span>`;
   const groupingSelect = document.getElementById("grouping");
   groupingSelect.value = groupingByKey[data.defaultGrouping] && (data.defaultGrouping === "model" || hasBackendGrouping) ? data.defaultGrouping : "model";
 
@@ -794,7 +799,7 @@ public sealed class ComparisonHtmlWriter
     document.querySelectorAll("select[multiple]").forEach(s => [...s.options].forEach(o => o.selected = false));
     document.getElementById("metric").value = "score";
     document.getElementById("runView").value = (data.runView || "primary").toLowerCase();
-    scopeSelect.value = scopeByKey.current && scopeByKey.current.runCount > 0 ? "current" : "all";
+    scopeSelect.value = currentHasRuns ? "current" : "all";
     groupingSelect.value = "model";
     render();
   });
@@ -812,6 +817,7 @@ public sealed class ComparisonHtmlWriter
     const backendCounts = {};
     rows.forEach(s => Object.entries(s.backendBreakdown || {}).forEach(([k,v]) => { backendCounts[k] = (backendCounts[k]||0) + v; }));
     document.getElementById("summary").innerHTML =
+      staleNotice +
       `<span class="chip accent"><strong>${rows.length}</strong> von ${availableSeries.length} Gruppen</span>` +
       `<span class="chip"><strong>${visibleRuns}</strong> Runs im Scope „${esc(scope.label)}“</span>` +
       `<span class="chip">Gruppierung: ${esc(grouping.label)}</span>` +

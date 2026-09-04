@@ -394,6 +394,7 @@ internal static partial class TestRunner
             Assert(html.Contains("id=\"scope\"", StringComparison.Ordinal), "html should expose the version-scope selector (replaces the include-deprecated toggle)");
             Assert(html.Contains("id=\"grouping\"", StringComparison.Ordinal), "html should expose the backend grouping selector");
             Assert(html.Contains("projection(state.scope, state.grouping)", StringComparison.Ordinal), "rendering must switch between precomputed scope/grouping projections");
+            Assert(html.Contains("currentHasRuns ? \"current\" : \"all\"", StringComparison.Ordinal), "the page must fall back to all versions when no current-parser runs exist yet");
             Assert(html.Contains("Parser parser-v1", StringComparison.Ordinal) && html.Contains("Aktuell (parser-v3)", StringComparison.Ordinal), "scope options must list the parser versions present in the archive");
             Assert(html.Contains("${esc(d.scoringProfile||\"legacy-unknown\")} - ${esc(d.parserVersion||\"parser-unbekannt\")}", StringComparison.Ordinal), "score versions should read official-v1 - parser-vN without a duplicate profile version");
             Assert(!html.Contains(" v${d.scoringProfileVersion", StringComparison.Ordinal), "score-version labels must not append the confusing duplicate v1");
