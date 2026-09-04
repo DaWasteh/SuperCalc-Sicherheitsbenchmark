@@ -159,6 +159,12 @@ public sealed class ParseResult
     public bool UsedTextFallback { get; init; }
     public string ParseMode { get; init; } = string.Empty;
     public string? Warning { get; init; }
+
+    /// <summary>
+    /// Lenient JSON repairs that were required to read the payload (parser-v3), e.g.
+    /// <c>leading_zero</c> or <c>unescaped_quote</c>. Empty when the JSON was valid as emitted.
+    /// </summary>
+    public List<string> Repairs { get; init; } = [];
 }
 
 public sealed class ValidationIssue
@@ -459,7 +465,7 @@ public sealed class BenchmarkRunArtifacts
 
 public sealed class BenchmarkRunResult
 {
-    public string ToolVersion { get; init; } = "0.7.5";
+    public string ToolVersion { get; init; } = "0.7.6";
     public BehavioralDiagnosticsEnvelope? BehavioralDiagnostics { get; set; }
     public string BenchmarkId { get; init; } = string.Empty;
     public string BenchmarkProfile { get; init; } = "official";
@@ -487,6 +493,17 @@ public sealed class BenchmarkRunResult
     /// back to name-based detection. Transit only — not serialized into the archive.
     /// </summary>
     public string? DetectedQuant { get; init; }
+
+    /// <summary>
+    /// Inference engine / compute backend identity observed for this run (llama.cpp build,
+    /// Vulkan/HIP/CUDA/..., launch parameters). Null for fixture scoring. Serialized into
+    /// run.json and copied into the compact scorecard's serverMetadata.
+    /// </summary>
+    public ServerRuntimeInfo? Runtime { get; set; }
+
+    /// <summary>Campaign (multi-model/backend batch) this run belongs to; empty for single runs.</summary>
+    public string CampaignId { get; init; } = string.Empty;
+    public string CampaignItemLabel { get; init; } = string.Empty;
     public string SourceFile { get; init; } = string.Empty;
     public string SourceSha256 { get; init; } = string.Empty;
     public string ExpectedSourceSha256 { get; init; } = string.Empty;
@@ -561,4 +578,84 @@ public sealed class BenchmarkOptions
 
     /// <summary>Optional local reviewer decisions applied after automatic scoring. Never sent to the model.</summary>
     public string? AdjudicationPath { get; init; }
+
+    /// <summary>Bearer token for the inference server itself (llama-server --api-key). Null sends the "no-key" placeholder.</summary>
+    public string? ServerApiKey { get; init; }
+
+    /// <summary>Probe engine/backend identity of the server before Run 1 (default on). Disable for exotic gateways.</summary>
+    public bool ProbeRuntime { get; init; } = true;
+
+    /// <summary>Manual engine/backend labels that outrank every automatic detection.</summary>
+    public RuntimeOverride? RuntimeOverride { get; init; }
+
+    /// <summary>Runtime identity already known from the AutoTuner control API (campaign runs).</summary>
+    public ServerRuntimeInfo? PresetRuntime { get; init; }
+
+    /// <summary>Campaign identity for multi-model/backend batches; copied into run.json and the scorecard.</summary>
+    public string CampaignId { get; init; } = string.Empty;
+    public string CampaignItemLabel { get; init; } = string.Empty;
+
+    /// <summary>Copies every option; used by repeat/campaign loops that only vary a few fields.</summary>
+    public BenchmarkOptions With(
+        string? model = null,
+        string? serverUrl = null,
+        int? seed = null,
+        string? repeatGroupId = null,
+        int? repeatIndex = null,
+        int? repeatCount = null,
+        bool? withTruthAudit = null,
+        string? outputDirectory = null,
+        bool clearOutputDirectory = false,
+        string? archiveDirectory = null,
+        bool clearArchiveDirectory = false,
+        ServerRuntimeInfo? presetRuntime = null,
+        string? campaignId = null,
+        string? campaignItemLabel = null,
+        string? serverApiKey = null,
+        string? quantOverride = null)
+    {
+        return new BenchmarkOptions
+        {
+            ServerUrl = serverUrl ?? ServerUrl,
+            Model = model ?? Model,
+            SourcePath = SourcePath,
+            GroundTruthPath = GroundTruthPath,
+            AnalysisPromptPath = AnalysisPromptPath,
+            SelfValidatePromptPath = SelfValidatePromptPath,
+            TruthAuditPromptPath = TruthAuditPromptPath,
+            TruthAuditPromptVersion = TruthAuditPromptVersion,
+            SchemaPath = SchemaPath,
+            TruthAuditSchemaPath = TruthAuditSchemaPath,
+            OutputDirectory = clearOutputDirectory ? null : outputDirectory ?? OutputDirectory,
+            Temperature = Temperature,
+            TopP = TopP,
+            MaxTokens = MaxTokens,
+            Seed = seed ?? Seed,
+            Repeats = Repeats,
+            SeedStart = SeedStart,
+            RepeatGroupId = repeatGroupId ?? RepeatGroupId,
+            RepeatIndex = repeatIndex ?? RepeatIndex,
+            RepeatCount = repeatCount ?? RepeatCount,
+            TruthAuditRepeatMode = TruthAuditRepeatMode,
+            Timeout = Timeout,
+            AllowHashMismatch = AllowHashMismatch,
+            SkipResponseFormat = SkipResponseFormat,
+            DisableThinking = DisableThinking,
+            BenchmarkProfile = BenchmarkProfile,
+            ScoringProfile = ScoringProfile,
+            WithTruthAudit = withTruthAudit ?? WithTruthAudit,
+            TruthAuditSource = TruthAuditSource,
+            AbortOnLoop = AbortOnLoop,
+            ArchiveDirectory = clearArchiveDirectory ? null : archiveDirectory ?? ArchiveDirectory,
+            ArchiveMirrorDirectory = ArchiveMirrorDirectory,
+            QuantOverride = quantOverride ?? QuantOverride,
+            AdjudicationPath = AdjudicationPath,
+            ServerApiKey = serverApiKey ?? ServerApiKey,
+            ProbeRuntime = ProbeRuntime,
+            RuntimeOverride = RuntimeOverride,
+            PresetRuntime = presetRuntime ?? PresetRuntime,
+            CampaignId = campaignId ?? CampaignId,
+            CampaignItemLabel = campaignItemLabel ?? CampaignItemLabel
+        };
+    }
 }

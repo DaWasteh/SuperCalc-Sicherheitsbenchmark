@@ -83,6 +83,51 @@ public sealed class ReportWriter
         builder.AppendLine($"- Model: `{result.Model}`");
         builder.AppendLine($"- Server: `{result.ServerUrl}`");
         builder.AppendLine($"- Server context window: `{(result.ServerContextSize?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown")}`");
+        if (result.Runtime is { } runtime)
+        {
+            builder.AppendLine($"- Inference engine: `{runtime.Engine}`{(string.IsNullOrWhiteSpace(runtime.EngineVersion) ? string.Empty : $" `{runtime.EngineVersion}`")}");
+            builder.AppendLine($"- Compute backend: `{RuntimeKeys.DisplayBackend(runtime.Backend)}` (source `{runtime.BackendSource}`{(string.IsNullOrWhiteSpace(runtime.BackendDetail) ? string.Empty : $", {EscapePipe(runtime.BackendDetail)}")})");
+            if (!string.IsNullOrWhiteSpace(runtime.RuntimeLabel))
+            {
+                builder.AppendLine($"- Runtime label: `{EscapePipe(runtime.RuntimeLabel)}`");
+            }
+
+            if (runtime.Devices.Count > 0)
+            {
+                builder.AppendLine($"- Devices: {string.Join(", ", runtime.Devices.Select(d => $"`{EscapePipe(d)}`"))}");
+            }
+
+            if (!string.IsNullOrWhiteSpace(runtime.ServerBinary))
+            {
+                builder.AppendLine($"- Server binary: `{EscapePipe(runtime.ServerBinary)}`");
+            }
+
+            var launch = new List<string>();
+            if (runtime.GpuLayers.HasValue) launch.Add($"ngl={runtime.GpuLayers}");
+            if (runtime.Threads.HasValue) launch.Add($"threads={runtime.Threads}");
+            if (runtime.BatchThreads.HasValue) launch.Add($"threads-batch={runtime.BatchThreads}");
+            if (runtime.BatchSize.HasValue) launch.Add($"batch={runtime.BatchSize}");
+            if (runtime.UBatchSize.HasValue) launch.Add($"ubatch={runtime.UBatchSize}");
+            if (!string.IsNullOrWhiteSpace(runtime.KvTypeK)) launch.Add($"cache-type-k={runtime.KvTypeK}");
+            if (!string.IsNullOrWhiteSpace(runtime.KvTypeV)) launch.Add($"cache-type-v={runtime.KvTypeV}");
+            if (!string.IsNullOrWhiteSpace(runtime.FlashAttention)) launch.Add($"flash-attn={runtime.FlashAttention}");
+            if (!string.IsNullOrWhiteSpace(runtime.SpecType)) launch.Add($"spec-type={runtime.SpecType}");
+            if (runtime.Parallel.HasValue) launch.Add($"parallel={runtime.Parallel}");
+            if (launch.Count > 0)
+            {
+                builder.AppendLine($"- Launch parameters: `{EscapePipe(string.Join(' ', launch))}`");
+            }
+
+            if (!string.IsNullOrWhiteSpace(runtime.AutoTunerVersion) || !string.IsNullOrWhiteSpace(runtime.AutoTunerRuntimeId))
+            {
+                builder.AppendLine($"- AutoTuner: version `{runtime.AutoTunerVersion ?? "?"}`, model `{runtime.AutoTunerModelId ?? "?"}`, runtime `{runtime.AutoTunerRuntimeId ?? "?"}`");
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(result.CampaignId))
+        {
+            builder.AppendLine($"- Campaign: `{EscapePipe(result.CampaignId)}` ({EscapePipe(result.CampaignItemLabel)})");
+        }
         builder.AppendLine($"- Requested max completion tokens: `{FormatMaxTokens(result.MaxTokens)}`");
         if (!string.IsNullOrWhiteSpace(result.RepeatGroupId) || result.RepeatCount > 1)
         {

@@ -292,6 +292,89 @@
                 </Grid>
             </TabItem>
 
+            <TabItem Header="Kampagne (AutoTuner)">
+                <Grid Margin="10">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="2*" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+
+                    <WrapPanel Grid.Row="0" Margin="0,0,0,6">
+                        <TextBlock Text="AutoTuner-URL" VerticalAlignment="Center" Margin="4" />
+                        <TextBox x:Name="AutoTunerUrlTextBox" Width="220" ToolTip="Control-API des AutoTuners (⋯ → Settings → External control API). Leer = Sidecar-Datei ~/.autotuner/control_api.json oder AUTOTUNER_API_URL." />
+                        <TextBlock Text="Token" VerticalAlignment="Center" Margin="12,4,4,4" />
+                        <PasswordBox x:Name="AutoTunerTokenBox" Width="220" ToolTip="Bearer-Token aus den AutoTuner-Einstellungen. Leer = Sidecar-Datei oder AUTOTUNER_API_KEY." />
+                        <Button x:Name="ConnectAutoTunerButton" Content="Verbinden &amp; Modelle laden" Margin="12,4,4,4" Click="ConnectAutoTunerButton_Click" ToolTip="Fragt /health, /api/v1/models und /api/v1/runtimes ab und füllt die Listen." />
+                        <TextBlock x:Name="AutoTunerStatusTextBlock" VerticalAlignment="Center" Margin="12,4,4,4" Foreground="{DynamicResource TextSecondaryBrush}" Text="Nicht verbunden. Der AutoTuner muss laufen und seine External control API aktiviert haben." />
+                    </WrapPanel>
+
+                    <WrapPanel Grid.Row="1" Margin="0,0,0,6">
+                        <TextBlock Text="Runs pro Modell × Build" VerticalAlignment="Center" Margin="4" />
+                        <TextBox x:Name="CampaignRepeatsTextBox" Text="1" Width="50" ToolTip="Vollständige Benchmarks (Run 1 + 2 + 3) je ausgewähltem Modell und Build; jeder Run wird einzeln archiviert und als Repeat-Gruppe markiert." />
+                        <CheckBox x:Name="CampaignStopOnErrorCheckBox" Content="Bei Fehler abbrechen" Margin="16,4,4,4" VerticalAlignment="Center" ToolTip="Standard: fehlgeschlagene Modelle werden übersprungen, die Kampagne läuft weiter." />
+                        <CheckBox x:Name="CampaignUnloadCheckBox" Content="Modell am Ende entladen" IsChecked="True" Margin="16,4,4,4" VerticalAlignment="Center" />
+                        <Button x:Name="StartCampaignButton" Content="Kampagne starten" FontWeight="SemiBold" Margin="16,4,4,4" Click="StartCampaignButton_Click" IsEnabled="False" ToolTip="Benchmarkt alle angehakten Modelle mit allen angehakten Builds nacheinander. Die Optionen (Timeout, Seed, response_format, Thinking) kommen aus 'Optionen' oben; das Modell-Tuning kommt aus dem AutoTuner." />
+                        <Button x:Name="CampaignStopAfterRunButton" Content="Nach aktuellem Run beenden" IsEnabled="False" Click="CampaignStopAfterRunButton_Click" ToolTip="Der laufende Run (Run 1 + 2 + 3) wird beendet und archiviert, danach stoppt die Kampagne." />
+                        <Button x:Name="CampaignStopAfterModelButton" Content="Nach aktuellem Modell beenden" IsEnabled="False" Click="CampaignStopAfterModelButton_Click" ToolTip="Alle Wiederholungen des aktuellen Modell/Build-Eintrags laufen zu Ende, danach stoppt die Kampagne." />
+                        <Button x:Name="CampaignAbortButton" Content="Sofort abbrechen" IsEnabled="False" Click="CampaignAbortButton_Click" ToolTip="Bricht die laufende Anfrage ab; bereits empfangene Tokens werden noch ausgewertet." />
+                    </WrapPanel>
+
+                    <Grid Grid.Row="2">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="3*" />
+                            <ColumnDefinition Width="2*" />
+                        </Grid.ColumnDefinitions>
+                        <GroupBox Grid.Column="0" Header="Modelle (AutoTuner-Katalog)" Margin="0,0,4,0">
+                            <DataGrid x:Name="CampaignModelsGrid" AutoGenerateColumns="False" CanUserAddRows="False" CanUserDeleteRows="False" ColumnWidth="Auto" ScrollViewer.HorizontalScrollBarVisibility="Auto">
+                                <DataGrid.Columns>
+                                    <DataGridCheckBoxColumn Header="✓" Binding="{Binding Selected, UpdateSourceTrigger=PropertyChanged}" Width="36" />
+                                    <DataGridTextColumn Header="Modell" Binding="{Binding Name}" IsReadOnly="True" Width="*" />
+                                    <DataGridTextColumn Header="Quant" Binding="{Binding Quant}" IsReadOnly="True" />
+                                    <DataGridTextColumn Header="Params" Binding="{Binding ParamsDisplay}" IsReadOnly="True" />
+                                    <DataGridTextColumn Header="Kontext" Binding="{Binding ContextWindow}" IsReadOnly="True" />
+                                    <DataGridTextColumn Header="Standard-Build" Binding="{Binding DefaultRuntimeId}" IsReadOnly="True" />
+                                    <DataGridTextColumn Header="Hinweis" Binding="{Binding Note}" IsReadOnly="True" />
+                                </DataGrid.Columns>
+                            </DataGrid>
+                        </GroupBox>
+                        <GroupBox Grid.Column="1" Header="llama-server-Builds (Backends)" Margin="4,0,0,0">
+                            <DataGrid x:Name="CampaignRuntimesGrid" AutoGenerateColumns="False" CanUserAddRows="False" CanUserDeleteRows="False" ColumnWidth="Auto" ScrollViewer.HorizontalScrollBarVisibility="Auto">
+                                <DataGrid.Columns>
+                                    <DataGridCheckBoxColumn Header="✓" Binding="{Binding Selected, UpdateSourceTrigger=PropertyChanged}" Width="36" />
+                                    <DataGridTextColumn Header="Build" Binding="{Binding Label}" IsReadOnly="True" Width="*" />
+                                    <DataGridTextColumn Header="Backend" Binding="{Binding Backend}" IsReadOnly="True" />
+                                    <DataGridTextColumn Header="Version" Binding="{Binding Build}" IsReadOnly="True" />
+                                    <DataGridTextColumn Header="Standard" Binding="{Binding DefaultDisplay}" IsReadOnly="True" />
+                                    <DataGridTextColumn Header="Hinweis" Binding="{Binding Note}" IsReadOnly="True" />
+                                </DataGrid.Columns>
+                            </DataGrid>
+                        </GroupBox>
+                    </Grid>
+
+                    <TextBlock Grid.Row="3" x:Name="CampaignPlanTextBlock" Margin="4,6,4,6" Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap"
+                               Text="Keine Builds angehakt = AutoTuner-Standardbuild je Modell. Mehrere Builds angehakt = jedes Modell wird mit jedem Build getestet (Scores separat und gemeinsam vergleichbar)." />
+
+                    <GroupBox Grid.Row="4" Header="Fortschritt der Kampagne">
+                        <DataGrid x:Name="CampaignProgressGrid" AutoGenerateColumns="False" CanUserAddRows="False" CanUserDeleteRows="False" IsReadOnly="True" ColumnWidth="Auto" ScrollViewer.HorizontalScrollBarVisibility="Auto">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="#" Binding="{Binding Index}" />
+                                <DataGridTextColumn Header="Modell @ Build" Binding="{Binding Label}" Width="*" />
+                                <DataGridTextColumn Header="Status" Binding="{Binding State}" />
+                                <DataGridTextColumn Header="Runs" Binding="{Binding RepeatsDisplay}" />
+                                <DataGridTextColumn Header="Backend" Binding="{Binding Backend}" />
+                                <DataGridTextColumn Header="Build" Binding="{Binding Build}" />
+                                <DataGridTextColumn Header="Best" Binding="{Binding BestDisplay}" />
+                                <DataGridTextColumn Header="Ø" Binding="{Binding MeanDisplay}" />
+                                <DataGridTextColumn Header="Meldung" Binding="{Binding Message}" Width="2*" />
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </GroupBox>
+                </Grid>
+            </TabItem>
+
             <TabItem Header="Vergleich">
                 <Grid Margin="10">
                     <Grid.RowDefinitions>
@@ -333,6 +416,14 @@
                             <ComboBoxItem Content="Honesty Stability" />
                             <ComboBoxItem Content="Tokeneffizienz" />
                         </ComboBox>
+                        <TextBlock Text="Gruppierung" VerticalAlignment="Center" Margin="16,4,4,4" />
+                        <ComboBox x:Name="GroupingComboBox" Width="170" SelectionChanged="ComparisonFilter_Changed" ToolTip="Backends zusammen (Modell · Quant) oder getrennt nach Vulkan/HIP/CUDA bzw. Engine/Build vergleichen.">
+                            <ComboBoxItem Content="Modell · Quant" IsSelected="True" />
+                            <ComboBoxItem Content="+ Backend" />
+                            <ComboBoxItem Content="+ Engine/Build" />
+                        </ComboBox>
+                        <TextBlock Text="Versionen" VerticalAlignment="Center" Margin="16,4,4,4" />
+                        <ComboBox x:Name="ScopeComboBox" Width="190" SelectionChanged="ComparisonFilter_Changed" DisplayMemberPath="Label" ToolTip="Nur Scorecards einer Parser-Version oder Benchmark-Version anzeigen. 'Aktuell' = nur mit dem aktuellen Parser ausgewertete Runs." />
                         <Button x:Name="OpenComparisonButton" Content="Diagramme öffnen (HTML)" Margin="16,4,4,4" Click="OpenComparisonButton_Click" IsEnabled="False" ToolTip="Erzeugt interaktive Vergleichsdiagramme als HTML und öffnet sie im Browser." />
                         <Button x:Name="OpenArchiveFolderButton" Content="Archiv bearbeiten" Click="OpenArchiveFolderButton_Click" ToolTip="Öffnet die Scorecard-JSONs. modelFamily/quant können manuell korrigiert werden; danach Archiv neu laden." />
                     </WrapPanel>
@@ -384,6 +475,8 @@
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
+                            <DataGridTextColumn Header="Backend" Binding="{Binding BackendDisplay}" IsReadOnly="True" Width="Auto" />
+                            <DataGridTextColumn Header="Build" Binding="{Binding BuildDisplay}" IsReadOnly="True" Width="Auto" />
                             <DataGridTextColumn Header="Runs" Binding="{Binding RunCount}" IsReadOnly="True" Width="Auto" />
                             <DataGridTextColumn Header="Aktuell" Binding="{Binding CurrentDisplay}" IsReadOnly="True" Width="Auto" />
                             <DataGridTextColumn Header="Score" Binding="{Binding ScorePercent, StringFormat=0.##}" IsReadOnly="True" Width="Auto" />

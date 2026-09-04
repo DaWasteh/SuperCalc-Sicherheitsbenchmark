@@ -355,6 +355,8 @@ The frozen detection profiles are unchanged and backend-neutral. A controlled Qw
 
 `parser-v2` evaluates all fenced and balanced JSON candidates, prefers actual findings over schema/metadata echoes, recovers complete findings from malformed trailing JSON, and rejects non-finite confidence values. The frozen `official-v1` weights, thresholds, matching rules, and engine identity are unchanged; this is nevertheless an **evaluation-semantic parser change**.
 
+`parser-v3` (v0.7.6) adds a **lenient JSON repair pass** that only runs after strict parsing failed and never rewrites valid JSON: leading zeros in numbers (`"line_start": 0218`), invalid escape sequences (`\d`, `\.`), raw control characters inside strings, unescaped inner quotes (`"std::cout << "x" << y"`), missing commas, and truncated strings are repaired, and every applied repair is recorded per run (`parseRepairs`, plus a visible parse warning). Findings that a model places under an echoed schema's `properties.findings` array are accepted, and reasoning text before a stray `</think>` (chat templates that strip the opening tag) is treated as thinking instead of as the answer. A local replay of 1,098 stored detection runs (`parse-audit`) moved 65 runs out of the heuristic text fallback into real JSON parsing (61 higher, 1 lower, 3 unchanged scores); those runs previously showed a single finding although the model had emitted 5–17. Historical `parser-v1`/`parser-v2` scorecards remain comparable history and are marked stale until re-run; the HTML comparison can show any parser or benchmark version on its own.
+
 A mechanical replay of every available historical detection artifact found 448/462 records with raw artifacts: 896 detection runs replayed, 890 exact score/count outcomes, and 6 changed outcomes across 5 records. Fourteen records had no replayable raw artifact. Consequently, v0.7.3 does not silently rewrite historical scorecards: all 462 legacy records (924 detection runs, `parser-v1`) remain comparable history but are shown as **veraltet/stale** (`aktuell 0/462` in the primary comparison). A fresh benchmark run is required for a current `parser-v2` result. HTML/CSV/per-run drilldown expose the current-versus-stale marker.
 
 Truth-audit responses are also strictly validated (correct audited run, complete unique known IDs, required arrays/flags, valid assessments). Flag presence is structural; a present contradictory flag is retained as a consistency diagnostic rather than making the envelope invalid. Invalid/unparsed audits remain archived for diagnostics but cannot contribute headline Accountability/Honesty values. Of the current legacy pool, 325 archived `TruthAuditResult` entries satisfy the conservative compatibility gate for legacy Accountability fields; the stricter artifact-backed `diagnostics-v1` census below remains a separate 125 truth-eligible envelopes.
@@ -376,7 +378,12 @@ dotnet run --project src/SuperCalcBenchmark.Cli -- backfill-archive-metrics --ar
 
 The v0.7.2 historical census is 153 enriched scorecards: 139 complete raw-audit artifacts and 14 partial artifact records (13 invalid/schema-only audit outputs plus one missing artifact). Truth validity is a separate gate: 125 valid/eligible, 15 partial/ineligible, and 13 invalid/ineligible envelopes. Official scoring remains unchanged. See the full eligibility and aggregation rules in [`docs/SCORING_METHODOLOGY.md`](docs/SCORING_METHODOLOGY.md).
 
-The generated HTML contains client-side filters/search (family, quant, severity, category, CWE, score/runs/stddev/FP thresholds, official/source-hash/loop/reasoning toggles) and multiple views. By default it recomputes every chart/table aggregate from current `parser-v2` evaluations only; **include deprecated scores** switches to the full projection including historical `parser-v1` scores. Per-run score versions use the unambiguous form `official-v1 - parser-v1` / `official-v1 - parser-v2`. Compact metric tiles honor the configurable Top-N limit; maximizing a tile by clicking anywhere inside it always shows every filtered model (the ? buttons keep opening the contextual help):
+The generated HTML contains client-side filters/search (family, quant, backend, engine/build, severity, category, CWE, score/runs/stddev/FP thresholds, official/source-hash/loop/reasoning/known-backend toggles) and multiple views. Two selectors at the top control what the aggregates are computed from:
+
+- **Versions-Scope** — `Aktuell (parser-v3)` (default), `Alle Versionen`, one entry per parser version (`Parser parser-v1`, `Parser parser-v2`, …) and one per benchmark tool version (`Benchmark v0.7.5`, …). Every scope is a separately precomputed projection, so charts, heatmap, table and CSV always show exact aggregates for exactly that version set instead of an include/exclude toggle.
+- **Gruppierung** — `Modell · Quant` pools every backend per model (with a backend breakdown), `+ Backend` splits Vulkan/HIP/CUDA/… into separate series, `+ Engine/Build` splits by llama.cpp build as well. A dedicated *Backend-Vergleich* tile shows the selected metric per model side by side per backend.
+
+Per-run score versions use the unambiguous form `official-v1 - parser-vN`; the drilldown also lists tool version, backend and build per run. Compact metric tiles honor the configurable Top-N limit; maximizing a tile by clicking anywhere inside it always shows every filtered model (the ? buttons keep opening the contextual help). The page is a single self-contained file (about 0.6 MB for 480 scorecards) with sticky navigation, KPI tiles and light/dark themes:
 
 - **main metric bar chart** (score, critical recall, F1, FP-rate, stability, Run2-delta, thinking coverage, accountability, overclaim rate, duration) with min/max error bars where multiple runs exist for the selected bar metric,
 - **severity recall chart** and **vulnerability heatmap** (1.0 full, 0.5 partial, 0.0 missed; delta view highlights improvements/regressions),
@@ -401,6 +408,37 @@ dotnet run --project src/SuperCalcBenchmark.Cli -- compare --run-view delta --me
 # Generate a share-friendlier HTML payload: keep IDs/categories, hide titles/CWEs/modules
 dotnet run --project src/SuperCalcBenchmark.Cli -- compare --public-labels
 ```
+
+### Backend / engine identity (v0.7.6)
+
+Every run now records **which inference engine and compute backend produced the answer**, because the same model with identical settings can behave differently on a Vulkan build versus a HIP/ROCm build of llama-server. Detection is metadata only and never changes parsing or scoring:
+
+1. manual override (`--backend`, `--engine`, `--engine-version`, `--runtime-label`),
+2. the AutoTuner control API status (build, backend, launch parameters, devices, environment),
+3. the loaded modules of the local server process (`ggml-vulkan`/`vulkan-1.dll`, `amdhip64`/`rocblas`, `ggml-cuda`/`nvcuda`, SYCL/Level Zero, OpenCL, `ggml-cpu`),
+4. the server binary path (`…\b10786_vulkan_llama.cpp\…`),
+5. llama-server `/props` (`build_info`, `system_info`), `/v1/models` `owned_by`, and `/version`/`/api/version` for vLLM/Ollama.
+
+The scorecard's `serverMetadata` carries `engine`, `llamaBuild`, `backend` (canonical `vulkan|hip|cuda|sycl|metal|opencl|cpu`), `backendSource`, devices, server binary, redacted command line, and the observed launch parameters (`gpuLayers`, `threads`, `batchSize`, `ubatchSize`, KV cache types, flash attention, speculative decoding). Use `--no-runtime-probe` to skip detection.
+
+### AutoTuner campaigns: several models × llama-server builds
+
+With the [AutoTuner](https://github.com/DaWasteh/Auto-Tuner) (v5.3.9+, *⋯ → Settings → External control API* enabled) the benchmark can drive multi-model, multi-backend batches without touching the model tuning: the tuner loads each model with its saved per-model settings on the requested llama-server build, the benchmark talks to the returned llama-server directly, and every run is archived with its backend identity.
+
+```powershell
+# What does the tuner offer?
+dotnet run --project src/SuperCalcBenchmark.Cli -- autotuner --list all
+
+# Four models, each on every Vulkan and HIP build, two complete runs (Run 1+2+3) per combination
+dotnet run --project src/SuperCalcBenchmark.Cli -- campaign --models gpt-oss-20b,kat-coder,qwen3.8-27b,qwen3.6-35b --runtimes vulkan,hip --repeats 2 --with-truth-audit always
+
+# Explicit plan file: [{"modelId":"…","runtimeId":"…","repeats":3}]
+dotnet run --project src/SuperCalcBenchmark.Cli -- campaign --plan campaign.json
+```
+
+Connection details come from the tuner's sidecar file (`~/.autotuner/control_api.json`), from `AUTOTUNER_API_URL`/`AUTOTUNER_API_KEY`, or from `--autotuner-url`/`--autotuner-token`. Ctrl+C once finishes the current run and stops; twice aborts immediately. The GUI tab **Kampagne (AutoTuner)** offers the same flow with checkboxes for models and builds, *Nach aktuellem Run beenden*, *Nach aktuellem Modell beenden* and *Sofort abbrechen*, plus a live progress table; failed model loads are skipped unless *Bei Fehler abbrechen* is set. Campaign summaries are written to `<data-root>/Campaigns/<campaignId>.json`.
+
+`parse-audit` re-parses every stored `run.json` in the local run pool with the current parser and reports parse-mode, finding-count and score changes; nothing is written to the archive.
 
 ### Traceable Scoring Framework
 
@@ -513,6 +551,7 @@ This project is distributed under the [MIT License](LICENSE).
 
 | Version | Date       | Highlights                                                                                       |
 | :-----: | :--------: | ------------------------------------------------------------------------------------------------ |
+| v0.7.6  | 2026-09-04 | parser-v3 lenient JSON repair (leading zeros, invalid escapes, control characters, unescaped quotes, missing commas, schema-embedded findings, stray `</think>`) fixes 65 of 1,098 replayed runs that had collapsed to one finding; every run records engine/backend/build identity (AutoTuner status, loaded modules, binary path, `/props`); AutoTuner campaigns benchmark several models × llama-server builds from CLI and GUI with run/model/immediate stop; HTML comparison gets a version scope selector (per parser/benchmark version), backend grouping, a backend comparison tile, a redesigned layout and a 7× smaller tabular payload |
 | v0.7.5  | 2026-09-03 | Truth-audit v2 fixes original-finding quote attribution, keeps inconsistent-but-present accountability flags diagnostic, formalizes exact correction provenance, and admits attributable duplicates without changing the FP denominator; includes controlled Qwen3.8 Vulkan/HIP evidence with backend-neutral scoring |
 | v0.7.4  | 2026-09-02 | HTML comparison defaults to separately recomputed current parser-v2 scores and can include deprecated parser-v1 scores on demand; Git checkouts now mirror compact scorecards from the shared user pool into the public archive; includes 10 KAT-Coder V2.5 Dev parser-v2 runs |
 | v0.7.3  | 2026-09-01 | Persistent System/Light/Dark theme; shared EXE/source/CLI data pool with idempotent legacy import and schema-v5 run locators; parser-v2 plus strict truth-audit/archive/scoring edge-case validation; legacy parser-v1 results remain historical but are marked stale |

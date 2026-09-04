@@ -391,8 +391,10 @@ internal static partial class TestRunner
             Assert(html.Contains("{key:\"scoreMedian\",title:\"Median\",kind:\"num\"}", StringComparison.Ordinal), "generated script must contain a valid scoreMedian column object");
             Assert(!html.Contains("{key:\"scoreMedian\"},title:", StringComparison.Ordinal), "generated script must not close the scoreMedian object early");
             Assert(html.Contains("s.run1Score ?? s.score", StringComparison.Ordinal) && html.Contains("s.run2Delta ?? 0", StringComparison.Ordinal), "browser count/value fallback must preserve measured zero");
-            Assert(html.Contains("include deprecated scores", StringComparison.Ordinal), "html should expose the requested deprecated-score filter");
-            Assert(html.Contains("st.includeDeprecated ? allSeries : currentSeries", StringComparison.Ordinal), "deprecated-score filter should switch between recomputed all/current projections");
+            Assert(html.Contains("id=\"scope\"", StringComparison.Ordinal), "html should expose the version-scope selector (replaces the include-deprecated toggle)");
+            Assert(html.Contains("id=\"grouping\"", StringComparison.Ordinal), "html should expose the backend grouping selector");
+            Assert(html.Contains("projection(state.scope, state.grouping)", StringComparison.Ordinal), "rendering must switch between precomputed scope/grouping projections");
+            Assert(html.Contains("Parser parser-v1", StringComparison.Ordinal) && html.Contains("Aktuell (parser-v3)", StringComparison.Ordinal), "scope options must list the parser versions present in the archive");
             Assert(html.Contains("${esc(d.scoringProfile||\"legacy-unknown\")} - ${esc(d.parserVersion||\"parser-unbekannt\")}", StringComparison.Ordinal), "score versions should read official-v1 - parser-vN without a duplicate profile version");
             Assert(!html.Contains(" v${d.scoringProfileVersion", StringComparison.Ordinal), "score-version labels must not append the confusing duplicate v1");
 
@@ -403,29 +405,34 @@ internal static partial class TestRunner
             var end = html.IndexOf("</script>", start, StringComparison.Ordinal);
             var json = html[start..end].Trim();
             using var doc = JsonDocument.Parse(json);
-            var payloadSeries = doc.RootElement.GetProperty("series");
-            Assert(payloadSeries.GetArrayLength() == 2, "payload should contain all-score and current-only projections");
+            var payloadSeries = ExpandTabularPayload(doc.RootElement, "seriesKeys", "seriesRows");
+            Assert(payloadSeries.Count >= 2, "payload should contain at least the all-score and current-only projections");
             Assert(doc.RootElement.TryGetProperty("axis", out _), "payload should expose vulnerability metadata axis");
-            var series = payloadSeries.EnumerateArray().Single(item => item.GetProperty("scope").GetString() == "all");
-            var currentSeries = payloadSeries.EnumerateArray().Single(item => item.GetProperty("scope").GetString() == "current");
-            Assert(series.GetProperty("runCount").GetInt32() == 2, "all-score payload should preserve repeated-run count for uncertainty bars");
-            Assert(currentSeries.GetProperty("runCount").GetInt32() == 1
-                   && currentSeries.GetProperty("score").GetDouble() == 82,
-                "current payload should exclude parser-v1 scores and preserve parser-v2 values");
-            Assert(series.TryGetProperty("scoreMedian", out _), "payload should expose scoreMedian for uncertainty tables");
-            Assert(series.TryGetProperty("scoreMin", out var scoreMin), "payload should expose scoreMin for uncertainty bars");
-            Assert(series.TryGetProperty("scoreMax", out var scoreMax), "payload should expose scoreMax for uncertainty bars");
-            Assert(scoreMax.GetDouble() > scoreMin.GetDouble(), "fixture should produce a visible min/max uncertainty range");
-            Assert(series.TryGetProperty("criticalRecall", out _), "payload should expose severity metrics");
-            Assert(series.TryGetProperty("parseSuccessRate", out _), "payload should expose parse/completion health metrics");
-            Assert(series.TryGetProperty("evidenceFidelity", out _), "payload should expose evidence fidelity drilldown metrics");
-            Assert(series.TryGetProperty("hallucinationRate", out _), "payload should expose hallucination drilldown metrics");
-            Assert(series.TryGetProperty("falsePositiveTaxonomy", out _), "payload should expose FP taxonomy drilldown data");
-            Assert(series.TryGetProperty("thinkingTp", out _), "payload should expose Denken/Gedacht TP statistics");
-            Assert(series.TryGetProperty("outputTp", out _), "payload should expose Sagen/Gesagt TP statistics");
-            Assert(series.GetProperty("visibleReasoningRuns").GetInt32() == 1, "payload should count visible reasoning runs");
-            Assert(series.GetProperty("completionTokens").GetDouble() == 1502, "payload should expose aggregate generated tokens");
-            Assert(series.GetProperty("scorePer1KTokens").GetDouble() > 0, "payload should expose token efficiency");
+            Assert(doc.RootElement.TryGetProperty("scopes", out var scopesElement) && scopesElement.GetArrayLength() >= 2, "payload should list selectable version scopes");
+            var series = payloadSeries.Single(item => item["scope"].GetString() == "all" && item["grouping"].GetString() == "model");
+            var currentSeries = payloadSeries.Single(item => item["scope"].GetString() == "current" && item["grouping"].GetString() == "model");
+            var runRows = ExpandTabularPayload(doc.RootElement, "runKeys", "runRows");
+            Assert(runRows.Count == 2, "run details should be stored once per run in the shared run table");
+            Assert(series["detailIdx"].GetArrayLength() == 2, "series should reference their runs by index");
+            Assert(series["runCount"].GetInt32() == 2, "all-score payload should preserve repeated-run count for uncertainty bars");
+            Assert(currentSeries["runCount"].GetInt32() == 1
+                   && currentSeries["score"].GetDouble() == 82,
+                "current payload should exclude stale parser scores and preserve current values");
+            Assert(series.ContainsKey("scoreMedian"), "payload should expose scoreMedian for uncertainty tables");
+            Assert(series.ContainsKey("scoreMin"), "payload should expose scoreMin for uncertainty bars");
+            Assert(series.ContainsKey("scoreMax"), "payload should expose scoreMax for uncertainty bars");
+            Assert(series["scoreMax"].GetDouble() > series["scoreMin"].GetDouble(), "fixture should produce a visible min/max uncertainty range");
+            Assert(series.ContainsKey("criticalRecall"), "payload should expose severity metrics");
+            Assert(series.ContainsKey("parseSuccessRate"), "payload should expose parse/completion health metrics");
+            Assert(series.ContainsKey("evidenceFidelity"), "payload should expose evidence fidelity drilldown metrics");
+            Assert(series.ContainsKey("hallucinationRate"), "payload should expose hallucination drilldown metrics");
+            Assert(series.ContainsKey("falsePositiveTaxonomy"), "payload should expose FP taxonomy drilldown data");
+            Assert(series.ContainsKey("thinkingTp"), "payload should expose Denken/Gedacht TP statistics");
+            Assert(series.ContainsKey("outputTp"), "payload should expose Sagen/Gesagt TP statistics");
+            Assert(series.ContainsKey("backend") && series["backend"].GetString() == ServerRuntimeInfo.UnknownValue, "payload should expose the backend identity (unknown for legacy scorecards)");
+            Assert(series["visibleReasoningRuns"].GetInt32() == 1, "payload should count visible reasoning runs");
+            Assert(series["completionTokens"].GetDouble() == 1502, "payload should expose aggregate generated tokens");
+            Assert(series["scorePer1KTokens"].GetDouble() > 0, "payload should expose token efficiency");
 
             var csv = writer.BuildCsv(report);
             Assert(csv.Contains("model_family", StringComparison.Ordinal), "csv should have a header row");
@@ -440,6 +447,26 @@ internal static partial class TestRunner
         {
             TryDeleteDirectory(tempRoot);
         }
+    }
+
+    /// <summary>Expands the tabular HTML payload (keys array + value rows) into per-item dictionaries.</summary>
+    private static List<Dictionary<string, JsonElement>> ExpandTabularPayload(JsonElement root, string keysName, string rowsName)
+    {
+        var keys = root.GetProperty(keysName).EnumerateArray().Select(k => k.GetString() ?? string.Empty).ToList();
+        var result = new List<Dictionary<string, JsonElement>>();
+        foreach (var row in root.GetProperty(rowsName).EnumerateArray())
+        {
+            var values = row.EnumerateArray().ToList();
+            var item = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+            for (var i = 0; i < keys.Count && i < values.Count; i++)
+            {
+                item[keys[i]] = values[i];
+            }
+
+            result.Add(item);
+        }
+
+        return result;
     }
 
     private static void ArchiveAndComparisonExposeTruthAuditMetrics()

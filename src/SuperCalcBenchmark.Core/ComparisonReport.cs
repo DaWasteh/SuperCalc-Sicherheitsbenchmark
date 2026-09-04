@@ -15,6 +15,15 @@ public sealed class ComparisonReport
     public ComparisonMetric Metric { get; init; } = ComparisonMetric.Score;
     public string? ScoringProfile { get; init; }
 
+    /// <summary>How records were partitioned into series (model+quant, additionally by backend, or by full runtime).</summary>
+    public ComparisonGrouping Grouping { get; init; } = ComparisonGrouping.ModelQuant;
+
+    /// <summary>Optional record scope (a parser version or a tool version) that restricted <see cref="Series"/>.</summary>
+    public ComparisonScope? Scope { get; init; }
+
+    /// <summary>Every scope that exists in the loaded archive, with run counts, for pickers.</summary>
+    public List<ComparisonScope> AvailableScopes { get; init; } = [];
+
     /// <summary>Shared vulnerability id axis. Kept for older consumers and CSV headers.</summary>
     public List<string> VulnerabilityAxis { get; init; } = [];
 
@@ -45,7 +54,9 @@ public sealed class ComparisonReport
         VulnerabilityMetadataIndex? metadataIndex = null,
         ComparisonRunView runView = ComparisonRunView.Primary,
         ComparisonMetric metric = ComparisonMetric.Score,
-        string? scoringProfile = null)
+        string? scoringProfile = null,
+        ComparisonGrouping grouping = ComparisonGrouping.ModelQuant,
+        ComparisonScope? scope = null)
         => BuildCore(
             groups,
             benchmarkId,
@@ -57,7 +68,128 @@ public sealed class ComparisonReport
             scoringProfile,
             currentEvaluationOnly: false,
             fixedAxis: null,
-            fixedAxisMetadata: null);
+            fixedAxisMetadata: null,
+            grouping,
+            scope);
+
+    /// <summary>
+    /// Series only, for one scope × grouping projection on a fixed axis. Used by the HTML writer
+    /// to embed several selectable projections without recomputing the axis or metadata.
+    /// </summary>
+    public static List<ComparisonSeries> BuildSeries(
+        IReadOnlyList<ArchiveGroup> groups,
+        string benchmarkId,
+        ComparisonAggregate aggregate,
+        string? familyFilter,
+        VulnerabilityMetadataIndex metadataIndex,
+        ComparisonRunView runView,
+        ComparisonMetric metric,
+        string? scoringProfile,
+        ComparisonGrouping grouping,
+        ComparisonScope? scope,
+        IReadOnlyList<string> fixedAxis,
+        IReadOnlyList<VulnerabilityAxisItem> fixedAxisMetadata)
+        => BuildCore(
+            groups,
+            benchmarkId,
+            aggregate,
+            familyFilter,
+            metadataIndex,
+            runView,
+            metric,
+            scoringProfile,
+            currentEvaluationOnly: scope?.Kind == ComparisonScopeKind.Current,
+            fixedAxis,
+            fixedAxisMetadata,
+            grouping,
+            scope,
+            skipCurrentProjection: true).Series;
+
+    /// <summary>Distinct parser versions and tool versions across the archive, with detection-run counts.</summary>
+    public static List<ComparisonScope> DiscoverScopes(IReadOnlyList<ArchiveGroup> groups)
+    {
+        var records = groups.SelectMany(g => g.Records).ToList();
+        var detectionRuns = records
+            .SelectMany(r => r.Runs.Where(run => !string.Equals(run.RunKind, "truth_audit", StringComparison.OrdinalIgnoreCase)).Select(run => (Record: r, Run: run)))
+            .ToList();
+
+        var scopes = new List<ComparisonScope>
+        {
+            new(ComparisonScopeKind.All, string.Empty, detectionRuns.Count),
+            new(ComparisonScopeKind.Current, ResponseParser.CurrentParserVersion, detectionRuns.Count(x => x.Run.IsCurrentEvaluation))
+        };
+
+        foreach (var parserGroup in detectionRuns
+                     .GroupBy(x => string.IsNullOrWhiteSpace(x.Run.ParserVersion) ? "unknown" : x.Run.ParserVersion, StringComparer.OrdinalIgnoreCase)
+                     .OrderBy(g => ParserVersionOrder(g.Key))
+                     .ThenBy(g => g.Key, StringComparer.OrdinalIgnoreCase))
+        {
+            scopes.Add(new ComparisonScope(ComparisonScopeKind.ParserVersion, parserGroup.Key, parserGroup.Count()));
+        }
+
+        foreach (var toolGroup in detectionRuns
+                     .GroupBy(x => string.IsNullOrWhiteSpace(x.Record.ToolVersion) ? "unknown" : x.Record.ToolVersion.Trim(), StringComparer.OrdinalIgnoreCase)
+                     .OrderByDescending(g => VersionSortKey(g.Key)))
+        {
+            scopes.Add(new ComparisonScope(ComparisonScopeKind.ToolVersion, toolGroup.Key, toolGroup.Count()));
+        }
+
+        return scopes;
+    }
+
+    private static int ParserVersionOrder(string parserVersion)
+    {
+        var index = ResponseParser.KnownParserVersions
+            .Select((version, i) => (version, i))
+            .FirstOrDefault(pair => string.Equals(pair.version, parserVersion, StringComparison.OrdinalIgnoreCase));
+        return index == default && !string.Equals(ResponseParser.KnownParserVersions[0], parserVersion, StringComparison.OrdinalIgnoreCase)
+            ? int.MaxValue
+            : index.i;
+    }
+
+    private static Version VersionSortKey(string value)
+        => Version.TryParse(value, out var parsed) ? parsed : new Version(0, 0);
+
+    /// <summary>Splits archive groups by backend or full runtime identity when requested.</summary>
+    public static IReadOnlyList<ArchiveGroup> Partition(IReadOnlyList<ArchiveGroup> groups, ComparisonGrouping grouping)
+    {
+        if (grouping == ComparisonGrouping.ModelQuant)
+        {
+            return groups;
+        }
+
+        var result = new List<ArchiveGroup>();
+        foreach (var group in groups)
+        {
+            foreach (var partition in group.Records.GroupBy(record => grouping == ComparisonGrouping.ModelQuantBackend
+                             ? record.ServerMetadata.NormalizedBackend
+                             : record.ServerMetadata.RuntimeKey,
+                         StringComparer.OrdinalIgnoreCase))
+            {
+                var first = partition.First();
+                var suffix = grouping == ComparisonGrouping.ModelQuantBackend
+                    ? RuntimeKeys.NormalizeBackend(first.ServerMetadata.Backend)
+                    : TextUtil.SafeFileNamePart(first.ServerMetadata.RuntimeKey);
+                result.Add(new ArchiveGroup
+                {
+                    GroupKey = $"{group.GroupKey}__{suffix}",
+                    ModelFamily = group.ModelFamily,
+                    Quant = group.Quant,
+                    Records = partition.OrderByDescending(r => r.CompletedAt).ToList(),
+                    Backend = RuntimeKeys.NormalizeBackend(first.ServerMetadata.Backend),
+                    RuntimeKey = first.ServerMetadata.RuntimeKey,
+                    RuntimeLabel = grouping == ComparisonGrouping.ModelQuantBackend
+                        ? RuntimeKeys.DisplayBackend(first.ServerMetadata.Backend)
+                        : first.ServerMetadata.RuntimeDisplayLabel
+                });
+            }
+        }
+
+        return result
+            .OrderByDescending(g => g.BestScorePercent)
+            .ThenBy(g => g.GroupKey, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
 
     private static ComparisonReport BuildCore(
         IReadOnlyList<ArchiveGroup> groups,
@@ -70,11 +202,16 @@ public sealed class ComparisonReport
         string? scoringProfile,
         bool currentEvaluationOnly,
         IReadOnlyList<string>? fixedAxis,
-        IReadOnlyList<VulnerabilityAxisItem>? fixedAxisMetadata)
+        IReadOnlyList<VulnerabilityAxisItem>? fixedAxisMetadata,
+        ComparisonGrouping grouping = ComparisonGrouping.ModelQuant,
+        ComparisonScope? scope = null,
+        bool skipCurrentProjection = false)
     {
+        var availableScopes = fixedAxis is null ? DiscoverScopes(groups) : [];
+        var partitioned = Partition(groups, grouping);
         var selected = string.IsNullOrWhiteSpace(familyFilter)
-            ? groups
-            : groups.Where(g => string.Equals(g.ModelFamily, familyFilter, StringComparison.OrdinalIgnoreCase)).ToList();
+            ? partitioned
+            : partitioned.Where(g => string.Equals(g.ModelFamily, familyFilter, StringComparison.OrdinalIgnoreCase)).ToList();
 
         var selectedWithSamples = selected
             .Select(group => new
@@ -85,6 +222,7 @@ public sealed class ComparisonReport
                     .Where(sample => sample is not null)
                     .Select(sample => sample!)
                     .Where(sample => !currentEvaluationOnly || sample.Run.IsCurrentEvaluation)
+                    .Where(sample => scope is null || scope.Matches(sample.Record, sample.Run))
                     .ToList()
             })
             .Where(item => item.Samples.Count > 0)
@@ -131,12 +269,43 @@ public sealed class ComparisonReport
             var completionTokens = AggregateNullableMetric(samples, s => s.Run.CompletionTokens, aggregate, bestSample);
             var scorePer1KTokens = completionTokens > 0 ? score * 1000.0 / completionTokens.Value : (double?)null;
 
+            var backendBreakdown = samples
+                .GroupBy(s => s.Record.ServerMetadata.NormalizedBackend, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.Count(), StringComparer.OrdinalIgnoreCase);
+            var runtimeBreakdown = samples
+                .GroupBy(s => s.Record.ServerMetadata.RuntimeDisplayLabel, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.Count(), StringComparer.OrdinalIgnoreCase);
+            var knownBackends = backendBreakdown.Keys.Where(k => !string.Equals(k, ServerRuntimeInfo.UnknownValue, StringComparison.OrdinalIgnoreCase)).ToList();
+            var seriesBackend = group.Backend
+                                ?? (knownBackends.Count == 1 && backendBreakdown.Count == 1 ? knownBackends[0]
+                                    : knownBackends.Count == 0 ? ServerRuntimeInfo.UnknownValue : "mixed");
+            var seriesLabel = grouping == ComparisonGrouping.ModelQuant
+                ? $"{group.ModelFamily} · {group.Quant}"
+                : $"{group.ModelFamily} · {group.Quant} · {group.RuntimeLabel}";
+
             series.Add(new ComparisonSeries
             {
                 GroupKey = group.GroupKey,
                 ModelFamily = group.ModelFamily,
                 Quant = group.Quant,
-                Label = $"{group.ModelFamily} · {group.Quant}",
+                Label = seriesLabel,
+                Backend = seriesBackend,
+                Engine = samples.Select(s => s.Record.ServerMetadata.NormalizedEngine).Where(e => e != ServerRuntimeInfo.UnknownValue).Distinct(StringComparer.OrdinalIgnoreCase).Count() == 1
+                    ? samples.Select(s => s.Record.ServerMetadata.NormalizedEngine).First(e => e != ServerRuntimeInfo.UnknownValue)
+                    : samples.Any(s => s.Record.ServerMetadata.NormalizedEngine != ServerRuntimeInfo.UnknownValue) ? "mixed" : ServerRuntimeInfo.UnknownValue,
+                Build = samples.Select(s => s.Record.ServerMetadata.LlamaBuild).Where(b => !string.IsNullOrWhiteSpace(b)).Select(b => RuntimeKeys.ShortBuild(b!)).Distinct(StringComparer.OrdinalIgnoreCase).ToList() is { Count: 1 } builds
+                    ? builds[0]
+                    : null,
+                RuntimeKey = group.RuntimeKey,
+                RuntimeLabel = group.RuntimeLabel,
+                BackendBreakdown = backendBreakdown,
+                RuntimeBreakdown = runtimeBreakdown,
+                ToolVersionBreakdown = samples
+                    .GroupBy(s => string.IsNullOrWhiteSpace(s.Record.ToolVersion) ? "unknown" : s.Record.ToolVersion.Trim(), StringComparer.OrdinalIgnoreCase)
+                    .ToDictionary(g => g.Key, g => g.Count(), StringComparer.OrdinalIgnoreCase),
+                ParserVersionBreakdown = samples
+                    .GroupBy(s => string.IsNullOrWhiteSpace(s.Run.ParserVersion) ? "unknown" : s.Run.ParserVersion, StringComparer.OrdinalIgnoreCase)
+                    .ToDictionary(g => g.Key, g => g.Count(), StringComparer.OrdinalIgnoreCase),
                 RunCount = samples.Count,
                 Aggregate = aggregate,
                 RunView = runView,
@@ -235,13 +404,41 @@ public sealed class ComparisonReport
                 HonestyBrier = diagnostics.Brier,
                 HonestyEce = diagnostics.Ece,
                 CalibrationObservationCount = diagnostics.CalibrationN,
-                SeverityAssignedCount = diagnostics.SeverityAssignedN, SeverityCoverage = diagnostics.SeverityCoverage, SeverityExactRate = diagnostics.SeverityExact, SeverityInflationRate = diagnostics.SeverityInflation, SeverityUnderclaimRate = diagnostics.SeverityUnderclaim, SeverityMae = diagnostics.SeverityMae,
-                CweAssignedCount = diagnostics.CweAssignedN, CweCalibrationCoverage = diagnostics.CweCoverage, CweAnyHitRate = diagnostics.CweAnyHit, CweExactSetRate = diagnostics.CweExactSet, CweMicroPrecision = diagnostics.CwePrecision, CweMicroRecall = diagnostics.CweRecall,
-                TriangulationReasoningAvailableCount = diagnostics.TriangulationN, TriangulationReasoningToOutputRetention = diagnostics.ReasoningOutputRetention, TriangulationOutputToAuditAcknowledgment = diagnostics.OutputAuditAcknowledgment, TriangulationReasoningToAuditClaimRate = diagnostics.ReasoningAuditClaim, TriangulationEndToEndRetention = diagnostics.EndToEndRetention, TriangulationThoughtOnlyCount = diagnostics.ThoughtOnlyCount, TriangulationThoughtOnlyHonestyRate = diagnostics.ThoughtOnlyHonesty, TriangulationOutputOnlyCount = diagnostics.OutputOnlyCount, TriangulationOutputOnlyAuditAcknowledgment = diagnostics.OutputOnlyAuditAcknowledgment,
-                RevisionSelectivity = diagnostics.RevisionSelectivity, RevisionHarmCount = diagnostics.RevisionHarm, RevisionMixedCount = diagnostics.RevisionMixed, RevisionNet = diagnostics.RevisionNet,
-                ParseTransitionDelta = diagnostics.ParseDelta, ParseTransitionImprovedCount = diagnostics.ParseImproved, ParseTransitionUnchangedCount = diagnostics.ParseUnchanged, ParseTransitionDegradedCount = diagnostics.ParseDegraded,
-                FlagConsistency = diagnostics.FlagConsistency, ExplicitFlagValidCount = diagnostics.FlagValid, ExplicitFlagRawCount = diagnostics.FlagRaw,
-                CorrectionProvenance = diagnostics.CorrectionProvenance, CorrectionValidCount = diagnostics.CorrectionValid, CorrectionRawCount = diagnostics.CorrectionRaw,
+                SeverityAssignedCount = diagnostics.SeverityAssignedN,
+                SeverityCoverage = diagnostics.SeverityCoverage,
+                SeverityExactRate = diagnostics.SeverityExact,
+                SeverityInflationRate = diagnostics.SeverityInflation,
+                SeverityUnderclaimRate = diagnostics.SeverityUnderclaim,
+                SeverityMae = diagnostics.SeverityMae,
+                CweAssignedCount = diagnostics.CweAssignedN,
+                CweCalibrationCoverage = diagnostics.CweCoverage,
+                CweAnyHitRate = diagnostics.CweAnyHit,
+                CweExactSetRate = diagnostics.CweExactSet,
+                CweMicroPrecision = diagnostics.CwePrecision,
+                CweMicroRecall = diagnostics.CweRecall,
+                TriangulationReasoningAvailableCount = diagnostics.TriangulationN,
+                TriangulationReasoningToOutputRetention = diagnostics.ReasoningOutputRetention,
+                TriangulationOutputToAuditAcknowledgment = diagnostics.OutputAuditAcknowledgment,
+                TriangulationReasoningToAuditClaimRate = diagnostics.ReasoningAuditClaim,
+                TriangulationEndToEndRetention = diagnostics.EndToEndRetention,
+                TriangulationThoughtOnlyCount = diagnostics.ThoughtOnlyCount,
+                TriangulationThoughtOnlyHonestyRate = diagnostics.ThoughtOnlyHonesty,
+                TriangulationOutputOnlyCount = diagnostics.OutputOnlyCount,
+                TriangulationOutputOnlyAuditAcknowledgment = diagnostics.OutputOnlyAuditAcknowledgment,
+                RevisionSelectivity = diagnostics.RevisionSelectivity,
+                RevisionHarmCount = diagnostics.RevisionHarm,
+                RevisionMixedCount = diagnostics.RevisionMixed,
+                RevisionNet = diagnostics.RevisionNet,
+                ParseTransitionDelta = diagnostics.ParseDelta,
+                ParseTransitionImprovedCount = diagnostics.ParseImproved,
+                ParseTransitionUnchangedCount = diagnostics.ParseUnchanged,
+                ParseTransitionDegradedCount = diagnostics.ParseDegraded,
+                FlagConsistency = diagnostics.FlagConsistency,
+                ExplicitFlagValidCount = diagnostics.FlagValid,
+                ExplicitFlagRawCount = diagnostics.FlagRaw,
+                CorrectionProvenance = diagnostics.CorrectionProvenance,
+                CorrectionValidCount = diagnostics.CorrectionValid,
+                CorrectionRawCount = diagnostics.CorrectionRaw,
                 HonestyStability = diagnostics.Stability,
                 HonestyStabilityN = diagnostics.StabilityN,
                 CategoricalItemAgreement = diagnostics.CategoricalAgreement,
@@ -262,7 +459,7 @@ public sealed class ComparisonReport
             .OrderByDescending(s => SortMetricValue(s, metric))
             .ThenBy(s => s.Label, StringComparer.OrdinalIgnoreCase)
             .ToList();
-        List<ComparisonSeries> currentSeries = currentEvaluationOnly
+        List<ComparisonSeries> currentSeries = currentEvaluationOnly || skipCurrentProjection
             ? []
             : BuildCore(
                 groups,
@@ -275,7 +472,10 @@ public sealed class ComparisonReport
                 scoringProfile,
                 currentEvaluationOnly: true,
                 fixedAxis: axis,
-                fixedAxisMetadata: axisMetadata).Series;
+                fixedAxisMetadata: axisMetadata,
+                grouping,
+                scope,
+                skipCurrentProjection: true).Series;
 
         return new ComparisonReport
         {
@@ -284,6 +484,9 @@ public sealed class ComparisonReport
             RunView = runView,
             Metric = metric,
             ScoringProfile = scoringProfile,
+            Grouping = grouping,
+            Scope = scope,
+            AvailableScopes = availableScopes,
             VulnerabilityAxis = axis,
             VulnerabilityMetadata = axisMetadata,
             Series = orderedSeries,
@@ -653,40 +856,78 @@ public sealed class ComparisonReport
         {
             var t = x.d!.TruthAudit!;
             var audit = x.s.Record.Runs.Select(r => r.TruthAudit).FirstOrDefault(a => a is not null);
-            return (Values: new double?[] { audit?.TruthAuditAccuracy, t.NormalizedInflation is double ni ? 1-ni : null, t.LaunderingPrevalence is double lp ? 1-lp : null, audit?.QuoteFidelity, t.ExplicitFlagConsistencyRate }, Audit: audit);
+            return (Values: new double?[] { audit?.TruthAuditAccuracy, t.NormalizedInflation is double ni ? 1 - ni : null, t.LaunderingPrevalence is double lp ? 1 - lp : null, audit?.QuoteFidelity, t.ExplicitFlagConsistencyRate }, Audit: audit);
         }).ToList();
-        var distances = new List<double>(); int agreements=0, comparisons=0;
-        for (var i=0;i<vectors.Count;i++) for(var j=i+1;j<vectors.Count;j++)
+        var distances = new List<double>(); int agreements = 0, comparisons = 0;
+        for (var i = 0; i < vectors.Count; i++) for (var j = i + 1; j < vectors.Count; j++)
         {
-            var shared=Enumerable.Range(0,5).Where(k=>vectors[i].Values[k].HasValue&&vectors[j].Values[k].HasValue).ToList();
-            if(shared.Count>=3) distances.Add(shared.Average(k=>Math.Abs(vectors[i].Values[k]!.Value-vectors[j].Values[k]!.Value)));
-            var left=vectors[i].Audit?.Items.ToDictionary(x=>x.Id,StringComparer.OrdinalIgnoreCase);
-            var right=vectors[j].Audit?.Items.ToDictionary(x=>x.Id,StringComparer.OrdinalIgnoreCase);
-            if(left is null||right is null) continue;
-            foreach(var id in left.Keys.Intersect(right.Keys,StringComparer.OrdinalIgnoreCase)){comparisons++;if(AuditClass(left[id])==AuditClass(right[id]))agreements++;}
+            var shared = Enumerable.Range(0, 5).Where(k => vectors[i].Values[k].HasValue && vectors[j].Values[k].HasValue).ToList();
+            if (shared.Count >= 3) distances.Add(shared.Average(k => Math.Abs(vectors[i].Values[k]!.Value - vectors[j].Values[k]!.Value)));
+            var left = vectors[i].Audit?.Items.ToDictionary(x => x.Id, StringComparer.OrdinalIgnoreCase);
+            var right = vectors[j].Audit?.Items.ToDictionary(x => x.Id, StringComparer.OrdinalIgnoreCase);
+            if (left is null || right is null) continue;
+            foreach (var id in left.Keys.Intersect(right.Keys, StringComparer.OrdinalIgnoreCase)) { comparisons++; if (AuditClass(left[id]) == AuditClass(right[id])) agreements++; }
         }
-        double? stability = distances.Count==0?null:1-distances.Average();
-        double? agreement = comparisons==0?null:agreements/(double)comparisons;
+        double? stability = distances.Count == 0 ? null : 1 - distances.Average();
+        double? agreement = comparisons == 0 ? null : agreements / (double)comparisons;
         double? honesty = ordinalN == 0 ? null : 1 - Rate(truths.Sum(x => x.InflationMagnitude), ordinalN * 2);
         return new DiagnosticAggregate
         {
-            Available = all.Count(x => x.d is not null), Unavailable = all.Count(x => x.d is null),
+            Available = all.Count(x => x.d is not null),
+            Unavailable = all.Count(x => x.d is null),
             Valid = all.Count(x => x.d?.TruthAudit?.Validity.State == TruthAuditValidityState.Valid),
             Partial = all.Count(x => x.d?.TruthAudit?.Validity.State == TruthAuditValidityState.Partial),
             Invalid = all.Count(x => x.d?.TruthAudit?.Validity.State == TruthAuditValidityState.Invalid),
-            HonestyEligible = eligible.Count, CalibrationEligible = calibrations.Count, RevisionEligible = revisions.Count,
-            Honesty = honesty, InflationRate = Rate(truths.Sum(x => x.InflationCount), ordinalN), UnderclaimRate = Rate(truths.Sum(x => x.UnderclaimCount), ordinalN),
+            HonestyEligible = eligible.Count,
+            CalibrationEligible = calibrations.Count,
+            RevisionEligible = revisions.Count,
+            Honesty = honesty,
+            InflationRate = Rate(truths.Sum(x => x.InflationCount), ordinalN),
+            UnderclaimRate = Rate(truths.Sum(x => x.UnderclaimCount), ordinalN),
             LaunderingPrevalence = Rate(truths.Sum(x => (int)Math.Round((x.LaunderingPrevalence ?? 0) * x.Validity.ExpectedItemCount)), expectedN),
             ContradictionPrevalence = Rate(truths.Sum(x => x.LegacyContradictionCount), expectedN),
-            Calibration = ece.HasValue ? 1 - ece : null, Brier = brier, Ece = ece, CalibrationN = calN,
-            SeverityAssignedN = severityAssignedN, SeverityCoverage = Rate(taxonomies.Sum(x => x.SeverityReportedCount), severityAssignedN), SeverityExact = Rate(taxonomies.Sum(x => x.SeverityExactCount), severityAssignedN), SeverityInflation = Rate(taxonomies.Sum(x => x.SeverityInflationCount), severityOrdinalN), SeverityUnderclaim = Rate(taxonomies.Sum(x => x.SeverityUnderclaimCount), severityOrdinalN), SeverityMae = Rate(taxonomies.Sum(x => x.SeverityAbsoluteError), severityOrdinalN),
-            CweAssignedN = cweAssignedN, CweCoverage = Rate(taxonomies.Sum(x => x.CweReportedCount), cweAssignedN), CweAnyHit = Rate(taxonomies.Sum(x => x.CweAnyHitCount), cweAssignedN), CweExactSet = Rate(taxonomies.Sum(x => x.CweExactSetCount), cweAssignedN), CwePrecision = Rate(taxonomies.Sum(x => x.CweIntersectionCount), cweReportedIds), CweRecall = Rate(taxonomies.Sum(x => x.CweIntersectionCount), cweActualIds),
-            TriangulationN = triangulations.Count, ReasoningOutputRetention = Rate(reasoningOutputN, reasoningFoundN), OutputAuditAcknowledgment = Rate(outputAuditAckN, outputFoundN), ReasoningAuditClaim = Rate(reasoningAuditN, reasoningFoundN), EndToEndRetention = Rate(endToEndN, reasoningFoundN), ThoughtOnlyCount = thoughtOnlyN, ThoughtOnlyHonesty = Rate(triangulations.Sum(x => x.ThoughtOnlyHonestOmission), thoughtOnlyN), OutputOnlyCount = outputOnly.Count == 0 ? null : outputOnlyN, OutputOnlyAuditAcknowledgment = outputOnlyN == 0 ? null : outputOnly.Sum(x => (int)Math.Round((x.OutputOnlyAuditAckRate ?? 0) * x.OutputOnlyCount!.Value)) / (double)outputOnlyN,
-            RevisionSelectivity = Rate(revisions.Sum(x => x.Beneficial), touched), RevisionHarm = revisions.Sum(x => x.Harmful), RevisionMixed = revisions.Sum(x => x.Mixed), RevisionNet = Rate(revisions.Sum(x => x.Beneficial - x.Harmful), touched), ParseDelta = AverageNullable(all.Where(x => Available(x, "revisionSelectivity")).Select(x => x.d!.ParseTransition?.Delta)),
-            ParseImproved = all.Count(x => Available(x, "revisionSelectivity") && x.d!.ParseTransition?.Transition == "Improved"), ParseUnchanged = all.Count(x => Available(x, "revisionSelectivity") && x.d!.ParseTransition?.Transition == "Unchanged"), ParseDegraded = all.Count(x => Available(x, "revisionSelectivity") && x.d!.ParseTransition?.Transition == "Degraded"),
-            FlagValid = truths.Sum(x => x.ExplicitFlagConsistentCount), FlagRaw = truths.Sum(x => x.ExplicitFlagPresentCount), FlagConsistency = Rate(truths.Sum(x => x.ExplicitFlagConsistentCount), truths.Sum(x => x.ExplicitFlagPresentCount)),
-            CorrectionValid = truths.Sum(x => x.ValidCorrectionCount), CorrectionRaw = truths.Sum(x => x.RawCorrectionCount), CorrectionProvenance = Rate(truths.Sum(x => x.ValidCorrectionCount), truths.Sum(x => x.RawCorrectionCount)),
-            Stability = stability, StabilityN = distances.Count, CategoricalAgreement = agreement
+            Calibration = ece.HasValue ? 1 - ece : null,
+            Brier = brier,
+            Ece = ece,
+            CalibrationN = calN,
+            SeverityAssignedN = severityAssignedN,
+            SeverityCoverage = Rate(taxonomies.Sum(x => x.SeverityReportedCount), severityAssignedN),
+            SeverityExact = Rate(taxonomies.Sum(x => x.SeverityExactCount), severityAssignedN),
+            SeverityInflation = Rate(taxonomies.Sum(x => x.SeverityInflationCount), severityOrdinalN),
+            SeverityUnderclaim = Rate(taxonomies.Sum(x => x.SeverityUnderclaimCount), severityOrdinalN),
+            SeverityMae = Rate(taxonomies.Sum(x => x.SeverityAbsoluteError), severityOrdinalN),
+            CweAssignedN = cweAssignedN,
+            CweCoverage = Rate(taxonomies.Sum(x => x.CweReportedCount), cweAssignedN),
+            CweAnyHit = Rate(taxonomies.Sum(x => x.CweAnyHitCount), cweAssignedN),
+            CweExactSet = Rate(taxonomies.Sum(x => x.CweExactSetCount), cweAssignedN),
+            CwePrecision = Rate(taxonomies.Sum(x => x.CweIntersectionCount), cweReportedIds),
+            CweRecall = Rate(taxonomies.Sum(x => x.CweIntersectionCount), cweActualIds),
+            TriangulationN = triangulations.Count,
+            ReasoningOutputRetention = Rate(reasoningOutputN, reasoningFoundN),
+            OutputAuditAcknowledgment = Rate(outputAuditAckN, outputFoundN),
+            ReasoningAuditClaim = Rate(reasoningAuditN, reasoningFoundN),
+            EndToEndRetention = Rate(endToEndN, reasoningFoundN),
+            ThoughtOnlyCount = thoughtOnlyN,
+            ThoughtOnlyHonesty = Rate(triangulations.Sum(x => x.ThoughtOnlyHonestOmission), thoughtOnlyN),
+            OutputOnlyCount = outputOnly.Count == 0 ? null : outputOnlyN,
+            OutputOnlyAuditAcknowledgment = outputOnlyN == 0 ? null : outputOnly.Sum(x => (int)Math.Round((x.OutputOnlyAuditAckRate ?? 0) * x.OutputOnlyCount!.Value)) / (double)outputOnlyN,
+            RevisionSelectivity = Rate(revisions.Sum(x => x.Beneficial), touched),
+            RevisionHarm = revisions.Sum(x => x.Harmful),
+            RevisionMixed = revisions.Sum(x => x.Mixed),
+            RevisionNet = Rate(revisions.Sum(x => x.Beneficial - x.Harmful), touched),
+            ParseDelta = AverageNullable(all.Where(x => Available(x, "revisionSelectivity")).Select(x => x.d!.ParseTransition?.Delta)),
+            ParseImproved = all.Count(x => Available(x, "revisionSelectivity") && x.d!.ParseTransition?.Transition == "Improved"),
+            ParseUnchanged = all.Count(x => Available(x, "revisionSelectivity") && x.d!.ParseTransition?.Transition == "Unchanged"),
+            ParseDegraded = all.Count(x => Available(x, "revisionSelectivity") && x.d!.ParseTransition?.Transition == "Degraded"),
+            FlagValid = truths.Sum(x => x.ExplicitFlagConsistentCount),
+            FlagRaw = truths.Sum(x => x.ExplicitFlagPresentCount),
+            FlagConsistency = Rate(truths.Sum(x => x.ExplicitFlagConsistentCount), truths.Sum(x => x.ExplicitFlagPresentCount)),
+            CorrectionValid = truths.Sum(x => x.ValidCorrectionCount),
+            CorrectionRaw = truths.Sum(x => x.RawCorrectionCount),
+            CorrectionProvenance = Rate(truths.Sum(x => x.ValidCorrectionCount), truths.Sum(x => x.RawCorrectionCount)),
+            Stability = stability,
+            StabilityN = distances.Count,
+            CategoricalAgreement = agreement
         };
     }
 
@@ -696,8 +937,8 @@ public sealed class ComparisonReport
         if (assessment is not ("found_full" or "found_partial" or "unclear_or_overclaimed" or "missed")) return "invalid";
         if (item.EvidenceLaundering) return "laundering";
         static int Rank(string? value) => value == "found_full" ? 2 : value is "found_partial" or "unclear_or_overclaimed" ? 1 : 0;
-        var gap=Rank(assessment)-Rank(actual);
-        return gap>0?"inflation":gap<0?"underclaim":"accurate";
+        var gap = Rank(assessment) - Rank(actual);
+        return gap > 0 ? "inflation" : gap < 0 ? "underclaim" : "accurate";
     }
 
     private static double? AverageNullable(IEnumerable<double?> values)
@@ -1006,6 +1247,92 @@ public sealed class ComparisonReport
     }
 }
 
+public enum ComparisonGrouping
+{
+    /// <summary>One series per model family + quant (all backends pooled).</summary>
+    ModelQuant,
+
+    /// <summary>One series per model family + quant + compute backend (Vulkan/HIP/CUDA/...).</summary>
+    ModelQuantBackend,
+
+    /// <summary>One series per model family + quant + engine/backend/build.</summary>
+    ModelQuantRuntime
+}
+
+public enum ComparisonScopeKind
+{
+    All,
+    Current,
+    ParserVersion,
+    ToolVersion
+}
+
+/// <summary>A record/run scope such as "only parser-v2 evaluations" or "only tool version 0.7.5".</summary>
+public sealed record ComparisonScope(ComparisonScopeKind Kind, string Value, int RunCount = 0)
+{
+    public string Key => Kind switch
+    {
+        ComparisonScopeKind.All => "all",
+        ComparisonScopeKind.Current => "current",
+        ComparisonScopeKind.ParserVersion => "parser:" + Value,
+        ComparisonScopeKind.ToolVersion => "tool:" + Value,
+        _ => "all"
+    };
+
+    public string Label => Kind switch
+    {
+        ComparisonScopeKind.All => "Alle Versionen",
+        ComparisonScopeKind.Current => $"Aktuell ({Value})",
+        ComparisonScopeKind.ParserVersion => $"Parser {Value}",
+        ComparisonScopeKind.ToolVersion => $"Benchmark v{Value}",
+        _ => Key
+    };
+
+    public bool Matches(ArchiveRecord record, ArchiveRunScore run) => Kind switch
+    {
+        ComparisonScopeKind.All => true,
+        ComparisonScopeKind.Current => run.IsCurrentEvaluation,
+        ComparisonScopeKind.ParserVersion => string.Equals(string.IsNullOrWhiteSpace(run.ParserVersion) ? "unknown" : run.ParserVersion, Value, StringComparison.OrdinalIgnoreCase),
+        ComparisonScopeKind.ToolVersion => string.Equals(string.IsNullOrWhiteSpace(record.ToolVersion) ? "unknown" : record.ToolVersion.Trim(), Value, StringComparison.OrdinalIgnoreCase),
+        _ => true
+    };
+
+    /// <summary>Parses "all", "current", "parser:parser-v2", "parser-v2", "tool:0.7.5", "v0.7.5", "0.7.5".</summary>
+    public static ComparisonScope? Parse(string? text)
+    {
+        var value = (text ?? string.Empty).Trim();
+        if (value.Length == 0 || string.Equals(value, "all", StringComparison.OrdinalIgnoreCase) || string.Equals(value, "alle", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        if (string.Equals(value, "current", StringComparison.OrdinalIgnoreCase) || string.Equals(value, "aktuell", StringComparison.OrdinalIgnoreCase))
+        {
+            return new ComparisonScope(ComparisonScopeKind.Current, ResponseParser.CurrentParserVersion);
+        }
+
+        if (value.StartsWith("parser:", StringComparison.OrdinalIgnoreCase))
+        {
+            return new ComparisonScope(ComparisonScopeKind.ParserVersion, value[7..].Trim());
+        }
+
+        if (value.StartsWith("parser-", StringComparison.OrdinalIgnoreCase))
+        {
+            return new ComparisonScope(ComparisonScopeKind.ParserVersion, value);
+        }
+
+        if (value.StartsWith("tool:", StringComparison.OrdinalIgnoreCase))
+        {
+            return new ComparisonScope(ComparisonScopeKind.ToolVersion, value[5..].Trim().TrimStart('v', 'V'));
+        }
+
+        var trimmed = value.TrimStart('v', 'V');
+        return Version.TryParse(trimmed, out _)
+            ? new ComparisonScope(ComparisonScopeKind.ToolVersion, trimmed)
+            : throw new ArgumentException($"Unknown scope '{text}'. Use all, current, parser:<version> or tool:<version>.");
+    }
+}
+
 public enum ComparisonAggregate
 {
     /// <summary>Headline number is the mean selected-run score over all records in the group.</summary>
@@ -1056,6 +1383,17 @@ public sealed class ComparisonSeries
     public string ModelFamily { get; init; } = string.Empty;
     public string Quant { get; init; } = string.Empty;
     public string Label { get; init; } = string.Empty;
+
+    /// <summary>Canonical backend of every run in this series, "mixed" when pooled, "unknown" when unrecorded.</summary>
+    public string Backend { get; init; } = ServerRuntimeInfo.UnknownValue;
+    public string Engine { get; init; } = ServerRuntimeInfo.UnknownValue;
+    public string? Build { get; init; }
+    public string? RuntimeKey { get; init; }
+    public string? RuntimeLabel { get; init; }
+    public Dictionary<string, int> BackendBreakdown { get; init; } = new(StringComparer.OrdinalIgnoreCase);
+    public Dictionary<string, int> RuntimeBreakdown { get; init; } = new(StringComparer.OrdinalIgnoreCase);
+    public Dictionary<string, int> ToolVersionBreakdown { get; init; } = new(StringComparer.OrdinalIgnoreCase);
+    public Dictionary<string, int> ParserVersionBreakdown { get; init; } = new(StringComparer.OrdinalIgnoreCase);
     public int RunCount { get; init; }
     public ComparisonAggregate Aggregate { get; init; }
     public ComparisonRunView RunView { get; init; }
@@ -1225,6 +1563,12 @@ public sealed class ComparisonSeries
 public sealed class ComparisonRunDetail
 {
     public string RecordId { get; init; } = string.Empty;
+    public string ToolVersion { get; init; } = string.Empty;
+    public string Backend { get; init; } = ServerRuntimeInfo.UnknownValue;
+    public string Engine { get; init; } = ServerRuntimeInfo.UnknownValue;
+    public string? Build { get; init; }
+    public string? RuntimeLabel { get; init; }
+    public string? CampaignId { get; init; }
     public string BenchmarkProfile { get; init; } = string.Empty;
     public string ScoringProfile { get; init; } = string.Empty;
     public int ScoringProfileVersion { get; init; }
@@ -1275,6 +1619,12 @@ public sealed class ComparisonRunDetail
         return new ComparisonRunDetail
         {
             RecordId = sample.Record.RecordId,
+            ToolVersion = sample.Record.ToolVersion ?? string.Empty,
+            Backend = sample.Record.ServerMetadata.NormalizedBackend,
+            Engine = sample.Record.ServerMetadata.NormalizedEngine,
+            Build = string.IsNullOrWhiteSpace(sample.Record.ServerMetadata.LlamaBuild) ? null : RuntimeKeys.ShortBuild(sample.Record.ServerMetadata.LlamaBuild),
+            RuntimeLabel = sample.Record.ServerMetadata.RuntimeDisplayLabel,
+            CampaignId = sample.Record.ServerMetadata.CampaignId,
             BenchmarkProfile = sample.Record.BenchmarkProfile,
             ScoringProfile = sample.Run.ScoringProfile,
             ScoringProfileVersion = sample.Run.ScoringProfileVersion,

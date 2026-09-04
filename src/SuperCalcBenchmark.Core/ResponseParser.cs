@@ -6,7 +6,25 @@ namespace SuperCalcBenchmark.Core;
 public sealed partial class ResponseParser
 {
     public const string LegacyParserVersion = "parser-v1";
-    public const string CurrentParserVersion = "parser-v2";
+    public const string ParserV2Version = "parser-v2";
+
+    /// <summary>
+    /// parser-v3 adds a lenient JSON repair pass (leading zeros, invalid escapes, raw control
+    /// characters, unescaped inner quotes, missing commas) that only runs after strict parsing
+    /// failed, accepts findings embedded in an echoed schema's <c>properties</c> object, and
+    /// treats text before a stray <c>&lt;/think&gt;</c> as reasoning. Matching and scoring are
+    /// unchanged; parser identity is versioned so older scorecards stay comparable history.
+    /// </summary>
+    public const string CurrentParserVersion = "parser-v3";
+
+    /// <summary>Every parser identity that has ever been written into an archive, oldest first.</summary>
+    public static readonly IReadOnlyList<string> KnownParserVersions = [LegacyParserVersion, ParserV2Version, CurrentParserVersion];
+
+    private static readonly JsonDocumentOptions DocumentOptions = new()
+    {
+        AllowTrailingCommas = true,
+        CommentHandling = JsonCommentHandling.Skip
+    };
 
     public ParseResult Parse(string assistantContent)
     {
@@ -30,7 +48,7 @@ public sealed partial class ResponseParser
 
         // An incidental empty [] in surrounding prose is weaker evidence than complete
         // finding objects recoverable from an otherwise truncated/extra-braced response.
-        if (TryParsePartialFindingsArray(trimmed, out var partialFindings, out var partialWarning))
+        if (TryParsePartialFindingsArray(trimmed, out var partialFindings, out var partialWarning, out var partialRepairs))
         {
             return new ParseResult
             {
@@ -39,7 +57,8 @@ public sealed partial class ResponseParser
                 ParsedJson = true,
                 UsedMarkdownJsonBlock = trimmed.Contains("```", StringComparison.Ordinal),
                 ParseMode = "partial_json",
-                Warning = partialWarning
+                Warning = partialWarning,
+                Repairs = partialRepairs.ToList()
             };
         }
 
@@ -63,16 +82,16 @@ public sealed partial class ResponseParser
 
     private static ParsedJsonCandidate? EvaluateJsonCandidate(string json, int start, bool fromFence, string parseMode)
     {
-        if (TryParseJsonFindings(json, out var findings, out var warning, out var validPayload))
+        if (TryParseJsonFindings(json, out var findings, out var warning, out var validPayload, out var repairs))
         {
             var quality = validPayload
                 ? findings.Count > 0 ? JsonCandidateQuality.Findings : JsonCandidateQuality.ValidFindingsPayload
                 : JsonCandidateQuality.JsonWithoutFindings;
-            return new ParsedJsonCandidate(start, fromFence, parseMode, findings, warning, quality);
+            return new ParsedJsonCandidate(start, fromFence, parseMode, findings, warning, quality, repairs);
         }
 
-        return TryParseJsonWithoutFindings(json, out var jsonWarning)
-            ? new ParsedJsonCandidate(start, fromFence, parseMode, [], jsonWarning, JsonCandidateQuality.JsonWithoutFindings)
+        return TryParseJsonWithoutFindings(json, out var jsonWarning, out var jsonRepairs)
+            ? new ParsedJsonCandidate(start, fromFence, parseMode, [], jsonWarning, JsonCandidateQuality.JsonWithoutFindings, jsonRepairs)
             : null;
     }
 
@@ -109,7 +128,8 @@ public sealed partial class ResponseParser
         ParsedJson = true,
         UsedMarkdownJsonBlock = candidate.FromFence,
         ParseMode = candidate.ParseMode,
-        Warning = candidate.Warning
+        Warning = candidate.Warning,
+        Repairs = candidate.Repairs.ToList()
     };
 
     private enum JsonCandidateQuality
@@ -127,7 +147,51 @@ public sealed partial class ResponseParser
         string ParseMode,
         List<LlmFinding> Findings,
         string? Warning,
-        JsonCandidateQuality Quality);
+        JsonCandidateQuality Quality,
+        IReadOnlyList<string> Repairs);
+
+    /// <summary>
+    /// Parses strictly first. Only when strict parsing fails is the lenient repair pass applied,
+    /// so valid JSON is never rewritten. Returns null when neither form parses.
+    /// </summary>
+    private static JsonDocument? TryParseDocument(string json, out IReadOnlyList<string> repairs)
+    {
+        repairs = [];
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return null;
+        }
+
+        var cleaned = RemoveTrailingCommas(json.Trim());
+        try
+        {
+            return JsonDocument.Parse(cleaned, DocumentOptions);
+        }
+        catch (JsonException)
+        {
+            // Fall through to the repair pass below.
+        }
+
+        var repaired = LenientJsonRepair.Repair(cleaned);
+        if (!repaired.Changed)
+        {
+            return null;
+        }
+
+        try
+        {
+            var document = JsonDocument.Parse(RemoveTrailingCommas(repaired.Json), DocumentOptions);
+            repairs = repaired.Repairs;
+            return document;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static string DescribeRepairs(IReadOnlyList<string> repairs)
+        => repairs.Count == 0 ? string.Empty : $"Lenient JSON repair applied ({string.Join(", ", repairs)}); the model emitted invalid JSON.";
 
     private static List<LlmFinding> Reindex(List<LlmFinding> findings)
     {
@@ -144,65 +208,68 @@ public sealed partial class ResponseParser
         out List<LlmFinding> findings,
         out string? warning,
         out bool validPayload)
+        => TryParseJsonFindings(json, out findings, out warning, out validPayload, out _);
+
+    private static bool TryParseJsonFindings(
+        string json,
+        out List<LlmFinding> findings,
+        out string? warning,
+        out bool validPayload,
+        out IReadOnlyList<string> repairs)
     {
         findings = [];
         warning = null;
         validPayload = false;
+        repairs = [];
 
-        if (string.IsNullOrWhiteSpace(json))
+        using var document = TryParseDocument(json, out repairs);
+        if (document is null)
         {
+            repairs = [];
             return false;
         }
 
-        var cleaned = RemoveTrailingCommas(json.Trim());
-
-        try
+        var root = document.RootElement;
+        if (LooksLikeSchemaEcho(root))
         {
-            using var document = JsonDocument.Parse(cleaned, new JsonDocumentOptions
-            {
-                AllowTrailingCommas = true,
-                CommentHandling = JsonCommentHandling.Skip
-            });
-
-            var root = document.RootElement;
-            if (LooksLikeSchemaEcho(root))
-            {
-                return false;
-            }
-
-            var warnings = new List<string>();
-            if (HasSchemaMetadata(root))
-            {
-                warnings.Add("Response included JSON schema metadata alongside findings.");
-            }
-
-            if (TryGetFindingsElement(root, out var findingsElement, warnings))
-            {
-                validPayload = ParseFindingsElement(findingsElement, findings, warnings);
-                if (!validPayload)
-                {
-                    warnings.Add("The findings payload had an invalid shape and was ignored; expected an array or finding object.");
-                }
-
-                warning = FormatWarnings(warnings);
-                return true;
-            }
-
-            if (root.ValueKind == JsonValueKind.Object && LooksLikeFindingObject(root))
-            {
-                findings.Add(ReadFinding(root));
-                validPayload = true;
-                warnings.Add("Parsed a single finding object without a top-level findings array.");
-                warning = FormatWarnings(warnings);
-                return true;
-            }
-
+            repairs = [];
             return false;
         }
-        catch (JsonException)
+
+        var warnings = new List<string>();
+        if (repairs.Count > 0)
         {
-            return false;
+            warnings.Add(DescribeRepairs(repairs));
         }
+
+        if (HasSchemaMetadata(root))
+        {
+            warnings.Add("Response included JSON schema metadata alongside findings.");
+        }
+
+        if (TryGetFindingsElement(root, out var findingsElement, warnings))
+        {
+            validPayload = ParseFindingsElement(findingsElement, findings, warnings);
+            if (!validPayload)
+            {
+                warnings.Add("The findings payload had an invalid shape and was ignored; expected an array or finding object.");
+            }
+
+            warning = FormatWarnings(warnings);
+            return true;
+        }
+
+        if (root.ValueKind == JsonValueKind.Object && LooksLikeFindingObject(root))
+        {
+            findings.Add(ReadFinding(root));
+            validPayload = true;
+            warnings.Add("Parsed a single finding object without a top-level findings array.");
+            warning = FormatWarnings(warnings);
+            return true;
+        }
+
+        repairs = [];
+        return false;
     }
 
     private static bool TryGetFindingsElement(JsonElement root, out JsonElement findingsElement, List<string> warnings)
@@ -259,6 +326,42 @@ public sealed partial class ResponseParser
                 && TryGetFindingsElement(wrapped, out findingsElement, warnings))
             {
                 warnings.Add($"Unwrapped '{wrapper}' object before parsing findings.");
+                return true;
+            }
+        }
+
+        // Some models echo the schema skeleton and then put their real answer where the
+        // schema declared it: {"$schema":..., "properties": {"findings": [ {...}, ... ]}}.
+        // A pure schema echo keeps properties.findings as an object ({"type":"array"}), so
+        // only a real array of finding objects is accepted here.
+        if (TryGetEmbeddedPropertiesFindings(root, out findingsElement, out var embeddedName))
+        {
+            warnings.Add($"Parsed findings embedded in the echoed schema 'properties.{embeddedName}' array.");
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryGetEmbeddedPropertiesFindings(JsonElement root, out JsonElement findingsElement, out string name)
+    {
+        findingsElement = default;
+        name = string.Empty;
+        if (root.ValueKind != JsonValueKind.Object
+            || !TryGetProperty(root, "properties", out var properties)
+            || properties.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        foreach (var candidateName in new[] { "findings", "vulnerabilities", "issues", "security_findings", "securityFindings", "results" })
+        {
+            if (TryGetProperty(properties, candidateName, out var candidate)
+                && candidate.ValueKind == JsonValueKind.Array
+                && candidate.EnumerateArray().Any(item => item.ValueKind == JsonValueKind.Object && LooksLikeFindingObject(item)))
+            {
+                findingsElement = candidate;
+                name = candidateName;
                 return true;
             }
         }
@@ -432,11 +535,13 @@ public sealed partial class ResponseParser
         return distinct.Count == 0 ? null : string.Join(" ", distinct);
     }
 
-    private static bool TryParsePartialFindingsArray(string text, out List<LlmFinding> findings, out string warning)
+    private static bool TryParsePartialFindingsArray(string text, out List<LlmFinding> findings, out string warning, out IReadOnlyList<string> repairs)
     {
         findings = [];
         warning = string.Empty;
+        repairs = [];
         string? bestParseWarning = null;
+        IReadOnlyList<string> bestRepairs = [];
         var bestPropertyIndex = -1;
 
         var propertyOccurrences = new List<int>();
@@ -495,7 +600,7 @@ public sealed partial class ResponseParser
             }
 
             var salvagedJson = "{\"findings\":[" + string.Join(',', objectJson) + "]}";
-            if (!TryParseJsonFindings(salvagedJson, out var candidate, out var parseWarning, out var validPayload)
+            if (!TryParseJsonFindings(salvagedJson, out var candidate, out var parseWarning, out var validPayload, out var candidateRepairs)
                 || !validPayload
                 || candidate.Count == 0)
             {
@@ -507,6 +612,7 @@ public sealed partial class ResponseParser
             {
                 findings = candidate;
                 bestParseWarning = parseWarning;
+                bestRepairs = candidateRepairs;
                 bestPropertyIndex = propertyIndex;
             }
         }
@@ -516,6 +622,7 @@ public sealed partial class ResponseParser
             return false;
         }
 
+        repairs = bestRepairs;
         warning = $"Response JSON was incomplete or had trailing non-JSON text; salvaged {findings.Count} complete finding object(s) from the findings array.";
         if (!string.IsNullOrWhiteSpace(bestParseWarning))
         {
@@ -598,37 +705,27 @@ public sealed partial class ResponseParser
         return objects;
     }
 
-    private static bool TryParseJsonWithoutFindings(string json, out string warning)
+    private static bool TryParseJsonWithoutFindings(string json, out string warning, out IReadOnlyList<string> repairs)
     {
         warning = string.Empty;
+        repairs = [];
 
-        if (string.IsNullOrWhiteSpace(json))
+        using var document = TryParseDocument(json, out repairs);
+        if (document is null || document.RootElement.ValueKind is not (JsonValueKind.Object or JsonValueKind.Array))
         {
+            repairs = [];
             return false;
         }
 
-        try
+        warning = LooksLikeSchemaEcho(document.RootElement)
+            ? "Response appears to echo the JSON schema instead of returning findings."
+            : "Valid JSON response did not contain a findings array.";
+        if (repairs.Count > 0)
         {
-            using var document = JsonDocument.Parse(RemoveTrailingCommas(json.Trim()), new JsonDocumentOptions
-            {
-                AllowTrailingCommas = true,
-                CommentHandling = JsonCommentHandling.Skip
-            });
-
-            if (document.RootElement.ValueKind is not (JsonValueKind.Object or JsonValueKind.Array))
-            {
-                return false;
-            }
-
-            warning = LooksLikeSchemaEcho(document.RootElement)
-                ? "Response appears to echo the JSON schema instead of returning findings."
-                : "Valid JSON response did not contain a findings array.";
-            return true;
+            warning = DescribeRepairs(repairs) + " " + warning;
         }
-        catch (JsonException)
-        {
-            return false;
-        }
+
+        return true;
     }
 
     private static bool LooksLikeSchemaEcho(JsonElement root)
@@ -660,7 +757,9 @@ public sealed partial class ResponseParser
             }
         }
 
-        return false;
+        // A schema echo whose properties.findings is a real array of findings is an answer,
+        // not an echo (see TryGetEmbeddedPropertiesFindings).
+        return TryGetEmbeddedPropertiesFindings(root, out _, out _);
     }
 
     private static bool ContainsFindingObject(JsonElement element)
@@ -1045,39 +1144,19 @@ public sealed partial class ResponseParser
 
     private static bool IsSingleFindingObjectCandidate(string json)
     {
-        try
-        {
-            using var document = JsonDocument.Parse(RemoveTrailingCommas(json.Trim()), new JsonDocumentOptions
-            {
-                AllowTrailingCommas = true,
-                CommentHandling = JsonCommentHandling.Skip
-            });
-            return document.RootElement.ValueKind == JsonValueKind.Object
-                   && LooksLikeFindingObject(document.RootElement)
-                   && !TryGetFindingsElement(document.RootElement, out _, []);
-        }
-        catch (JsonException)
-        {
-            return false;
-        }
+        using var document = TryParseDocument(json, out _);
+        return document is not null
+               && document.RootElement.ValueKind == JsonValueKind.Object
+               && LooksLikeFindingObject(document.RootElement)
+               && !TryGetFindingsElement(document.RootElement, out _, []);
     }
 
     private static bool IsExplicitFindingsWrapperCandidate(string json)
     {
-        try
-        {
-            using var document = JsonDocument.Parse(RemoveTrailingCommas(json.Trim()), new JsonDocumentOptions
-            {
-                AllowTrailingCommas = true,
-                CommentHandling = JsonCommentHandling.Skip
-            });
-            return document.RootElement.ValueKind == JsonValueKind.Object
-                   && TryGetFindingsElement(document.RootElement, out _, []);
-        }
-        catch (JsonException)
-        {
-            return false;
-        }
+        using var document = TryParseDocument(json, out _);
+        return document is not null
+               && document.RootElement.ValueKind == JsonValueKind.Object
+               && TryGetFindingsElement(document.RootElement, out _, []);
     }
 
     private static bool TryExtractBalancedJson(string text, int start, out int end)

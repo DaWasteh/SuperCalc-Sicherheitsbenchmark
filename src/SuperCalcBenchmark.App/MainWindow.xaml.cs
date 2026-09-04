@@ -396,6 +396,7 @@ public partial class MainWindow : Window
     private async void MainWindow_Loaded(object sender, RoutedEventArgs e)
     {
         Loaded -= MainWindow_Loaded;
+        EnsureCampaignUi();
         await SynchronizeRepositoryArchiveAsync();
         await RefreshComparisonAsync(preserveSelection: false);
     }
@@ -929,6 +930,13 @@ public partial class MainWindow : Window
 
     private void SoftStopButton_Click(object sender, RoutedEventArgs e)
     {
+        if (_campaignRunner is not null)
+        {
+            CampaignStopAfterRunButton_Click(sender, e);
+            SoftStopButton.IsEnabled = false;
+            return;
+        }
+
         if (_benchmarkCancellation is null || _stopAfterCurrentPassRequested)
         {
             return;
@@ -1530,6 +1538,13 @@ public partial class MainWindow : Window
                 ? previous
                 : AllFamiliesLabel;
 
+            var previousScope = preserveSelection ? (ScopeComboBox.SelectedItem as ComparisonScope)?.Key : null;
+            var scopes = ComparisonReport.DiscoverScopes(_comparisonGroups);
+            ScopeComboBox.ItemsSource = scopes;
+            ScopeComboBox.SelectedItem = scopes.FirstOrDefault(s => string.Equals(s.Key, previousScope, StringComparison.OrdinalIgnoreCase))
+                                         ?? scopes.FirstOrDefault(s => s.Kind == ComparisonScopeKind.All)
+                                         ?? scopes.FirstOrDefault();
+
             RebuildComparisonGrid();
             AppendLog($"Archiv geladen: {_comparisonGroups.Sum(g => g.Records.Count)} Scorecard(s) in {_comparisonGroups.Count} Gruppe(n) ({stopwatch.ElapsedMilliseconds} ms).");
         }
@@ -1577,13 +1592,21 @@ public partial class MainWindow : Window
         var freshness = currentRunCount == selectedRunCount
             ? $"Alle {selectedRunCount} ausgewählten Runs sind aktuell ({ResponseParser.CurrentParserVersion}). "
             : $"Aktuell: {currentRunCount}/{selectedRunCount} Runs ({ResponseParser.CurrentParserVersion}); ältere Parser-Auswertungen sind als veraltet markiert. ";
+        var groupingLabel = SelectedGrouping switch
+        {
+            ComparisonGrouping.ModelQuantBackend => "Modell/Quant/Backend",
+            ComparisonGrouping.ModelQuantRuntime => "Modell/Quant/Build",
+            _ => "Modell/Quant"
+        };
         ComparisonStatusTextBlock.Text =
-            $"{report.Series.Count} Modell/Quant-Gruppe(n), {report.VulnerabilityAxis.Count} Schwachstellen · Wertung: {aggregate}, Run-Sicht: {SelectedRunView}, Metrik: {SelectedMetric}. " +
+            $"{report.Series.Count} {groupingLabel}-Gruppe(n), {report.VulnerabilityAxis.Count} Schwachstellen · Wertung: {aggregate}, Run-Sicht: {SelectedRunView}, Metrik: {SelectedMetric}, Versionen: {SelectedScope?.Label ?? "alle"}. " +
             freshness +
-            "HTML enthält clientseitige Filter, Heatmap, Severity-, Run1/Run2-, Stabilitäts- und Qualitätsdiagnosen. Modell/Quant per Doppelklick direkt bearbeiten.";
+            "HTML enthält Versions-Scope, Backend-Gruppierung, Filter, Heatmap und Diagnosen. Modell/Quant per Doppelklick direkt bearbeiten.";
     }
 
-    private ComparisonReport BuildCurrentComparison()
+    private ComparisonReport BuildCurrentComparison() => BuildCurrentComparisonWithContext().Report;
+
+    private (ComparisonReport Report, VulnerabilityMetadataIndex Metadata, string? FamilyFilter) BuildCurrentComparisonWithContext()
     {
         var benchmarkId = _comparisonGroups
             .SelectMany(g => g.Records)
@@ -1594,8 +1617,20 @@ public partial class MainWindow : Window
         var familyFilter = string.Equals(family, AllFamiliesLabel, StringComparison.Ordinal) ? null : family;
 
         var metadata = VulnerabilityMetadataIndex.Load(Path.Combine(_repositoryRoot, "benchmarks", "supercalc-v3", "ground_truth.json"));
-        return ComparisonReport.Build(_comparisonGroups, benchmarkId, SelectedAggregate, familyFilter, metadata, SelectedRunView, SelectedMetric);
+        var scope = SelectedScope is { Kind: not ComparisonScopeKind.All } selectedScope ? selectedScope : null;
+        var report = ComparisonReport.Build(_comparisonGroups, benchmarkId, SelectedAggregate, familyFilter, metadata, SelectedRunView, SelectedMetric, null, SelectedGrouping, scope);
+        return (report, metadata, familyFilter);
     }
+
+    private ComparisonGrouping SelectedGrouping =>
+        ((GroupingComboBox?.SelectedItem as ComboBoxItem)?.Content as string) switch
+        {
+            "+ Backend" => ComparisonGrouping.ModelQuantBackend,
+            "+ Engine/Build" => ComparisonGrouping.ModelQuantRuntime,
+            _ => ComparisonGrouping.ModelQuant
+        };
+
+    private ComparisonScope? SelectedScope => ScopeComboBox?.SelectedItem as ComparisonScope;
 
     private ComparisonAggregate SelectedAggregate =>
         ((AggregateComboBox.SelectedItem as ComboBoxItem)?.Content as string) switch
@@ -1636,14 +1671,14 @@ public partial class MainWindow : Window
     {
         try
         {
-            var report = BuildCurrentComparison();
+            var (report, metadata, familyFilter) = BuildCurrentComparisonWithContext();
             if (report.IsEmpty)
             {
                 return;
             }
 
             var outputDir = Path.Combine(ArchiveRoot, "_reports");
-            var htmlPath = new ComparisonHtmlWriter().Write(report, outputDir);
+            var htmlPath = new ComparisonHtmlWriter { Groups = _comparisonGroups, FamilyFilter = familyFilter, MetadataIndex = metadata }.Write(report, outputDir);
             AppendLog("Vergleichs-HTML erzeugt: " + htmlPath);
             OpenPath(htmlPath);
         }
@@ -1665,6 +1700,8 @@ public partial class MainWindow : Window
         public string GroupKey { get; init; } = string.Empty;
         public string ModelFamily { get; set; } = string.Empty;
         public string Quant { get; set; } = string.Empty;
+        public string BackendDisplay { get; init; } = string.Empty;
+        public string BuildDisplay { get; init; } = string.Empty;
         public int RunCount { get; init; }
         public string CurrentDisplay { get; init; } = string.Empty;
         public double ScorePercent { get; init; }
@@ -1701,6 +1738,10 @@ public partial class MainWindow : Window
             GroupKey = series.GroupKey,
             ModelFamily = series.ModelFamily,
             Quant = series.Quant,
+            BackendDisplay = string.Equals(series.Backend, "mixed", StringComparison.OrdinalIgnoreCase)
+                ? string.Join(", ", series.BackendBreakdown.OrderByDescending(kvp => kvp.Value).Select(kvp => $"{RuntimeKeys.DisplayBackend(kvp.Key)} {kvp.Value}"))
+                : RuntimeKeys.DisplayBackend(series.Backend),
+            BuildDisplay = series.Build ?? (series.RuntimeBreakdown.Count > 1 ? $"{series.RuntimeBreakdown.Count} Builds" : "—"),
             RunCount = series.RunCount,
             CurrentDisplay = $"{series.CurrentEvaluationRunCount}/{series.RunCount}",
             ScorePercent = series.ScorePercent,

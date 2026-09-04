@@ -16,6 +16,16 @@ internal static partial class TestRunner
         Console.OutputEncoding = System.Text.Encoding.UTF8;
 
         Run("release versions agree", ReleaseVersionsAgree);
+        Run("parser-v3 lenient JSON repair fixes common defects", LenientJsonRepairFixesCommonDefects);
+        Run("parser-v3 never rewrites valid JSON", ParserDoesNotRepairValidJson);
+        Run("parser-v3 accepts findings embedded in schema properties", ParserAcceptsFindingsEmbeddedInSchemaProperties);
+        Run("runner treats stray </think> as reasoning only before the answer", RunnerTreatsStrayThinkCloseAsReasoning);
+        Run("runtime keys classify backends from paths, modules and system_info", RuntimeKeysClassifyBackends);
+        Run("runtime probe composes precedence and llama-server arguments", RuntimeProbeComposesPrecedenceAndLaunchArguments);
+        Run("AutoTuner client follows the v5.3.9 control API contract", AutoTunerClientFollowsContract);
+        Run("AutoTuner discovery reads sidecar and environment", AutoTunerDiscoveryReadsSidecarAndEnvironment);
+        Run("archive stores runtime identity and comparison splits by backend", ArchiveStoresRuntimeIdentityAndComparisonSplitsByBackend);
+        Run("campaign runner records failures and honors stop", CampaignRunnerRecordsFailuresAndHonorsStop);
         Run("ground truth validates", GroundTruthValidates);
         Run("ground truth loader handles null collections deterministically", GroundTruthLoaderHandlesNullCollections);
         Run("WPF app exits when the main window closes", WpfAppExitsWithMainWindow);
@@ -2705,7 +2715,7 @@ internal static partial class TestRunner
 
     private static void ReleaseVersionsAgree()
     {
-        const string expected = "0.7.5";
+        const string expected = "0.7.6";
         var runnerField = typeof(BenchmarkRunner).GetField("ToolVersion", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
         Assert(runnerField?.GetRawConstantValue() as string == expected, "BenchmarkRunner.ToolVersion must match the release version.");
         Assert(new BenchmarkRunResult().ToolVersion == expected, "BenchmarkRunResult.ToolVersion must match the release version.");

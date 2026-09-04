@@ -79,12 +79,12 @@ public sealed class RunArtifactReader
     {
         if (!string.Equals(a.BenchmarkId, r.BenchmarkId, StringComparison.OrdinalIgnoreCase)) return "identity mismatch: benchmark";
         if (!string.IsNullOrWhiteSpace(a.SourceSha256) && !string.Equals(a.SourceSha256, r.SourceSha256, StringComparison.OrdinalIgnoreCase)) return "identity mismatch: source hash";
-        if (a.StartedAt != default && r.StartedAt != default && Math.Abs((a.StartedAt-r.StartedAt).TotalSeconds) > 1) return "identity mismatch: start time";
+        if (a.StartedAt != default && r.StartedAt != default && Math.Abs((a.StartedAt - r.StartedAt).TotalSeconds) > 1) return "identity mismatch: start time";
         if (!string.IsNullOrWhiteSpace(a.RawModelId) && !string.Equals(a.RawModelId, r.Model, StringComparison.OrdinalIgnoreCase)) return "identity mismatch: model";
         if (!string.IsNullOrWhiteSpace(a.RepeatGroupId) && !string.Equals(a.RepeatGroupId, r.RepeatGroupId, StringComparison.Ordinal)) return "identity mismatch: repeat group";
         if (a.RepeatIndex > 0 && r.RepeatIndex > 0 && a.RepeatIndex != r.RepeatIndex) return "identity mismatch: repeat index";
         if (a.Seed.HasValue && a.Seed.Value != r.Seed) return "identity mismatch: seed";
-        if (a.CompletedAt != default && r.CompletedAt != default && Math.Abs((a.CompletedAt-r.CompletedAt).TotalSeconds) > 1) return "identity mismatch: completion time";
+        if (a.CompletedAt != default && r.CompletedAt != default && Math.Abs((a.CompletedAt - r.CompletedAt).TotalSeconds) > 1) return "identity mismatch: completion time";
         if (!resolvedFromLocator
             && !string.IsNullOrWhiteSpace(r.OutputDirectory)
             && !SameDirectory(a.RunDirectory, r.OutputDirectory)) return "identity mismatch: output directory";
@@ -124,7 +124,7 @@ public sealed class RunArtifactReader
         return output.Length == 0 ? null : output.ToString();
     }
 
-    internal static ReadOnlySpan<byte> StripUtf8Bom(byte[] bytes) =>
+    public static ReadOnlySpan<byte> StripUtf8Bom(byte[] bytes) =>
         bytes.Length >= 3 && bytes[0] == 0xef && bytes[1] == 0xbb && bytes[2] == 0xbf ? bytes.AsSpan(3) : bytes;
 
     private static bool SameDirectory(string a, string b)

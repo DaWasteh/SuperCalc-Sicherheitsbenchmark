@@ -172,12 +172,10 @@ public sealed class ArchiveStore
             {
                 Family = identity.Family,
                 Quant = identity.Quant,
-                QuantBits = EstimateQuantBits(identity.Quant)
+                QuantBits = EstimateQuantBits(identity.Quant),
+                GgufFile = string.IsNullOrWhiteSpace(result.Runtime?.ModelPath) ? null : Path.GetFileName(result.Runtime.ModelPath)
             },
-            ServerMetadata = new ArchiveServerMetadata
-            {
-                ServerContextSize = result.ServerContextSize
-            },
+            ServerMetadata = ArchiveServerMetadata.FromRuntime(result.Runtime, result.ServerContextSize, result.CampaignId, result.CampaignItemLabel),
             RunDirectory = result.OutputDirectory,
             RunLocator = runLocator,
             Runs = runs,

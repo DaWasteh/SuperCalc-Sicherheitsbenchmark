@@ -34,6 +34,10 @@ internal static class Program
                 "archive-list" or "archive" => ArchiveList(parsed),
                 "migrate-archive-scores" => MigrateArchiveScores(parsed),
                 "backfill-archive-metrics" => BackfillArchiveMetrics(parsed),
+                "parse-audit" => ParseAudit(parsed),
+                "autotuner" => await AutoTunerCommandAsync(parsed),
+                "runtime-probe" or "probe" => await RuntimeProbeAsync(parsed),
+                "campaign" => await CampaignAsync(parsed),
                 "compare" => Compare(parsed),
                 "help" => PrintUsageAndReturn(),
                 _ => UnknownCommand(command)
@@ -291,13 +295,449 @@ internal static class Program
         var backup = args.GetNullable("--backup");
         if (write && string.IsNullOrWhiteSpace(backup))
             backup = Path.Combine(archiveDir, "_migration-backup", "v0.7.3-behavioral-metrics-" + DateTime.Now.ToString("yyyyMMdd-HHmmss"));
-        var result = new ArchiveMetricsBackfiller(archiveDir).Run(new() { Write=write, BackupDirectory=backup });
+        var result = new ArchiveMetricsBackfiller(archiveDir).Run(new() { Write = write, BackupDirectory = backup });
         Console.WriteLine($"Archive: {archiveDir}"); Console.WriteLine($"Mode: {(write ? "write" : "dry-run")}");
         if (backup is not null) Console.WriteLine($"Backup: {backup}");
         Console.WriteLine($"Scanned: {result.Scanned}  complete: {result.Complete}  partial: {result.Partial}  unavailable: {result.Unavailable}");
         Console.WriteLine($"Already current: {result.AlreadyCurrent}  would write: {result.WouldWrite}  written: {result.Written}  backups: {result.Backups}  invariant failures: {result.InvariantFailures}");
-        foreach (var file in result.Files.Where(x => x.WouldWrite || x.Warning is not null)) Console.WriteLine($"  [{(file.Warning is not null ? "WARN" : file.Written ? "WRITE" : "DRY")}] {file.Path}{(file.Warning is null ? "" : " warning="+file.Warning)}");
+        foreach (var file in result.Files.Where(x => x.WouldWrite || x.Warning is not null)) Console.WriteLine($"  [{(file.Warning is not null ? "WARN" : file.Written ? "WRITE" : "DRY")}] {file.Path}{(file.Warning is null ? "" : " warning=" + file.Warning)}");
         return result.HasErrors ? 1 : 0;
+    }
+
+    /// <summary>Diagnostics: which engine/backend/build answers at --server, and how that was determined.</summary>
+    private static async Task<int> RuntimeProbeAsync(ParsedArgs args)
+    {
+        var server = args.Get("--server", "http://127.0.0.1:1234");
+        RuntimeOverride? manual = args.Has("--backend") || args.Has("--engine")
+            ? new RuntimeOverride { Backend = args.GetNullable("--backend"), Engine = args.GetNullable("--engine"), EngineVersion = args.GetNullable("--engine-version"), RuntimeLabel = args.GetNullable("--runtime-label") }
+            : null;
+        using var probe = new ServerRuntimeProbe(timeout: TimeSpan.FromSeconds(args.GetInt("--timeout-seconds", 8)));
+        var runtime = await probe.ProbeAsync(server, manual, inspectLocalProcess: !args.Has("--no-process-inspection"));
+        Console.WriteLine($"Server:   {server}");
+        Console.WriteLine($"Runtime:  {runtime.DisplayLabel}");
+        Console.WriteLine($"Engine:   {runtime.Engine} {runtime.EngineVersion}");
+        Console.WriteLine($"Backend:  {runtime.Backend} (source: {runtime.BackendSource}{(string.IsNullOrWhiteSpace(runtime.BackendDetail) ? string.Empty : ", " + runtime.BackendDetail)})");
+        Console.WriteLine($"Binary:   {runtime.ServerBinary ?? "-"} (pid {runtime.ProcessId?.ToString() ?? "-"})");
+        Console.WriteLine($"Model:    {runtime.ModelPath ?? "-"} alias={runtime.ModelAlias ?? "-"} ftype={runtime.ModelFtype ?? "-"}");
+        Console.WriteLine($"Launch:   ctx={runtime.ContextSize?.ToString() ?? "-"} ngl={runtime.GpuLayers?.ToString() ?? "-"} threads={runtime.Threads?.ToString() ?? "-"}/{runtime.BatchThreads?.ToString() ?? "-"} batch={runtime.BatchSize?.ToString() ?? "-"}/{runtime.UBatchSize?.ToString() ?? "-"} kv={runtime.KvTypeK ?? "-"}/{runtime.KvTypeV ?? "-"} fa={runtime.FlashAttention ?? "-"} spec={runtime.SpecType ?? "-"} parallel={runtime.Parallel?.ToString() ?? "-"}");
+        if (runtime.Devices.Count > 0)
+        {
+            Console.WriteLine($"Devices:  {string.Join(" | ", runtime.Devices)}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(runtime.CommandLine))
+        {
+            Console.WriteLine($"Command:  {runtime.CommandLine}");
+        }
+
+        foreach (var note in runtime.ProbeNotes)
+        {
+            Console.WriteLine($"Note:     {note}");
+        }
+
+        if (args.Has("--json"))
+        {
+            Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(runtime, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+        }
+
+        return runtime.HasKnownBackend ? 0 : 3;
+    }
+
+    private static AutoTunerConnection ResolveAutoTuner(ParsedArgs args)
+    {
+        var connection = AutoTunerDiscovery.Discover(args.GetNullable("--autotuner-url"), args.GetNullable("--autotuner-token"), args.GetNullable("--autotuner-sidecar"));
+        if (connection is null)
+        {
+            throw new InvalidOperationException(
+                "AutoTuner control API not found. Enable it in the AutoTuner (⋯ → Settings → External control API) so it writes "
+                + AutoTunerDiscovery.DefaultSidecarPath + ", or pass --autotuner-url http://127.0.0.1:1233 --autotuner-token <key> "
+                + $"(env {AutoTunerDiscovery.UrlEnvironmentVariable}/{AutoTunerDiscovery.KeyEnvironmentVariable} also work).");
+        }
+
+        if (!connection.HasToken)
+        {
+            Console.Error.WriteLine("Warning: no AutoTuner token found; authenticated endpoints will fail unless the tuner runs without a token.");
+        }
+
+        return connection;
+    }
+
+    private static async Task<int> AutoTunerCommandAsync(ParsedArgs args)
+    {
+        var connection = ResolveAutoTuner(args);
+        using var client = new AutoTunerClient(connection, timeout: TimeSpan.FromSeconds(60));
+        var health = await client.GetHealthAsync();
+        Console.WriteLine($"AutoTuner {health.Version} ({health.Service}, {health.Status}) at {connection.BaseUrl} [{connection.Source}]");
+
+        var what = (args.GetNullable("--list") ?? args.GetNullable("--show") ?? "all").Trim().ToLowerInvariant();
+        if (what is "all" or "models")
+        {
+            var models = await client.GetModelsAsync();
+            Console.WriteLine();
+            Console.WriteLine($"{models.Count} model(s):");
+            foreach (var model in models.OrderBy(m => m.Name, StringComparer.OrdinalIgnoreCase))
+            {
+                var detail = new List<string>();
+                if (!string.IsNullOrWhiteSpace(model.Quant)) detail.Add(model.Quant!);
+                if (model.ParamsB is > 0) detail.Add($"{model.ParamsB:0.#}B");
+                if (model.ContextWindow > 0) detail.Add($"ctx {model.ContextWindow}");
+                if (!string.IsNullOrWhiteSpace(model.DefaultRuntimeId)) detail.Add("runtime " + model.DefaultRuntimeId);
+                var state = model.Runnable ? string.Empty : $"  [not runnable: {model.UnavailableReason}]";
+                Console.WriteLine($"  {model.Id}  {model.Name}  ({string.Join(", ", detail)}){state}");
+            }
+        }
+
+        if (what is "all" or "runtimes" or "builds")
+        {
+            var runtimes = await client.GetRuntimesAsync();
+            Console.WriteLine();
+            Console.WriteLine(runtimes.Count == 0 ? "No runtimes reported (AutoTuner older than v5.3.9?)." : $"{runtimes.Count} llama-server build(s):");
+            foreach (var runtime in runtimes)
+            {
+                Console.WriteLine($"  {runtime.Id}  {runtime.Label}  backend={runtime.Backend} build={runtime.Build ?? runtime.BuildInfo ?? "?"}{(runtime.IsDefault ? " [default]" : string.Empty)}{(runtime.Available ? string.Empty : "  [unavailable: " + runtime.UnavailableReason + "]")}");
+            }
+        }
+
+        if (what is "all" or "status")
+        {
+            var status = await client.GetStatusAsync();
+            Console.WriteLine();
+            Console.WriteLine($"Status: {status.Status}, active={status.ActiveModel ?? "-"}, loading={status.LoadingModel ?? "-"}, backend_url={status.BackendUrl ?? "-"}");
+            if (status.Runtime is not null || status.Launch is not null)
+            {
+                Console.WriteLine("Runtime: " + status.ToRuntimeInfo(health.Version).Summary());
+            }
+        }
+
+        return 0;
+    }
+
+    private static async Task<int> CampaignAsync(ParsedArgs args)
+    {
+        var baseOptions = BuildOptions(args, requireModel: false, mirrorArchive: true);
+        var useAutoTuner = !args.Has("--no-autotuner");
+        AutoTunerConnection? connection = useAutoTuner ? ResolveAutoTuner(args) : null;
+        var repeats = Math.Max(1, args.GetInt("--repeats", 1));
+        var items = new List<CampaignItem>();
+
+        var planPath = args.GetNullable("--plan");
+        if (!string.IsNullOrWhiteSpace(planPath))
+        {
+            items.AddRange(ReadPlanFile(planPath, repeats));
+        }
+
+        var modelsArgument = args.GetNullable("--models") ?? args.GetNullable("--model");
+        if (!string.IsNullOrWhiteSpace(modelsArgument))
+        {
+            var requestedModels = modelsArgument.Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            var requestedRuntimes = (args.GetNullable("--runtimes") ?? args.GetNullable("--backends") ?? "default")
+                .Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+            if (connection is null)
+            {
+                items.AddRange(requestedModels.Select(model => new CampaignItem { ModelId = model, ModelName = model, Repeats = repeats, QuantOverride = baseOptions.QuantOverride }));
+            }
+            else
+            {
+                using var client = new AutoTunerClient(connection, timeout: TimeSpan.FromSeconds(60));
+                var catalogue = await client.GetModelsAsync();
+                var runtimes = await client.GetRuntimesAsync();
+                foreach (var requested in requestedModels)
+                {
+                    var model = catalogue.FirstOrDefault(m => string.Equals(m.Id, requested, StringComparison.OrdinalIgnoreCase))
+                                ?? catalogue.FirstOrDefault(m => string.Equals(m.Name, requested, StringComparison.OrdinalIgnoreCase))
+                                ?? catalogue.FirstOrDefault(m => string.Equals(Path.GetFileNameWithoutExtension(m.Path), requested, StringComparison.OrdinalIgnoreCase))
+                                ?? catalogue.FirstOrDefault(m => m.Name.Contains(requested, StringComparison.OrdinalIgnoreCase) || m.Id.Contains(requested, StringComparison.OrdinalIgnoreCase));
+                    if (model is null)
+                    {
+                        throw new ArgumentException($"AutoTuner does not list a model matching '{requested}'. Use 'autotuner --list models' to see ids.");
+                    }
+
+                    if (!model.Runnable)
+                    {
+                        Console.Error.WriteLine($"Skipping {model.Name}: {model.UnavailableReason}");
+                        continue;
+                    }
+
+                    foreach (var runtime in ResolveRuntimes(requestedRuntimes, runtimes, model))
+                    {
+                        items.Add(new CampaignItem
+                        {
+                            ModelId = model.Id,
+                            ModelName = model.Name,
+                            RuntimeId = runtime?.Id,
+                            RuntimeLabel = runtime?.DisplayLabel,
+                            Repeats = repeats,
+                            QuantOverride = baseOptions.QuantOverride
+                        });
+                    }
+                }
+            }
+        }
+
+        if (items.Count == 0)
+        {
+            throw new ArgumentException("campaign needs --models <id,id,...> (optionally --runtimes <id,id|all|default>) or --plan <file.json>.");
+        }
+
+        var plan = new CampaignPlan
+        {
+            CampaignId = args.Get("--campaign-id", string.Empty),
+            Items = items,
+            BaseOptions = baseOptions,
+            AutoTuner = connection,
+            SwitchTimeout = TimeSpan.FromSeconds(args.GetInt("--switch-timeout-seconds", 900)),
+            StopOnError = args.Has("--stop-on-error"),
+            StopServerAtEnd = !args.Has("--keep-server"),
+            SeedStart = args.GetNullable("--seed-start") is { } seedText && int.TryParse(seedText, out var seed) ? seed : null
+        };
+
+        Console.Error.WriteLine($"Campaign plan: {items.Count} item(s) × repeats → {plan.TotalRuns} run(s):");
+        foreach (var item in items)
+        {
+            Console.Error.WriteLine($"  - {item.Label} ×{item.Repeats}");
+        }
+
+        var runner = new CampaignRunner();
+        using var cts = new CancellationTokenSource();
+        var interrupts = 0;
+        Console.CancelKeyPress += (_, eventArgs) =>
+        {
+            eventArgs.Cancel = true;
+            interrupts++;
+            if (interrupts == 1)
+            {
+                Console.Error.WriteLine("Ctrl+C: finishing the current run, then stopping the campaign (press Ctrl+C again to abort immediately).");
+                runner.RequestStop(CampaignStopMode.AfterCurrentRun);
+            }
+            else
+            {
+                Console.Error.WriteLine("Ctrl+C again: aborting immediately.");
+                runner.RequestStop(CampaignStopMode.Immediately);
+                cts.Cancel();
+            }
+        };
+
+        var summary = await runner.RunAsync(
+            plan,
+            message => Console.Error.WriteLine($"[{DateTime.Now:HH:mm:ss}] {message}"),
+            onResultCompleted: PrintCompletedRun,
+            cancellationToken: cts.Token);
+
+        Console.WriteLine();
+        Console.WriteLine($"Campaign {summary.CampaignId}: stop={summary.StopMode}");
+        foreach (var item in summary.Items)
+        {
+            Console.WriteLine($"  {item.State,-9} {item.Label}  repeats {item.RepeatsCompleted}/{item.RepeatsPlanned}  backend={item.Backend ?? "?"} build={item.Build ?? "?"}  best={(item.BestScore.HasValue ? item.BestScore.Value.ToString("0.##") : "-")} mean={(item.MeanScore.HasValue ? item.MeanScore.Value.ToString("0.##") : "-")}  {item.Message}");
+        }
+
+        return summary.Items.Any(i => i.State == "Failed") ? 1 : 0;
+    }
+
+    private static IEnumerable<AutoTunerRuntime?> ResolveRuntimes(string[] requested, IReadOnlyList<AutoTunerRuntime> runtimes, AutoTunerModel model)
+    {
+        foreach (var token in requested)
+        {
+            var key = token.Trim().ToLowerInvariant();
+            if (key is "default" or "")
+            {
+                var preferred = runtimes.FirstOrDefault(r => string.Equals(r.Id, model.DefaultRuntimeId, StringComparison.OrdinalIgnoreCase));
+                yield return preferred; // null = let the AutoTuner pick
+                continue;
+            }
+
+            if (key == "all")
+            {
+                foreach (var runtime in runtimes.Where(r => r.Available))
+                {
+                    yield return runtime;
+                }
+
+                continue;
+            }
+
+            var match = runtimes.FirstOrDefault(r => string.Equals(r.Id, token, StringComparison.OrdinalIgnoreCase))
+                        ?? runtimes.FirstOrDefault(r => string.Equals(r.Label, token, StringComparison.OrdinalIgnoreCase))
+                        ?? runtimes.FirstOrDefault(r => r.Id.Contains(token, StringComparison.OrdinalIgnoreCase) || r.Label.Contains(token, StringComparison.OrdinalIgnoreCase));
+            if (match is null)
+            {
+                // A bare backend name selects every available build of that backend.
+                var backend = RuntimeKeys.NormalizeBackend(token);
+                var byBackend = runtimes.Where(r => r.Available && RuntimeKeys.NormalizeBackend(r.Backend) == backend && backend != ServerRuntimeInfo.UnknownValue).ToList();
+                if (byBackend.Count == 0)
+                {
+                    throw new ArgumentException($"AutoTuner does not list a runtime matching '{token}'. Use 'autotuner --list runtimes'.");
+                }
+
+                foreach (var runtime in byBackend)
+                {
+                    yield return runtime;
+                }
+
+                continue;
+            }
+
+            yield return match;
+        }
+    }
+
+    private static IEnumerable<CampaignItem> ReadPlanFile(string path, int defaultRepeats)
+    {
+        using var document = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path, System.Text.Encoding.UTF8));
+        var root = document.RootElement;
+        var array = root.ValueKind == System.Text.Json.JsonValueKind.Array
+            ? root
+            : root.TryGetProperty("items", out var items) ? items : default;
+        if (array.ValueKind != System.Text.Json.JsonValueKind.Array)
+        {
+            throw new ArgumentException("Plan file must be a JSON array or an object with an 'items' array of {modelId, runtimeId?, repeats?, quant?}.");
+        }
+
+        foreach (var item in array.EnumerateArray())
+        {
+            string? Read(string name) => item.TryGetProperty(name, out var value) && value.ValueKind == System.Text.Json.JsonValueKind.String ? value.GetString() : null;
+            var modelId = Read("modelId") ?? Read("model_id") ?? Read("model") ?? throw new ArgumentException("Plan item without modelId.");
+            yield return new CampaignItem
+            {
+                ModelId = modelId,
+                ModelName = Read("modelName") ?? Read("name") ?? modelId,
+                RuntimeId = Read("runtimeId") ?? Read("runtime_id") ?? Read("runtime"),
+                RuntimeLabel = Read("runtimeLabel"),
+                Repeats = item.TryGetProperty("repeats", out var repeats) && repeats.TryGetInt32(out var count) ? Math.Max(1, count) : defaultRepeats,
+                QuantOverride = Read("quant")
+            };
+        }
+    }
+
+    /// <summary>
+    /// Local-only parser regression audit: re-parses and re-scores every stored run.json
+    /// response with the current parser and reports where parse mode, finding count, or score
+    /// changed. Nothing is written to the archive; prompts/responses never leave the machine.
+    /// </summary>
+    private static int ParseAudit(ParsedArgs args)
+    {
+        var paths = BenchmarkPathResolver.Resolve();
+        var runsRoot = args.GetNullable("--runs") is { } explicitRuns && !string.IsNullOrWhiteSpace(explicitRuns)
+            ? Path.GetFullPath(explicitRuns)
+            : paths.RunsRoot;
+        if (!Directory.Exists(runsRoot))
+        {
+            Console.Error.WriteLine($"Runs directory not found: {runsRoot}");
+            return 2;
+        }
+
+        var groundTruth = new GroundTruthStore().Load(paths.GroundTruthPath);
+        var groundTruthSha = GroundTruthStore.ComputeSha256(paths.GroundTruthPath);
+        var source = SourceDocument.Load(paths.SourcePath);
+        var parser = new ResponseParser();
+        var scorer = new ScoringEngine();
+        var profile = ScoringProfiles.Get(args.Get("--scoring-profile", ScoringProfiles.OfficialV1Name));
+        var onlyChanged = !args.Has("--all");
+        var readOptions = new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true, ReadCommentHandling = System.Text.Json.JsonCommentHandling.Skip, AllowTrailingCommas = true };
+
+        var rows = new List<string[]>();
+        int runs = 0, changedMode = 0, changedFindings = 0, changedScore = 0, repaired = 0, gained = 0, lost = 0;
+        double scoreDeltaSum = 0;
+        var modeTransitions = new Dictionary<string, int>(StringComparer.Ordinal);
+
+        foreach (var directory in Directory.EnumerateDirectories(runsRoot).OrderBy(d => d, StringComparer.OrdinalIgnoreCase))
+        {
+            var runJson = Path.Combine(directory, "run.json");
+            if (!File.Exists(runJson))
+            {
+                continue;
+            }
+
+            BenchmarkRunResult? stored;
+            try
+            {
+                stored = System.Text.Json.JsonSerializer.Deserialize<BenchmarkRunResult>(RunArtifactReader.StripUtf8Bom(File.ReadAllBytes(runJson)), readOptions);
+            }
+            catch (Exception ex) when (ex is System.Text.Json.JsonException or IOException)
+            {
+                Console.Error.WriteLine($"[skip] {Path.GetFileName(directory)}: {ex.Message}");
+                continue;
+            }
+
+            if (stored is null)
+            {
+                continue;
+            }
+
+            foreach (var artifacts in new[] { stored.Run1, stored.Run2 })
+            {
+                if (artifacts is null || string.Equals(artifacts.RunKind, "truth_audit", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                runs++;
+                var split = BenchmarkRunner.ExtractInlineThinkBlocks(artifacts.Response ?? string.Empty);
+                var parse = parser.Parse(split.OutputContent);
+                var score = scorer.Score(artifacts.RunName, parse.Findings, groundTruth, source, profile, new ScoreComputationContext
+                {
+                    GroundTruthSha256 = groundTruthSha,
+                    SourceSha256 = source.Sha256,
+                    PromptVersion = artifacts.PromptVersion
+                });
+
+                var oldMode = string.IsNullOrWhiteSpace(artifacts.Parse.ParseMode) ? "unknown" : artifacts.Parse.ParseMode;
+                var oldCount = artifacts.Parse.Findings.Count;
+                var oldScore = artifacts.Score.ScorePercent;
+                var modeChanged = !string.Equals(oldMode, parse.ParseMode, StringComparison.Ordinal);
+                var countChanged = oldCount != parse.Findings.Count;
+                var scoreChanged = Math.Abs(oldScore - score.ScorePercent) > 0.0001;
+                if (modeChanged) { changedMode++; var key = $"{oldMode} -> {parse.ParseMode}"; modeTransitions[key] = modeTransitions.TryGetValue(key, out var n) ? n + 1 : 1; }
+                if (countChanged) changedFindings++;
+                if (scoreChanged) { changedScore++; scoreDeltaSum += score.ScorePercent - oldScore; if (score.ScorePercent > oldScore) gained++; else lost++; }
+                if (parse.Repairs.Count > 0) repaired++;
+
+                if (!onlyChanged || modeChanged || countChanged || scoreChanged)
+                {
+                    rows.Add([
+                        Path.GetFileName(directory),
+                        artifacts.RunName,
+                        stored.Model,
+                        artifacts.Score.ParserVersion,
+                        oldMode,
+                        parse.ParseMode,
+                        oldCount.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                        parse.Findings.Count.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                        oldScore.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture),
+                        score.ScorePercent.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture),
+                        string.Join("|", parse.Repairs),
+                        (artifacts.Response?.Length ?? 0).ToString(System.Globalization.CultureInfo.InvariantCulture)
+                    ]);
+                }
+            }
+        }
+
+        Console.WriteLine($"Parser audit ({ResponseParser.CurrentParserVersion}, {profile.Name}) over {runsRoot}");
+        Console.WriteLine($"Detection runs re-parsed: {runs}");
+        Console.WriteLine($"Parse mode changed: {changedMode} | finding count changed: {changedFindings} | score changed: {changedScore} (gained {gained}, lost {lost}, net delta sum {scoreDeltaSum:+0.##;-0.##;0})");
+        Console.WriteLine($"Runs needing lenient JSON repair: {repaired}");
+        foreach (var transition in modeTransitions.OrderByDescending(kvp => kvp.Value))
+        {
+            Console.WriteLine($"  {transition.Value,4}  {transition.Key}");
+        }
+
+        Console.WriteLine();
+        Console.WriteLine("run_dir,run,model,stored_parser,old_mode,new_mode,old_findings,new_findings,old_score,new_score,repairs,response_chars");
+        foreach (var row in rows)
+        {
+            Console.WriteLine(string.Join(",", row.Select(cell => cell.Contains(',') || cell.Contains('"') ? "\"" + cell.Replace("\"", "\"\"") + "\"" : cell)));
+        }
+
+        var outPath = args.GetNullable("--out");
+        if (!string.IsNullOrWhiteSpace(outPath))
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outPath)) ?? ".");
+            File.WriteAllLines(outPath, new[] { "run_dir,run,model,stored_parser,old_mode,new_mode,old_findings,new_findings,old_score,new_score,repairs,response_chars" }
+                .Concat(rows.Select(row => string.Join(",", row.Select(cell => cell.Contains(',') || cell.Contains('"') ? "\"" + cell.Replace("\"", "\"\"") + "\"" : cell)))), System.Text.Encoding.UTF8);
+            Console.WriteLine($"CSV: {Path.GetFullPath(outPath)}");
+        }
+
+        return 0;
     }
 
     private static int Compare(ParsedArgs args)
@@ -322,7 +762,9 @@ internal static class Program
             return 0;
         }
 
-        var report = ComparisonReport.Build(groups, benchmark ?? groups[0].Records[0].BenchmarkId, aggregate, family, metadata, runView, metric, scoringProfile);
+        var grouping = ParseGrouping(args.Get("--group-by", "model"));
+        var scope = ComparisonScope.Parse(args.GetNullable("--scope"));
+        var report = ComparisonReport.Build(groups, benchmark ?? groups[0].Records[0].BenchmarkId, aggregate, family, metadata, runView, metric, scoringProfile, grouping, scope);
         if (report.IsEmpty)
         {
             Console.WriteLine(family is null
@@ -332,14 +774,18 @@ internal static class Program
         }
 
         var outputDir = args.GetNullable("--out") ?? Path.Combine(archiveDir, "_reports");
-        var htmlPath = new ComparisonHtmlWriter().Write(report, Path.GetFullPath(outputDir));
+        var htmlPath = new ComparisonHtmlWriter { Groups = groups, FamilyFilter = family, MetadataIndex = metadata }.Write(report, Path.GetFullPath(outputDir));
 
-        Console.WriteLine($"Comparison ({aggregate}, {runView}, {metric}, profile={report.ScoringProfile ?? "all"}, {report.Series.Count} series, {report.VulnerabilityAxis.Count} vulns):");
+        Console.WriteLine($"Comparison ({aggregate}, {runView}, {metric}, profile={report.ScoringProfile ?? "all"}, grouping={grouping}, scope={scope?.Label ?? "alle"}, {report.Series.Count} series, {report.VulnerabilityAxis.Count} vulns):");
         foreach (var series in report.Series)
         {
             var selectedMetric = DisplayMetricValue(series, metric);
-            Console.WriteLine($"  {selectedMetric,6:0.##}  {series.Label}  (metric={metric}, score={series.ScorePercent:0.##}, runs={series.RunCount}, median={series.ScoreMedian:0.##}, avg={series.ScoreMean:0.##}, σ={series.ScoreStdDev:0.##}, range={series.ScoreMin:0.##}-{series.ScoreMax:0.##})");
+            var backend = string.Equals(series.Backend, ServerRuntimeInfo.UnknownValue, StringComparison.OrdinalIgnoreCase) ? string.Empty : $" [{RuntimeKeys.DisplayBackend(series.Backend)}{(series.Build is null ? string.Empty : " " + series.Build)}]";
+            Console.WriteLine($"  {selectedMetric,6:0.##}  {series.Label}{backend}  (metric={metric}, score={series.ScorePercent:0.##}, runs={series.RunCount}, median={series.ScoreMedian:0.##}, avg={series.ScoreMean:0.##}, σ={series.ScoreStdDev:0.##}, range={series.ScoreMin:0.##}-{series.ScoreMax:0.##})");
         }
+
+        Console.WriteLine();
+        Console.WriteLine("Scopes in archive: " + string.Join(", ", report.AvailableScopes.Select(s => $"{s.Label}={s.RunCount}")));
 
         Console.WriteLine();
         Console.WriteLine($"HTML report: {htmlPath}");
@@ -538,7 +984,19 @@ internal static class Program
             ArchiveDirectory = archiveDirectory,
             ArchiveMirrorDirectory = archiveMirrorDirectory,
             QuantOverride = args.GetNullable("--quant"),
-            AdjudicationPath = args.GetNullable("--adjudication")
+            AdjudicationPath = args.GetNullable("--adjudication"),
+            ServerApiKey = args.GetNullable("--api-key"),
+            ProbeRuntime = !args.Has("--no-runtime-probe"),
+            RuntimeOverride = args.Has("--backend") || args.Has("--engine") || args.Has("--engine-version") || args.Has("--runtime-label")
+                ? new RuntimeOverride
+                {
+                    Backend = args.GetNullable("--backend"),
+                    Engine = args.GetNullable("--engine"),
+                    EngineVersion = args.GetNullable("--engine-version"),
+                    RuntimeLabel = args.GetNullable("--runtime-label")
+                }
+                : null,
+            CampaignId = args.Get("--campaign-id", string.Empty)
         };
     }
 
@@ -614,6 +1072,17 @@ internal static class Program
             "median" => ComparisonAggregate.Median,
             "average" or "avg" or "mean" or "durchschnitt" => ComparisonAggregate.Average,
             _ => throw new ArgumentException("--aggregate must be one of: average, median, best.")
+        };
+    }
+
+    private static ComparisonGrouping ParseGrouping(string value)
+    {
+        return value.Trim().ToLowerInvariant() switch
+        {
+            "model" or "modell" or "quant" or "model-quant" => ComparisonGrouping.ModelQuant,
+            "backend" or "model-backend" => ComparisonGrouping.ModelQuantBackend,
+            "runtime" or "build" or "engine" => ComparisonGrouping.ModelQuantRuntime,
+            _ => throw new ArgumentException("--group-by must be one of: model, backend, runtime.")
         };
     }
 
@@ -711,6 +1180,10 @@ internal static class Program
         Console.WriteLine("  archive-list     List archived runs grouped by model family + quant");
         Console.WriteLine("  migrate-archive-scores  Version legacy archive scorecards without changing points");
         Console.WriteLine("  backfill-archive-metrics  Explicitly backfill non-scoring diagnostics (dry-run by default)");
+        Console.WriteLine("  parse-audit      Re-parse every local run.json with the current parser and report changes (local only)");
+        Console.WriteLine("  autotuner        Show AutoTuner control-API models, llama-server builds and status (--list models|runtimes|status)");
+        Console.WriteLine("  runtime-probe    Show which engine/backend/build serves --server and how it was detected (--json for details)");
+        Console.WriteLine("  campaign         Benchmark several models × llama-server builds via the AutoTuner (--models a,b --runtimes vulkan,hip --repeats N)");
         Console.WriteLine("  compare          Build an HTML comparison (bar + radar) from archived runs");
         Console.WriteLine();
         Console.WriteLine("Examples:");
@@ -748,6 +1221,23 @@ internal static class Program
         Console.WriteLine("  --truth-audit-prompt-version <id>  Provenance id for custom audit prompt/schema assets; custom assets default to unknown");
         Console.WriteLine("  --no-loop-abort            Disable final-output repetition guard (not recommended)");
         Console.WriteLine("  --allow-hash-mismatch      Development escape hatch; do not use for official scoring");
+        Console.WriteLine("  --api-key <token>          Bearer token for llama-server --api-key (AutoTuner-managed servers)");
+        Console.WriteLine("  --backend <vulkan|hip|cuda|sycl|metal|opencl|cpu>  Manual backend label (outranks auto-detection)");
+        Console.WriteLine("  --engine <name> / --engine-version <build> / --runtime-label <text>  Manual runtime identity");
+        Console.WriteLine("  --no-runtime-probe         Skip engine/backend detection (/props, local process inspection)");
+        Console.WriteLine();
+        Console.WriteLine("AutoTuner / campaign options:");
+        Console.WriteLine("  --autotuner-url <url>      Default: sidecar ~/.autotuner/control_api.json or AUTOTUNER_API_URL (usually http://127.0.0.1:1233)");
+        Console.WriteLine("  --autotuner-token <key>    Default: sidecar or AUTOTUNER_API_KEY");
+        Console.WriteLine("  --models <a,b,c>           campaign: AutoTuner model ids/names (substring match allowed)");
+        Console.WriteLine("  --runtimes <ids|backends|all|default>  campaign: llama-server builds per model, e.g. vulkan,hip");
+        Console.WriteLine("  --plan <file.json>         campaign: explicit items [{modelId, runtimeId, repeats, quant}]");
+        Console.WriteLine("  --repeats <n>              campaign: runs per model × build (each archived, repeat group per item)");
+        Console.WriteLine("  --stop-on-error            campaign: abort the campaign when a model fails to load or run");
+        Console.WriteLine("  --keep-server              campaign: leave the last model loaded in the AutoTuner");
+        Console.WriteLine("  --no-autotuner             campaign: run the listed model ids against --server without switching");
+        Console.WriteLine("  --switch-timeout-seconds <n>  campaign: wait for AutoTuner model load. Default: 900");
+        Console.WriteLine("  Ctrl+C once = stop after the current run, twice = abort immediately");
         Console.WriteLine();
         Console.WriteLine("Archive / comparison options:");
         Console.WriteLine("  --archive <dir>            Archive folder. Default: <data-root>/archive (shared by CLI and EXE)");
@@ -760,6 +1250,8 @@ internal static class Program
         Console.WriteLine("  --run-view <primary|run1|run2|delta> compare: selected run perspective. Default: primary");
         Console.WriteLine("  --metric <score|critical-recall|f1|fp-rate|stability|run2-delta|thinking-coverage|evidence-fidelity|location-accuracy|hallucination-rate|accountability|duration|token-efficiency|honesty|honesty-calibration|revision-selectivity|honesty-stability>");
         Console.WriteLine("  --scoring-profile <name>   compare: include only runs scored with this profile (e.g. official-v1)");
+        Console.WriteLine("  --group-by <model|backend|runtime>  compare: pool backends per model+quant (default) or split by backend/build");
+        Console.WriteLine("  --scope <all|current|parser:<v>|tool:<v>>  compare: restrict the headline series to one parser or benchmark version");
         Console.WriteLine("  --assume-profile <name>    migrate-archive-scores: mark legacy scores with this profile");
         Console.WriteLine("  --write / --dry-run        archive migration/backfill: dry-run is default; partial/ineligible diagnostics remain explicit");
         Console.WriteLine("  --backup <dir>             archive migration/backfill: byte-exact backup destination before writes");

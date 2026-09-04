@@ -194,9 +194,11 @@ public sealed class ArchiveServerMetadata
     [JsonPropertyName("serverContextSize")]
     public int? ServerContextSize { get; set; }
 
+    /// <summary>Engine build string; for llama.cpp the <c>build_info</c> value such as <c>b10786-0f3a71be1</c>.</summary>
     [JsonPropertyName("llamaBuild")]
     public string? LlamaBuild { get; set; }
 
+    /// <summary>Canonical lowercase backend (vulkan|hip|cuda|sycl|metal|opencl|cpu). Older cards may carry "Vulkan"/"HIP"; readers normalize.</summary>
     [JsonPropertyName("backend")]
     public string? Backend { get; set; }
 
@@ -208,6 +210,142 @@ public sealed class ArchiveServerMetadata
 
     [JsonPropertyName("batchSize")]
     public int? BatchSize { get; set; }
+
+    // ---- v0.7.6 additive runtime identity (all optional) ----
+
+    /// <summary>llama.cpp | vllm | sglang | ollama | lmstudio | koboldcpp | openai-compatible | unknown</summary>
+    [JsonPropertyName("engine")]
+    public string? Engine { get; set; }
+
+    [JsonPropertyName("backendSource")]
+    public string? BackendSource { get; set; }
+
+    [JsonPropertyName("backendDetail")]
+    public string? BackendDetail { get; set; }
+
+    [JsonPropertyName("runtimeLabel")]
+    public string? RuntimeLabel { get; set; }
+
+    [JsonPropertyName("devices")]
+    public List<string>? Devices { get; set; }
+
+    [JsonPropertyName("serverBinary")]
+    public string? ServerBinary { get; set; }
+
+    [JsonPropertyName("commandLine")]
+    public string? CommandLine { get; set; }
+
+    [JsonPropertyName("modelPath")]
+    public string? ModelPath { get; set; }
+
+    [JsonPropertyName("batchThreads")]
+    public int? BatchThreads { get; set; }
+
+    [JsonPropertyName("ubatchSize")]
+    public int? UBatchSize { get; set; }
+
+    [JsonPropertyName("parallel")]
+    public int? Parallel { get; set; }
+
+    [JsonPropertyName("kvTypeK")]
+    public string? KvTypeK { get; set; }
+
+    [JsonPropertyName("kvTypeV")]
+    public string? KvTypeV { get; set; }
+
+    [JsonPropertyName("flashAttention")]
+    public string? FlashAttention { get; set; }
+
+    [JsonPropertyName("specType")]
+    public string? SpecType { get; set; }
+
+    [JsonPropertyName("draftModel")]
+    public string? DraftModel { get; set; }
+
+    [JsonPropertyName("mmproj")]
+    public string? MmProj { get; set; }
+
+    [JsonPropertyName("environment")]
+    public Dictionary<string, string>? Environment { get; set; }
+
+    [JsonPropertyName("autoTunerVersion")]
+    public string? AutoTunerVersion { get; set; }
+
+    [JsonPropertyName("autoTunerModelId")]
+    public string? AutoTunerModelId { get; set; }
+
+    [JsonPropertyName("autoTunerRuntimeId")]
+    public string? AutoTunerRuntimeId { get; set; }
+
+    [JsonPropertyName("autoTunerProfile")]
+    public string? AutoTunerProfile { get; set; }
+
+    [JsonPropertyName("campaignId")]
+    public string? CampaignId { get; set; }
+
+    [JsonPropertyName("campaignItemLabel")]
+    public string? CampaignItemLabel { get; set; }
+
+    /// <summary>Canonical backend token for grouping; "unknown" when nothing was recorded.</summary>
+    [JsonIgnore]
+    public string NormalizedBackend => RuntimeKeys.NormalizeBackend(Backend);
+
+    [JsonIgnore]
+    public string NormalizedEngine => string.IsNullOrWhiteSpace(Engine)
+        ? (string.IsNullOrWhiteSpace(LlamaBuild) ? ServerRuntimeInfo.UnknownValue : "llama.cpp")
+        : RuntimeKeys.NormalizeEngine(Engine);
+
+    /// <summary>engine/backend/build key shared with <see cref="ServerRuntimeInfo.RuntimeKey"/>.</summary>
+    [JsonIgnore]
+    public string RuntimeKey => RuntimeKeys.Build(NormalizedEngine, Backend, LlamaBuild);
+
+    [JsonIgnore]
+    public string RuntimeDisplayLabel => RuntimeKeys.DisplayLabel(NormalizedEngine, Backend, LlamaBuild, RuntimeLabel);
+
+    public static ArchiveServerMetadata FromRuntime(ServerRuntimeInfo? runtime, int? serverContextSize, string campaignId, string campaignItemLabel)
+    {
+        var metadata = new ArchiveServerMetadata
+        {
+            ServerContextSize = serverContextSize,
+            CampaignId = string.IsNullOrWhiteSpace(campaignId) ? null : campaignId,
+            CampaignItemLabel = string.IsNullOrWhiteSpace(campaignItemLabel) ? null : campaignItemLabel
+        };
+
+        if (runtime is null)
+        {
+            return metadata;
+        }
+
+        metadata.ServerContextSize ??= runtime.ContextSize;
+        metadata.LlamaBuild = runtime.EngineVersion;
+        metadata.Backend = runtime.HasKnownBackend ? RuntimeKeys.NormalizeBackend(runtime.Backend) : null;
+        metadata.GpuLayers = runtime.GpuLayers;
+        metadata.Threads = runtime.Threads;
+        metadata.BatchSize = runtime.BatchSize;
+        metadata.Engine = string.Equals(runtime.Engine, ServerRuntimeInfo.UnknownValue, StringComparison.OrdinalIgnoreCase) ? null : runtime.Engine;
+        metadata.BackendSource = string.Equals(runtime.BackendSource, ServerRuntimeInfo.UnknownValue, StringComparison.OrdinalIgnoreCase) ? null : runtime.BackendSource;
+        metadata.BackendDetail = runtime.BackendDetail;
+        metadata.RuntimeLabel = runtime.RuntimeLabel;
+        metadata.Devices = runtime.Devices.Count == 0 ? null : runtime.Devices.ToList();
+        metadata.ServerBinary = runtime.ServerBinary;
+        metadata.CommandLine = runtime.CommandLine;
+        metadata.ModelPath = runtime.ModelPath;
+        metadata.BatchThreads = runtime.BatchThreads;
+        metadata.UBatchSize = runtime.UBatchSize;
+        metadata.Parallel = runtime.Parallel;
+        metadata.KvTypeK = runtime.KvTypeK;
+        metadata.KvTypeV = runtime.KvTypeV;
+        metadata.FlashAttention = runtime.FlashAttention;
+        metadata.SpecType = runtime.SpecType;
+        metadata.DraftModel = runtime.DraftModel;
+        metadata.MmProj = runtime.MmProj;
+        metadata.Environment = runtime.Environment.Count == 0 ? null : new Dictionary<string, string>(runtime.Environment, StringComparer.OrdinalIgnoreCase);
+        metadata.AutoTunerVersion = runtime.AutoTunerVersion;
+        metadata.AutoTunerModelId = runtime.AutoTunerModelId;
+        metadata.AutoTunerRuntimeId = runtime.AutoTunerRuntimeId;
+        metadata.AutoTunerProfile = runtime.AutoTunerProfile;
+        return metadata;
+    }
 }
 
 public sealed class ArchiveLegacyMigration
@@ -883,6 +1021,11 @@ public sealed class ArchiveGroup
     public string ModelFamily { get; init; } = string.Empty;
     public string Quant { get; init; } = string.Empty;
     public List<ArchiveRecord> Records { get; init; } = [];
+
+    /// <summary>Set when the group was partitioned by backend/runtime (see ComparisonReport.Partition); null for plain model+quant groups.</summary>
+    public string? Backend { get; init; }
+    public string? RuntimeKey { get; init; }
+    public string? RuntimeLabel { get; init; }
 
     public int RunCount => Records.Count;
 

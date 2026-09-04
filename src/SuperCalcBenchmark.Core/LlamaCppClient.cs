@@ -22,7 +22,7 @@ public sealed class LlamaCppClient : IDisposable
         DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
     };
 
-    public LlamaCppClient(TimeSpan? timeout = null, HttpMessageHandler? handler = null)
+    public LlamaCppClient(TimeSpan? timeout = null, HttpMessageHandler? handler = null, string? apiKey = null)
     {
         if (handler is null)
         {
@@ -35,7 +35,9 @@ public sealed class LlamaCppClient : IDisposable
         }
 
         _httpClient.Timeout = timeout ?? BenchmarkDefaults.OfficialRequestTimeout;
-        _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", "no-key");
+        // llama-server without --api-key ignores the header; with --api-key (e.g. launched by
+        // the AutoTuner) the real token must be sent, otherwise every request is 401.
+        _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", string.IsNullOrWhiteSpace(apiKey) ? "no-key" : apiKey.Trim());
     }
 
     public async Task<IReadOnlyList<string>> GetModelsAsync(string serverUrl, CancellationToken cancellationToken = default)

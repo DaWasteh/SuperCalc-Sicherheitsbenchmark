@@ -4,7 +4,7 @@ namespace SuperCalcBenchmark.Core;
 
 public sealed class BenchmarkRunner
 {
-    private const string ToolVersion = "0.7.5";
+    private const string ToolVersion = "0.7.6";
 
     private readonly GroundTruthStore _groundTruthStore;
     private readonly PromptBuilder _promptBuilder;
@@ -59,7 +59,7 @@ public sealed class BenchmarkRunner
             options.TruthAuditSchemaPath);
         ValidatePreflight(options, source, groundTruth);
 
-        using var client = new LlamaCppClient(options.Timeout);
+        using var client = new LlamaCppClient(options.Timeout, apiKey: options.ServerApiKey);
         progress?.Invoke("Reading server context window...");
         var serverContextSize = await client.GetServerContextSizeAsync(options.ServerUrl, cancellationToken).ConfigureAwait(false);
 
@@ -80,6 +80,29 @@ public sealed class BenchmarkRunner
             // Quant detection must never block a run; name-based fallback covers this.
         }
 
+        // Identify the engine (llama.cpp/vLLM/...) and compute backend (Vulkan/HIP/CUDA/...)
+        // that will answer. Metadata only: it is archived per scorecard so backend cohorts
+        // can be compared, and it never influences parsing or scoring.
+        ServerRuntimeInfo? runtime = options.PresetRuntime;
+        if (options.ProbeRuntime)
+        {
+            try
+            {
+                progress?.Invoke("Detecting inference engine and backend...");
+                using var probe = new ServerRuntimeProbe(timeout: TimeSpan.FromSeconds(8));
+                runtime = await probe.ProbeAsync(options.ServerUrl, options.RuntimeOverride, options.PresetRuntime, inspectLocalProcess: true, cancellationToken).ConfigureAwait(false);
+                progress?.Invoke("Runtime: " + runtime.Summary());
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                progress?.Invoke($"Runtime detection skipped ({ex.Message}).");
+            }
+        }
+        else if (options.RuntimeOverride is { IsEmpty: false })
+        {
+            runtime = ServerRuntimeProbe.Compose(options.RuntimeOverride, options.PresetRuntime, new ServerRuntimeProbe.ObservedFacts(), null);
+        }
+
         var result = new BenchmarkRunResult
         {
             ToolVersion = ToolVersion,
@@ -88,6 +111,9 @@ public sealed class BenchmarkRunner
             StartedAt = startedAt,
             ServerUrl = options.ServerUrl,
             Model = options.Model,
+            Runtime = runtime,
+            CampaignId = options.CampaignId,
+            CampaignItemLabel = options.CampaignItemLabel,
             MaxTokens = options.MaxTokens,
             TimeoutSeconds = (int)Math.Ceiling(options.Timeout.TotalSeconds),
             Seed = options.Seed,
@@ -377,7 +403,7 @@ public sealed class BenchmarkRunner
             options.TruthAuditSchemaPath);
         ValidatePreflight(options, source, groundTruth);
 
-        using var client = new LlamaCppClient(options.Timeout);
+        using var client = new LlamaCppClient(options.Timeout, apiKey: options.ServerApiKey);
         var auditTarget = SelectTruthAuditTarget(result, options.TruthAuditSource);
         progress?.Invoke($"Building Run 3 truth-audit prompt for {auditTarget.Artifacts.RunName}...");
         var run3Prompt = _promptBuilder.BuildTruthAuditPrompt(
@@ -541,44 +567,7 @@ public sealed class BenchmarkRunner
         return result;
 
         static BenchmarkOptions WithModelFallback(BenchmarkOptions original, string fallbackModel)
-        {
-            return new BenchmarkOptions
-            {
-                ServerUrl = original.ServerUrl,
-                Model = string.IsNullOrWhiteSpace(original.Model) ? fallbackModel : original.Model,
-                SourcePath = original.SourcePath,
-                GroundTruthPath = original.GroundTruthPath,
-                AnalysisPromptPath = original.AnalysisPromptPath,
-                SelfValidatePromptPath = original.SelfValidatePromptPath,
-                TruthAuditPromptPath = original.TruthAuditPromptPath,
-                SchemaPath = original.SchemaPath,
-                TruthAuditSchemaPath = original.TruthAuditSchemaPath,
-                OutputDirectory = original.OutputDirectory,
-                Temperature = original.Temperature,
-                TopP = original.TopP,
-                MaxTokens = original.MaxTokens,
-                Seed = original.Seed,
-                Repeats = original.Repeats,
-                SeedStart = original.SeedStart,
-                RepeatGroupId = original.RepeatGroupId,
-                RepeatIndex = original.RepeatIndex,
-                RepeatCount = original.RepeatCount,
-                TruthAuditRepeatMode = original.TruthAuditRepeatMode,
-                Timeout = original.Timeout,
-                AllowHashMismatch = original.AllowHashMismatch,
-                SkipResponseFormat = original.SkipResponseFormat,
-                DisableThinking = original.DisableThinking,
-                BenchmarkProfile = original.BenchmarkProfile,
-                ScoringProfile = original.ScoringProfile,
-                WithTruthAudit = original.WithTruthAudit,
-                TruthAuditSource = original.TruthAuditSource,
-                AbortOnLoop = original.AbortOnLoop,
-                ArchiveDirectory = original.ArchiveDirectory,
-                ArchiveMirrorDirectory = original.ArchiveMirrorDirectory,
-                QuantOverride = original.QuantOverride,
-                AdjudicationPath = original.AdjudicationPath
-            };
-        }
+            => string.IsNullOrWhiteSpace(original.Model) ? original.With(model: fallbackModel) : original;
     }
 
     private static ScoringResult ApplyAdjudicationIfConfigured(ScoringResult score, BenchmarkOptions options)
@@ -624,13 +613,41 @@ public sealed class BenchmarkRunner
         return (outputContent, combinedReasoning);
     }
 
-    private static (string OutputContent, string InlineReasoning) ExtractInlineThinkBlocks(string assistantContent)
+    public static (string OutputContent, string InlineReasoning) ExtractInlineThinkBlocks(string assistantContent)
     {
         assistantContent ??= string.Empty;
         var output = new System.Text.StringBuilder();
         var reasoning = new System.Text.StringBuilder();
         var cursor = 0;
         var extractedAnyBlock = false;
+
+        // Some chat templates strip the opening <think> tag (it is part of the prompt) and the
+        // model still emits the closing tag: everything before a stray </think> is reasoning,
+        // not the final answer. Without this the reasoning prose would be parsed as output.
+        var firstClose = assistantContent.IndexOf("</think>", StringComparison.OrdinalIgnoreCase);
+        var firstOpen = assistantContent.IndexOf("<think", StringComparison.OrdinalIgnoreCase);
+        if (firstClose >= 0 && (firstOpen < 0 || firstOpen > firstClose))
+        {
+            var strayBlock = assistantContent[..firstClose];
+
+            // Only prose counts as stray reasoning. If the text before the tag already carries
+            // the answer payload (a findings object or a fenced block), the tag is noise inside
+            // the output (typically a looping tail) and must not swallow the real answer.
+            var prefixLooksLikeAnswer = strayBlock.Contains("\"findings\"", StringComparison.OrdinalIgnoreCase)
+                                        || strayBlock.Contains("```", StringComparison.Ordinal)
+                                        || strayBlock.TrimStart().StartsWith('{')
+                                        || strayBlock.TrimStart().StartsWith('[');
+            if (!prefixLooksLikeAnswer)
+            {
+                if (!string.IsNullOrWhiteSpace(strayBlock))
+                {
+                    reasoning.Append(strayBlock.Trim());
+                }
+
+                extractedAnyBlock = true;
+                cursor = firstClose + "</think>".Length;
+            }
+        }
 
         while (cursor < assistantContent.Length)
         {
