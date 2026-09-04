@@ -106,10 +106,15 @@ public partial class MainWindow
             StartCampaignButton.IsEnabled = _campaignModels.Count > 0 && _campaignRunner is null;
             UpdateCampaignPlanText();
         }
-        catch (Exception ex) when (ex is AutoTunerApiException or HttpRequestException or TaskCanceledException or InvalidOperationException)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            AutoTunerStatusTextBlock.Text = "Verbindung fehlgeschlagen: " + ex.Message;
-            AppendLog("FEHLER AutoTuner: " + ex.Message);
+            // Includes JSON contract mismatches: an async void handler must never let an
+            // exception escape, otherwise the whole app would terminate.
+            var hint = ex is AutoTunerApiException { Status: 401 }
+                ? " Token fehlt oder ist falsch: im AutoTuner unter Settings → External control API kopieren und hier eintragen."
+                : string.Empty;
+            AutoTunerStatusTextBlock.Text = "Verbindung fehlgeschlagen: " + ex.Message + hint;
+            AppendLog("FEHLER AutoTuner: " + ex);
         }
         finally
         {
@@ -313,6 +318,45 @@ public partial class MainWindow
         SoftStopButton.IsEnabled = running;
     }
 
+    /// <summary>Double-clicking a row toggles its checkbox; the checkbox itself toggles on a single click.</summary>
+    private void CampaignGrid_MouseDoubleClick(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if (sender is not DataGrid grid || _campaignRunner is not null)
+        {
+            return;
+        }
+
+        switch (grid.SelectedItem)
+        {
+            case CampaignModelRow model when model.Runnable:
+                model.Selected = !model.Selected;
+                break;
+            case CampaignRuntimeRow runtime when runtime.Available:
+                runtime.Selected = !runtime.Selected;
+                break;
+        }
+    }
+
+    private void ToggleAllModelsButton_Click(object sender, RoutedEventArgs e)
+    {
+        var runnable = _campaignModels.Where(m => m.Runnable).ToList();
+        var target = !runnable.All(m => m.Selected);
+        foreach (var row in runnable)
+        {
+            row.Selected = target;
+        }
+    }
+
+    private void ToggleAllRuntimesButton_Click(object sender, RoutedEventArgs e)
+    {
+        var available = _campaignRuntimes.Where(r => r.Available).ToList();
+        var target = !available.All(r => r.Selected);
+        foreach (var row in available)
+        {
+            row.Selected = target;
+        }
+    }
+
     private void CampaignStopAfterRunButton_Click(object sender, RoutedEventArgs e)
     {
         if (_campaignRunner is null)
@@ -401,6 +445,7 @@ public partial class MainWindow
             Backend = RuntimeKeys.DisplayBackend(runtime.Backend);
             Build = runtime.Build ?? (runtime.BuildInfo is null ? string.Empty : RuntimeKeys.ShortBuild(runtime.BuildInfo));
             DefaultDisplay = runtime.IsDefault ? "ja" : string.Empty;
+            Available = runtime.Available;
             Note = runtime.Available ? string.Empty : runtime.UnavailableReason;
         }
 
@@ -409,6 +454,7 @@ public partial class MainWindow
         public string Backend { get; }
         public string Build { get; }
         public string DefaultDisplay { get; }
+        public bool Available { get; }
         public string Note { get; }
 
         public bool Selected

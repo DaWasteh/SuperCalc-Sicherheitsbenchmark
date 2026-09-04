@@ -599,6 +599,10 @@ public sealed class ArchiveRunScore
     [JsonPropertyName("parseWarning")]
     public string? ParseWarning { get; set; }
 
+    /// <summary>parser-v3 lenient repairs applied to read this run's JSON (e.g. leading_zero); null/empty when the JSON was valid.</summary>
+    [JsonPropertyName("parseRepairs")]
+    public List<string>? ParseRepairs { get; set; }
+
     [JsonPropertyName("emptyOutputWithReasoning")]
     public bool EmptyOutputWithReasoning { get; set; }
 
@@ -703,6 +707,7 @@ public sealed class ArchiveRunScore
         run.RetriedWithoutThinkingControl = artifacts.RetriedWithoutThinkingControl;
         run.ParseMode = string.IsNullOrWhiteSpace(artifacts.Parse.ParseMode) ? DeriveParseMode(artifacts.Parse) : artifacts.Parse.ParseMode;
         run.ParseWarning = artifacts.Parse.Warning;
+        run.ParseRepairs = artifacts.Parse.Repairs.Count == 0 ? null : artifacts.Parse.Repairs.ToList();
         run.EmptyOutputWithReasoning = string.IsNullOrWhiteSpace(artifacts.Response) && !string.IsNullOrWhiteSpace(artifacts.ReasoningContent);
         return run;
     }

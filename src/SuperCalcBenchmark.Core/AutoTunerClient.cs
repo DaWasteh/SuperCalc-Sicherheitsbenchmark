@@ -315,8 +315,85 @@ public sealed class AutoTunerClient : IDisposable
         PropertyNameCaseInsensitive = true,
         ReadCommentHandling = JsonCommentHandling.Skip,
         AllowTrailingCommas = true,
-        NumberHandling = JsonNumberHandling.AllowReadingFromString
+        NumberHandling = JsonNumberHandling.AllowReadingFromString,
+        Converters = { new LenientStringConverter(), new LenientNullableIntConverter(), new LenientNullableLongConverter(), new LenientNullableDoubleConverter() }
     };
+
+    /// <summary>Accepts numbers/booleans where the contract says string, so a tuner field type change never breaks a campaign.</summary>
+    private sealed class LenientStringConverter : JsonConverter<string?>
+    {
+        public override string? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) => reader.TokenType switch
+        {
+            JsonTokenType.String => reader.GetString(),
+            JsonTokenType.Number => reader.TryGetInt64(out var l) ? l.ToString(System.Globalization.CultureInfo.InvariantCulture) : reader.GetDouble().ToString(System.Globalization.CultureInfo.InvariantCulture),
+            JsonTokenType.True => "true",
+            JsonTokenType.False => "false",
+            JsonTokenType.Null => null,
+            _ => JsonDocument.ParseValue(ref reader).RootElement.ToString()
+        };
+
+        public override void Write(Utf8JsonWriter writer, string? value, JsonSerializerOptions options)
+        {
+            if (value is null) writer.WriteNullValue(); else writer.WriteStringValue(value);
+        }
+    }
+
+    private sealed class LenientNullableIntConverter : JsonConverter<int?>
+    {
+        public override int? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) => reader.TokenType switch
+        {
+            JsonTokenType.Number => reader.TryGetInt32(out var i) ? i : (int?)Math.Round(reader.GetDouble()),
+            JsonTokenType.String => int.TryParse(reader.GetString(), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsed) ? parsed : null,
+            JsonTokenType.True => 1,
+            JsonTokenType.False => 0,
+            _ => SkipAndReturnNull(ref reader)
+        };
+
+        public override void Write(Utf8JsonWriter writer, int? value, JsonSerializerOptions options)
+        {
+            if (value is null) writer.WriteNullValue(); else writer.WriteNumberValue(value.Value);
+        }
+    }
+
+    private sealed class LenientNullableLongConverter : JsonConverter<long?>
+    {
+        public override long? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) => reader.TokenType switch
+        {
+            JsonTokenType.Number => reader.TryGetInt64(out var l) ? l : (long?)Math.Round(reader.GetDouble()),
+            JsonTokenType.String => long.TryParse(reader.GetString(), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsed) ? parsed : null,
+            _ => SkipAndReturnNull(ref reader)
+        };
+
+        public override void Write(Utf8JsonWriter writer, long? value, JsonSerializerOptions options)
+        {
+            if (value is null) writer.WriteNullValue(); else writer.WriteNumberValue(value.Value);
+        }
+    }
+
+    private sealed class LenientNullableDoubleConverter : JsonConverter<double?>
+    {
+        public override double? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) => reader.TokenType switch
+        {
+            JsonTokenType.Number => reader.GetDouble(),
+            JsonTokenType.String => double.TryParse(reader.GetString(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var parsed) ? parsed : null,
+            _ => SkipAndReturnNull(ref reader)
+        };
+
+        public override void Write(Utf8JsonWriter writer, double? value, JsonSerializerOptions options)
+        {
+            if (value is null) writer.WriteNullValue(); else writer.WriteNumberValue(value.Value);
+        }
+    }
+
+    private static int? SkipAndReturnNull(ref Utf8JsonReader reader)
+    {
+        if (reader.TokenType is JsonTokenType.StartObject or JsonTokenType.StartArray)
+        {
+            reader.Skip();
+        }
+
+        return null;
+    }
 
     private readonly HttpClient _http;
     private readonly bool _ownsClient;

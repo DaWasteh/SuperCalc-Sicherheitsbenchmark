@@ -2715,7 +2715,7 @@ internal static partial class TestRunner
 
     private static void ReleaseVersionsAgree()
     {
-        const string expected = "0.7.6";
+        const string expected = "0.7.7";
         var runnerField = typeof(BenchmarkRunner).GetField("ToolVersion", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
         Assert(runnerField?.GetRawConstantValue() as string == expected, "BenchmarkRunner.ToolVersion must match the release version.");
         Assert(new BenchmarkRunResult().ToolVersion == expected, "BenchmarkRunResult.ToolVersion must match the release version.");

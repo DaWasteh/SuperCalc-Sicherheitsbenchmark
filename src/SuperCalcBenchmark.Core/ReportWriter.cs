@@ -147,11 +147,11 @@ public sealed class ReportWriter
         builder.AppendLine("> The evaluated model received only the source file and, for Run 2, its own Run-1 response. Hidden ground truth and `enhanced_exploits.md` were not included in prompts.");
         builder.AppendLine();
 
-        AppendScoreSummary(builder, result.Run1.Score);
+        AppendScoreSummary(builder, result.Run1.Score, result.Run1);
         AppendCompletionDiagnostics(builder, result.Run1);
         if (result.Run2 is not null)
         {
-            AppendScoreSummary(builder, result.Run2.Score);
+            AppendScoreSummary(builder, result.Run2.Score, result.Run2);
             AppendCompletionDiagnostics(builder, result.Run2);
         }
 
@@ -197,7 +197,7 @@ public sealed class ReportWriter
         return builder.ToString();
     }
 
-    private static void AppendScoreSummary(StringBuilder builder, ScoringResult score)
+    private static void AppendScoreSummary(StringBuilder builder, ScoringResult score, BenchmarkRunArtifacts? artifacts = null)
     {
         builder.AppendLine($"## {score.RunName} Summary");
         builder.AppendLine();
@@ -214,6 +214,10 @@ public sealed class ReportWriter
         }
         builder.AppendLine($"| Scoring engine | `{EscapePipe(score.ScoringEngineVersion)}` |");
         builder.AppendLine($"| Parser version | `{EscapePipe(score.ParserVersion)}` |");
+        if (artifacts?.Parse.Repairs is { Count: > 0 } repairs)
+        {
+            builder.AppendLine($"| Lenient JSON repairs | `{EscapePipe(string.Join(", ", repairs))}` |");
+        }
         builder.AppendLine($"| Prompt version | `{EscapePipe(score.PromptVersion)}` |");
         builder.AppendLine($"| Ground-truth SHA-256 | `{EscapePipe(score.GroundTruthSha256)}` |");
         builder.AppendLine($"| Score computed at | `{score.ComputedAt:O}` |");
