@@ -93,6 +93,10 @@ public sealed class ServerRuntimeInfo
     [JsonPropertyName("specType")]
     public string? SpecType { get; init; }
 
+    /// <summary>Server-side default sampler settings (from /props); the benchmark never overrides them.</summary>
+    [JsonPropertyName("samplerSettings")]
+    public string? SamplerSettings { get; init; }
+
     [JsonPropertyName("draftModel")]
     public string? DraftModel { get; init; }
 

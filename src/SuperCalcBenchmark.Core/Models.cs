@@ -10,6 +10,10 @@ public sealed class GroundTruthDocument
     [JsonPropertyName("source_file")]
     public string SourceFile { get; set; } = string.Empty;
 
+    /// <summary>Content revision of the answer key (aliases, line ranges); recorded via the ground-truth hash.</summary>
+    [JsonPropertyName("ground_truth_revision")]
+    public string GroundTruthRevision { get; set; } = string.Empty;
+
     [JsonPropertyName("source_sha256")]
     public string SourceSha256 { get; set; } = string.Empty;
 
@@ -220,6 +224,7 @@ public sealed class FindingScore
     public int ReportedLineStart { get; set; }
     public int ReportedLineEnd { get; set; }
     public string ReportedSymbol { get; set; } = string.Empty;
+    public string ReportedSeverity { get; set; } = string.Empty;
     public string ReportedEvidence { get; set; } = string.Empty;
     public List<string> AcceptedEvidenceAnchors { get; set; } = [];
     public List<string> MissingMustAnchors { get; set; } = [];
@@ -303,11 +308,16 @@ public sealed class RunComparison
     public int DroppedFalsePositives { get; init; }
     public int AddedFalsePositives { get; init; }
     public int FalsePositiveReduction { get; init; }
-    public double FalsePositiveReductionRate { get; init; }
-    public double TruePositiveRetention { get; init; }
-    public double OverPruningRate { get; init; }
+    /// <summary>(Run-1 FPs − Run-2 FPs) / Run-1 FPs; null when Run 1 had no false positive.</summary>
+    public double? FalsePositiveReductionRate { get; init; }
+
+    /// <summary>Kept / Run-1 true positives; null when Run 1 had no true positive.</summary>
+    public double? TruePositiveRetention { get; init; }
+    public double? OverPruningRate { get; init; }
     public double EvidenceImprovementDelta { get; init; }
-    public double ParseQualityDelta { get; init; }
+
+    /// <summary>Parse-quality level change Run 1 → Run 2 (−1..1); null when not computed.</summary>
+    public double? ParseQualityDelta { get; set; }
     public int SeverityCorrectedCount { get; init; }
     public int EvidenceImprovedCount { get; init; }
     public int EvidenceDegradedCount { get; init; }
@@ -377,6 +387,9 @@ public sealed record ChatCompletionResult
     public bool RetriedWithoutResponseFormat { get; init; }
     public bool UsedThinkingControl { get; init; }
     public bool RetriedWithoutThinkingControl { get; init; }
+
+    /// <summary>Earlier attempts that returned only reasoning and were silently re-sampled.</summary>
+    public int DiscardedEmptyAttempts { get; init; }
 }
 
 public enum ChatStreamDeltaKind
@@ -465,7 +478,7 @@ public sealed class BenchmarkRunArtifacts
 
 public sealed class BenchmarkRunResult
 {
-    public string ToolVersion { get; init; } = "0.7.7";
+    public string ToolVersion { get; init; } = "0.7.8";
     public BehavioralDiagnosticsEnvelope? BehavioralDiagnostics { get; set; }
     public string BenchmarkId { get; init; } = string.Empty;
     public string BenchmarkProfile { get; init; } = "official";
@@ -512,6 +525,9 @@ public sealed class BenchmarkRunResult
     public BenchmarkRunArtifacts? Run2 { get; set; }
     public BenchmarkRunArtifacts? Run3 { get; set; }
     public RunComparison? Comparison { get; set; }
+
+    /// <summary>Skipped or failed later runs (Run 2/Run 3) and unavailable diagnostics, in order.</summary>
+    public List<string> RunNotes { get; init; } = [];
     public string OutputDirectory { get; set; } = string.Empty;
 
     /// <summary>Path of the archive scorecard written for this run, if archiving was enabled.</summary>
@@ -546,7 +562,7 @@ public sealed class BenchmarkOptions
     public bool SkipResponseFormat { get; init; }
     public bool DisableThinking { get; init; }
     public string BenchmarkProfile { get; init; } = "official";
-    public string ScoringProfile { get; init; } = ScoringProfiles.OfficialV1Name;
+    public string ScoringProfile { get; init; } = ScoringProfiles.DefaultName;
     public bool WithTruthAudit { get; init; }
     public string TruthAuditSource { get; init; } = "best";
 
@@ -571,8 +587,8 @@ public sealed class BenchmarkOptions
     public string? ArchiveMirrorDirectory { get; init; }
 
     /// <summary>
-    /// Optional manual quant label (e.g. "Q4_K_M") used when the model id does not encode the
-    /// quantization. Ignored when the quant can be detected from the model id.
+    /// Optional manual quant label (e.g. "Q4_K_M"). It outranks the server ftype and the model id,
+    /// so it must only be set for the one model it describes (campaigns never inherit it).
     /// </summary>
     public string? QuantOverride { get; init; }
 
@@ -612,7 +628,8 @@ public sealed class BenchmarkOptions
         string? campaignId = null,
         string? campaignItemLabel = null,
         string? serverApiKey = null,
-        string? quantOverride = null)
+        string? quantOverride = null,
+        bool clearQuantOverride = false)
     {
         return new BenchmarkOptions
         {
@@ -648,7 +665,7 @@ public sealed class BenchmarkOptions
             AbortOnLoop = AbortOnLoop,
             ArchiveDirectory = clearArchiveDirectory ? null : archiveDirectory ?? ArchiveDirectory,
             ArchiveMirrorDirectory = ArchiveMirrorDirectory,
-            QuantOverride = quantOverride ?? QuantOverride,
+            QuantOverride = clearQuantOverride ? quantOverride : quantOverride ?? QuantOverride,
             AdjudicationPath = AdjudicationPath,
             ServerApiKey = serverApiKey ?? ServerApiKey,
             ProbeRuntime = ProbeRuntime,

@@ -46,7 +46,9 @@ public sealed class ArchiveMetricsBackfiller
                 var audited = AuditedRunNames.Normalize(auditedRaw);
                 var target = SelectTarget(artifact.Run, audited);
                 if (target is null) { files.Add(new() { Path=path, Warning="audited target run missing" }); unavailable++; continue; }
-                var calculated = BehavioralDiagnosticsCalculator.Calculate(artifact.Run, auditRaw, target);
+                BehavioralDiagnosticsEnvelope calculated;
+                try { calculated = BehavioralDiagnosticsCalculator.Calculate(artifact.Run, auditRaw, target); }
+                catch (Exception ex) when (ex is not OutOfMemoryException) { files.Add(new() { Path=path, Warning="diagnostics calculation failed: "+ex.Message }); unavailable++; continue; }
                 // Skipped malformed transport chunks do not make a successfully recovered final
                 // truth-audit response partial; the reader still records the reconstruction source.
                 var full = auditRaw.ParseSucceeded;

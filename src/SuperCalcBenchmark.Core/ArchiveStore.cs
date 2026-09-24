@@ -106,6 +106,7 @@ public sealed class ArchiveStore
                                      && string.Equals(result.BenchmarkProfile, "official", StringComparison.OrdinalIgnoreCase)
                                      && !run.ManuallyStopped
                                      && !run.LoopDetected
+                                     && !run.IsTruncated
                                      && !run.GroundTruthVisibleToModel
                                      && !string.Equals(run.RunKind, "truth_audit", StringComparison.OrdinalIgnoreCase);
         }
@@ -180,9 +181,7 @@ public sealed class ArchiveStore
             RunLocator = runLocator,
             Runs = runs,
             ScoreVersions = scoreVersions,
-            DefaultDetectionProfile = availableProfiles.Contains(ScoringProfiles.OfficialV1Name, StringComparer.OrdinalIgnoreCase)
-                ? ScoringProfiles.OfficialV1Name
-                : availableProfiles[0],
+            DefaultDetectionProfile = ScoringProfiles.PreferredOf(availableProfiles) ?? availableProfiles[0],
             AvailableDetectionProfiles = availableProfiles
         };
     }
@@ -235,7 +234,12 @@ public sealed class ArchiveStore
             records.Add(record);
         }
 
-        return records;
+        // A scorecard copied twice into the pool (e.g. a manual copy next to an import) must
+        // count once; otherwise averages and run counts double that run.
+        return records
+            .GroupBy(record => string.IsNullOrWhiteSpace(record.RecordId) ? record.ArchivePath : record.RecordId, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
+            .ToList();
     }
 
     /// <summary>
@@ -678,9 +682,7 @@ public sealed class ArchiveStore
         if (string.IsNullOrWhiteSpace(record.DefaultDetectionProfile)
             || !record.AvailableDetectionProfiles.Contains(record.DefaultDetectionProfile, StringComparer.OrdinalIgnoreCase))
         {
-            record.DefaultDetectionProfile = record.AvailableDetectionProfiles.Contains(ScoringProfiles.OfficialV1Name, StringComparer.OrdinalIgnoreCase)
-                ? ScoringProfiles.OfficialV1Name
-                : record.AvailableDetectionProfiles[0];
+            record.DefaultDetectionProfile = ScoringProfiles.PreferredOf(record.AvailableDetectionProfiles) ?? record.AvailableDetectionProfiles[0];
         }
     }
 
@@ -772,9 +774,7 @@ public sealed class ArchiveStore
             record.AvailableDetectionProfiles.Add("legacy-unknown");
         }
 
-        record.DefaultDetectionProfile = record.AvailableDetectionProfiles.Contains(ScoringProfiles.OfficialV1Name, StringComparer.OrdinalIgnoreCase)
-            ? ScoringProfiles.OfficialV1Name
-            : record.AvailableDetectionProfiles[0];
+        record.DefaultDetectionProfile = ScoringProfiles.PreferredOf(record.AvailableDetectionProfiles) ?? record.AvailableDetectionProfiles[0];
     }
 
     private string BackupArchiveFile(string path, string backupDirectory)

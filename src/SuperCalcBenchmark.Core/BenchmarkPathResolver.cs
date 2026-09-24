@@ -209,12 +209,36 @@ public static class BenchmarkPathResolver
         var launchRoot = SelectAssetRoot(launchCandidates, comparison);
         if (!string.IsNullOrWhiteSpace(launchRoot))
         {
+            // A binary that ships its own assets (portable EXE, GUI output folder) must score
+            // with the answer key and prompts it was built with. A surrounding checkout is only
+            // preferred while its assets are identical (so the repository archive mirror keeps
+            // working); an older/newer checkout never silently replaces the bundled key.
+            if (IsAssetRoot(baseDirectory)
+                && !comparison.Equals(Path.TrimEndingDirectorySeparator(launchRoot), Path.TrimEndingDirectorySeparator(baseDirectory))
+                && !AssetsIdentical(launchRoot, baseDirectory))
+            {
+                return baseDirectory;
+            }
+
             return launchRoot;
         }
 
         throw new DirectoryNotFoundException(
             $"Could not locate SuperCalc benchmark assets from current directory '{currentDirectory}' or application directory '{baseDirectory}'. "
             + $"Set {AssetRootEnvironmentVariable} to a folder containing enhanced_calc.cpp and benchmarks/supercalc-v3.");
+    }
+
+    private static bool AssetsIdentical(string left, string right)
+    {
+        try
+        {
+            return RequiredAssetPaths.All(relative =>
+                File.ReadAllBytes(Path.Combine(left, relative)).AsSpan().SequenceEqual(File.ReadAllBytes(Path.Combine(right, relative))));
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
     }
 
     private static string? SelectAssetRoot(IEnumerable<string> candidates, StringComparer comparer)

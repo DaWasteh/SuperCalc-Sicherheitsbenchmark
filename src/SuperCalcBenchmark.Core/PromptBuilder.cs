@@ -51,6 +51,27 @@ public sealed class PromptBuilder
         return builder.ToString();
     }
 
+    /// <summary>
+    /// Embeds a previous answer verbatim. The fence is longer than any backtick run inside the
+    /// answer, so an answer that itself contains a ```json block cannot close the quote early.
+    /// </summary>
+    private static void AppendQuotedAnswer(StringBuilder builder, string? answer)
+    {
+        var text = (answer ?? string.Empty).Trim();
+        var longestRun = 0;
+        var run = 0;
+        foreach (var c in text)
+        {
+            run = c == '`' ? run + 1 : 0;
+            longestRun = Math.Max(longestRun, run);
+        }
+
+        var fence = new string('`', Math.Max(3, longestRun + 1));
+        builder.AppendLine(fence + "text");
+        builder.AppendLine(text);
+        builder.AppendLine(fence);
+    }
+
     public string BuildSelfValidationPrompt(SourceDocument source, string selfValidatePromptPath, string schemaPath, string run1Response)
     {
         var instructions = File.ReadAllText(selfValidatePromptPath, Encoding.UTF8).Trim();
@@ -63,9 +84,7 @@ public sealed class PromptBuilder
         AppendSchema(builder, schema);
         builder.AppendLine("## Previous Run-1 answer to validate");
         builder.AppendLine();
-        builder.AppendLine("```text");
-        builder.AppendLine(run1Response.Trim());
-        builder.AppendLine("```");
+        AppendQuotedAnswer(builder, run1Response);
         builder.AppendLine();
         AppendSource(builder, source);
         return builder.ToString();
@@ -104,9 +123,7 @@ public sealed class PromptBuilder
         builder.AppendLine();
         builder.AppendLine($"## Previous answer under audit: {auditedRunName}");
         builder.AppendLine();
-        builder.AppendLine("```text");
-        builder.AppendLine((auditedOutput ?? string.Empty).Trim());
-        builder.AppendLine("```");
+        AppendQuotedAnswer(builder, auditedOutput);
         builder.AppendLine();
         if (source is not null)
         {

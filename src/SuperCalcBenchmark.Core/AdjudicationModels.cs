@@ -58,7 +58,8 @@ public static class AdjudicationApplier
     {
         var applicable = document.Items
             .Where(item => item.FindingIndex > 0)
-            .Where(item => string.IsNullOrWhiteSpace(item.Run) || string.Equals(item.Run, score.RunName, StringComparison.OrdinalIgnoreCase))
+            // Finding #N of Run 1 and #N of Run 2 are unrelated findings: an item must name its run.
+            .Where(item => !string.IsNullOrWhiteSpace(item.Run) && string.Equals(item.Run.Trim(), score.RunName, StringComparison.OrdinalIgnoreCase))
             .ToList();
         if (applicable.Count == 0)
         {
@@ -97,6 +98,13 @@ public static class AdjudicationApplier
                     finding.MatchedVulnerabilityId = target.Id;
                     finding.MatchedVulnerabilityTitle = target.Title;
                     finding.Points = decision == "accept_full" ? profile.Points.FullTp : profile.Points.PartialTp;
+                    // Same severity rule as an automatic match: an accepted finding keeps its reported severity.
+                    finding.SeverityMismatch = ScoringEngine.IsSeverityMismatch(finding.ReportedSeverity, target.Severity);
+                    if (finding.SeverityMismatch)
+                    {
+                        finding.Points += profile.Points.SeverityMismatch;
+                    }
+
                     finding.Duplicate = false;
                     finding.FalsePositiveCategory = string.Empty;
                     finding.Reason = AppendAdjudication(finding.Reason, item);
@@ -261,6 +269,7 @@ public static class AdjudicationApplier
         ReportedLineStart = finding.ReportedLineStart,
         ReportedLineEnd = finding.ReportedLineEnd,
         ReportedSymbol = finding.ReportedSymbol,
+        ReportedSeverity = finding.ReportedSeverity,
         ReportedEvidence = finding.ReportedEvidence,
         AcceptedEvidenceAnchors = finding.AcceptedEvidenceAnchors.ToList(),
         MissingMustAnchors = finding.MissingMustAnchors.ToList(),

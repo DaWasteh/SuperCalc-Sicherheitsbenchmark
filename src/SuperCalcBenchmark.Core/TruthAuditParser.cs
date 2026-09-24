@@ -94,7 +94,8 @@ public sealed class TruthAuditParser
                 continue;
             }
 
-            if (ch == '"') { inString = true; continue; }
+            // Quotes in prose outside any object (e.g. 'the 12" buffer') are not JSON strings.
+            if (ch == '"' && starts.Count > 0) { inString = true; continue; }
             if (ch == '{') starts.Push(i);
             else if (ch == '}' && starts.Count > 0)
             {

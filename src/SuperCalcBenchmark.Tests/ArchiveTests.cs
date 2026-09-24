@@ -390,12 +390,12 @@ internal static partial class TestRunner
             Assert(html.Contains("data-help-metric", StringComparison.Ordinal), "metric headings should include help buttons");
             Assert(html.Contains("{key:\"scoreMedian\",title:\"Median\",kind:\"num\"}", StringComparison.Ordinal), "generated script must contain a valid scoreMedian column object");
             Assert(!html.Contains("{key:\"scoreMedian\"},title:", StringComparison.Ordinal), "generated script must not close the scoreMedian object early");
-            Assert(html.Contains("s.run1Score ?? s.score", StringComparison.Ordinal) && html.Contains("s.run2Delta ?? 0", StringComparison.Ordinal), "browser count/value fallback must preserve measured zero");
+            Assert(html.Contains("return v ? v.score : null", StringComparison.Ordinal) && html.Contains("s.run2Delta ?? null", StringComparison.Ordinal), "browser run-view values must preserve a measured zero and report missing views as null");
             Assert(html.Contains("id=\"scope\"", StringComparison.Ordinal), "html should expose the version-scope selector (replaces the include-deprecated toggle)");
             Assert(html.Contains("id=\"grouping\"", StringComparison.Ordinal), "html should expose the backend grouping selector");
             Assert(html.Contains("projection(state.scope, state.grouping)", StringComparison.Ordinal), "rendering must switch between precomputed scope/grouping projections");
             Assert(html.Contains("currentHasRuns ? \"current\" : \"all\"", StringComparison.Ordinal), "the page must fall back to all versions when no current-parser runs exist yet");
-            Assert(html.Contains("Parser parser-v1", StringComparison.Ordinal) && html.Contains("Aktuell (parser-v3)", StringComparison.Ordinal), "scope options must list the parser versions present in the archive");
+            Assert(html.Contains("Parser parser-v1", StringComparison.Ordinal) && html.Contains($"Aktuell ({ResponseParser.CurrentParserVersion} · {ScoringProfiles.Latest.Name})", StringComparison.Ordinal), "scope options must list the parser versions present in the archive");
             Assert(html.Contains("${esc(d.scoringProfile||\"legacy-unknown\")} - ${esc(d.parserVersion||\"parser-unbekannt\")}", StringComparison.Ordinal), "score versions should read official-v1 - parser-vN without a duplicate profile version");
             Assert(!html.Contains(" v${d.scoringProfileVersion", StringComparison.Ordinal), "score-version labels must not append the confusing duplicate v1");
 
@@ -736,15 +736,15 @@ internal static partial class TestRunner
 
             Assert(record.SchemaVersion == ArchiveRecord.CurrentSchemaVersion, "new scorecards should use the current archive schema");
             Assert(run.ScoreSchemaVersion == ScoringProfiles.ScoreSchemaVersion, "run should include score schema version");
-            Assert(run.ScoringProfile == ScoringProfiles.OfficialV1Name, $"new run should use official-v1, got {run.ScoringProfile}");
-            Assert(run.ScoringProfileVersion == ScoringProfiles.OfficialV1Version, "official-v1 profile version should be archived");
-            Assert(run.ScoringEngineVersion == ScoringProfiles.OfficialV1EngineVersion, "engine freeze id should be archived");
+            Assert(run.ScoringProfile == ScoringProfiles.Latest.Name, $"new run should use the newest profile, got {run.ScoringProfile}");
+            Assert(run.ScoringProfileVersion == ScoringProfiles.Latest.Version, "profile version should be archived");
+            Assert(run.ScoringEngineVersion == ScoringProfiles.Latest.EngineVersion, "engine freeze id should be archived");
             Assert(run.ParserVersion == ResponseParser.CurrentParserVersion, "parser version should be archived");
             Assert(run.PromptVersion == PromptVersions.AnalysisV1, "Run 1 prompt version should be archived");
             Assert(run.SourceSha256 == "deadbeef", "source hash should be copied to the run score");
             Assert(run.OfficialComparable, "normal official fake run should be comparable");
             Assert(record.ScoreVersions.Count == 1, "scoreVersions should index the archived run score");
-            Assert(record.ScoreVersions[0].Profile == ScoringProfiles.OfficialV1Name, "scoreVersions should carry the profile");
+            Assert(record.ScoreVersions[0].Profile == ScoringProfiles.Latest.Name, "scoreVersions should carry the profile");
             Assert(File.ReadAllText(path).Contains("\"scoreVersions\"", StringComparison.Ordinal), "scoreVersions should be serialized");
         }
         finally
@@ -879,8 +879,8 @@ internal static partial class TestRunner
             var all = ComparisonReport.Build(store.LoadGroups(), "supercalc-v3");
             Assert(all.Series.Count == 2, $"unfiltered comparison should include both groups, got {all.Series.Count}");
 
-            var officialV1 = ComparisonReport.Build(store.LoadGroups(), "supercalc-v3", scoringProfile: ScoringProfiles.OfficialV1Name);
-            Assert(officialV1.Series.Count == 1, $"official-v1 filter should include only native official-v1 runs, got {officialV1.Series.Count}");
+            var officialV1 = ComparisonReport.Build(store.LoadGroups(), "supercalc-v3", scoringProfile: ScoringProfiles.Latest.Name);
+            Assert(officialV1.Series.Count == 1, $"profile filter should include only native runs of that profile, got {officialV1.Series.Count}");
             Assert(officialV1.Series.Single().Quant == "Q4_K_M", "profile filter should exclude legacy-unknown scorecards");
         }
         finally
@@ -904,7 +904,7 @@ internal static partial class TestRunner
             var series = report.Series.Single();
             Assert(Math.Abs(series.CriticalRecall - 0.5) < 0.001, $"critical recall should average critical credits, got {series.CriticalRecall}");
             Assert(Math.Abs(series.HighRecall - 0.5) < 0.001, $"high recall should be 0.5, got {series.HighRecall}");
-            Assert(Math.Abs(series.VulnerabilityStability - 0.75) < 0.001, $"stability should reflect per-vuln volatility, got {series.VulnerabilityStability}");
+            Assert(series.VulnerabilityStability is double stability && Math.Abs(stability - 0.75) < 0.001, $"stability should reflect per-vuln volatility, got {series.VulnerabilityStability}");
 
             var withRun2 = FakeResult("Delta-Model-Q5_K_M.gguf", 25, 1, 0, 2, 3);
             withRun2.Run2 = new BenchmarkRunArtifacts
@@ -1015,6 +1015,9 @@ internal static partial class TestRunner
         return new ScoringResult
         {
             RunName = runName,
+            ScoringProfile = ScoringProfiles.Latest.Name,
+            ScoringProfileVersion = ScoringProfiles.Latest.Version,
+            ScoringEngineVersion = ScoringProfiles.Latest.EngineVersion,
             ParserVersion = parserVersion,
             ScoreableVulnerabilityCount = scoreableCount,
             FindingCount = fullTp + partialTp + fp + 2,

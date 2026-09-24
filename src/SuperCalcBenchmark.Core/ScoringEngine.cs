@@ -36,8 +36,13 @@ public sealed class ScoringEngine
         }
 
         var scoreable = groundTruth.Vulnerabilities.Where(v => v.StrictScoreable).ToList();
-        var candidates = findings.Select(f => BuildBestCandidate(f, scoreable, source, profile)).ToList();
-        var assigned = AssignCandidates(candidates, profile);
+        var candidateSets = findings
+            .Select(f => scoreable.Select(v => ScoreCandidate(f, v, source, profile)).ToList())
+            .ToList();
+        var candidates = findings.Select((f, i) => PickBestCandidate(f, candidateSets[i])).ToList();
+        var assigned = profile.Matching.OptimalAssignment
+            ? AssignOptimally(candidateSets, candidates, profile)
+            : AssignCandidates(candidates, profile);
         var findingScores = new List<FindingScore>();
 
         foreach (var candidate in candidates)
@@ -57,6 +62,7 @@ public sealed class ScoringEngine
                 ReportedLineStart = finding.LineStart,
                 ReportedLineEnd = finding.LineEnd,
                 ReportedSymbol = finding.FunctionOrSymbol,
+                ReportedSeverity = finding.Severity,
                 ReportedEvidence = finding.Evidence,
                 AcceptedEvidenceAnchors = candidate.AcceptedEvidenceAnchors,
                 MissingMustAnchors = candidate.MissingMustAnchors,
@@ -95,10 +101,12 @@ public sealed class ScoringEngine
             else if (finding.Confidence < 0.35 && candidate.Score < profile.PartialThreshold)
             {
                 score.Classification = FindingClassification.IgnoredLowConfidence;
-                score.Points = 0;
+                score.Points = profile.Points.LowConfidenceFalsePositive;
                 score.MatchedVulnerabilityId = null;
                 score.MatchedVulnerabilityTitle = null;
-                score.Reason = "Ignored because confidence is low and no ground-truth item matched.";
+                score.Reason = profile.Points.LowConfidenceFalsePositive == 0
+                    ? "Ignored because confidence is low and no ground-truth item matched."
+                    : $"Low-confidence unmatched finding: {profile.Points.LowConfidenceFalsePositive:0.##} (half the false-positive penalty).";
             }
             else
             {
@@ -244,11 +252,12 @@ public sealed class ScoringEngine
             DroppedFalsePositives = falsePositiveMatches.DroppedKeys.Count,
             AddedFalsePositives = falsePositiveMatches.AddedKeys.Count,
             FalsePositiveReduction = run1.FalsePositives - run2.FalsePositives,
-            FalsePositiveReductionRate = run1.FalsePositives == 0 ? (run2.FalsePositives == 0 ? 1 : 0) : Math.Round((run1.FalsePositives - run2.FalsePositives) / (double)run1.FalsePositives, 4),
-            TruePositiveRetention = run1Ids.Count == 0 ? 0 : Math.Round((double)kept.Count / run1Ids.Count, 4),
-            OverPruningRate = run1Ids.Count == 0 ? 0 : Math.Round((double)dropped.Count / run1Ids.Count, 4),
+            // Undefined rates stay null: "0 of 0" is neither 100 % reduction nor 0 % retention.
+            FalsePositiveReductionRate = run1.FalsePositives == 0 ? null : Math.Round((run1.FalsePositives - run2.FalsePositives) / (double)run1.FalsePositives, 4),
+            TruePositiveRetention = run1Ids.Count == 0 ? null : Math.Round((double)kept.Count / run1Ids.Count, 4),
+            OverPruningRate = run1Ids.Count == 0 ? null : Math.Round((double)dropped.Count / run1Ids.Count, 4),
             EvidenceImprovementDelta = Math.Round(evidenceDelta, 4),
-            ParseQualityDelta = 0,
+            ParseQualityDelta = null,
             SeverityCorrectedCount = severityCorrected,
             EvidenceImprovedCount = evidenceImproved,
             EvidenceDegradedCount = evidenceDegraded,
@@ -286,13 +295,23 @@ public sealed class ScoringEngine
             throw new ArgumentException("Scoring profile gate thresholds must be finite and within 0..1.", nameof(profile));
         }
 
+        var matching = profile.Matching
+            ?? throw new ArgumentException("Scoring profile matching options are required.", nameof(profile));
+        if (!double.IsFinite(matching.MinimumReportedLocation) || matching.MinimumReportedLocation is < 0 or > 1
+            || !double.IsFinite(matching.AssignmentScoreMargin) || matching.AssignmentScoreMargin is < 0 or > 1
+            || !double.IsFinite(matching.AlternativeMinimumLocation) || matching.AlternativeMinimumLocation is < 0 or > 1)
+        {
+            throw new ArgumentException("Scoring profile matching thresholds must be finite and within 0..1.", nameof(profile));
+        }
+
         var points = profile.Points
             ?? throw new ArgumentException("Scoring profile point schedule is required.", nameof(profile));
         if (!double.IsFinite(points.FullTp) || points.FullTp <= 0
             || !double.IsFinite(points.PartialTp)
             || !double.IsFinite(points.FalsePositive)
             || !double.IsFinite(points.Duplicate)
-            || !double.IsFinite(points.SeverityMismatch))
+            || !double.IsFinite(points.SeverityMismatch)
+            || !double.IsFinite(points.LowConfidenceFalsePositive))
         {
             throw new ArgumentException("Scoring profile point values must be finite and full-TP points must be positive.", nameof(profile));
         }
@@ -327,14 +346,15 @@ public sealed class ScoringEngine
             var evidenceDelta = (after?.EvidenceFidelity ?? 0) - (before?.EvidenceFidelity ?? 0);
             var locationDelta = (after?.LocationAccuracy ?? 0) - (before?.LocationAccuracy ?? 0);
             var notes = new List<string>();
+            // Status changes outrank evidence changes: an upgrade usually comes with better evidence.
             var change = (beforeStatus, afterStatus) switch
             {
-                ("full" or "partial", "full" or "partial") when evidenceDelta > 0.05 => "evidence_improved",
-                ("full" or "partial", "full" or "partial") when evidenceDelta < -0.05 => "evidence_degraded",
-                ("full" or "partial", "missed") => "dropped_tp",
-                ("missed", "full" or "partial") => "added_tp",
                 ("partial", "full") => "upgraded_tp",
                 ("full", "partial") => "downgraded_tp",
+                ("full" or "partial", "missed") => "dropped_tp",
+                ("missed", "full" or "partial") => "added_tp",
+                ("full" or "partial", "full" or "partial") when evidenceDelta > 0.05 => "evidence_improved",
+                ("full" or "partial", "full" or "partial") when evidenceDelta < -0.05 => "evidence_degraded",
                 _ when string.Equals(beforeStatus, afterStatus, StringComparison.OrdinalIgnoreCase) => "unchanged",
                 _ => "changed"
             };
@@ -345,25 +365,32 @@ public sealed class ScoringEngine
             var afterFinding = after?.FindingIndex is int afterIndex
                 ? run2.Findings.FirstOrDefault(f => f.FindingIndex == afterIndex)
                 : null;
-            if (beforeFinding?.SeverityMismatch == true && afterFinding?.SeverityMismatch == false)
+            // Dropping the severity is not a correction; the revised finding must state the right one.
+            if (beforeFinding?.SeverityMismatch == true
+                && afterFinding is { SeverityMismatch: false }
+                && !string.IsNullOrWhiteSpace(afterFinding.ReportedSeverity)
+                && !string.Equals(afterFinding.ReportedSeverity, "Unknown", StringComparison.OrdinalIgnoreCase))
             {
                 notes.Add("severity corrected");
             }
 
-            if (evidenceDelta > 0.05)
+            // Evidence/location of a finding only compare when both runs found the vulnerability;
+            // an added or dropped TP is not an evidence improvement or degradation.
+            var foundInBoth = beforeStatus != "missed" && afterStatus != "missed";
+            if (foundInBoth && evidenceDelta > 0.05)
             {
                 notes.Add("evidence improved");
             }
-            else if (evidenceDelta < -0.05)
+            else if (foundInBoth && evidenceDelta < -0.05)
             {
                 notes.Add("evidence degraded");
             }
 
-            if (locationDelta > 0.05)
+            if (foundInBoth && locationDelta > 0.05)
             {
                 notes.Add("location improved");
             }
-            else if (locationDelta < -0.05)
+            else if (foundInBoth && locationDelta < -0.05)
             {
                 notes.Add("location degraded");
             }
@@ -409,13 +436,29 @@ public sealed class ScoringEngine
         var added = new List<string>();
         var changes = new List<SelfValidationFindingChange>();
 
-        foreach (var left in before)
+        // Optimal one-to-one pairing (a greedy pass in index order can pair a Run-1 FP with the
+        // only good partner of a later one and under-count kept FPs).
+        var similarity = new double[before.Count, after.Count];
+        for (var i = 0; i < before.Count; i++)
         {
-            var best = after
-                .Where(candidate => !usedAfter.Contains(candidate.FindingIndex))
-                .Select(candidate => new { Finding = candidate, Score = FindingSimilarity(left, candidate) })
-                .OrderByDescending(item => item.Score)
-                .FirstOrDefault();
+            for (var j = 0; j < after.Count; j++)
+            {
+                var value = FindingSimilarity(before[i], after[j]);
+                similarity[i, j] = value >= 0.45 ? value : 0;
+            }
+        }
+
+        var pairing = before.Count == 0 || after.Count == 0
+            ? Enumerable.Repeat(-1, before.Count).ToArray()
+            : HungarianMaximize(similarity, before.Count, after.Count);
+
+        for (var leftIndex = 0; leftIndex < before.Count; leftIndex++)
+        {
+            var left = before[leftIndex];
+            var partner = pairing[leftIndex];
+            var best = partner >= 0 && similarity[leftIndex, partner] > 0
+                ? new { Finding = after[partner], Score = similarity[leftIndex, partner] }
+                : null;
 
             if (best is not null && best.Score >= 0.45)
             {
@@ -617,12 +660,11 @@ public sealed class ScoringEngine
         return assigned;
     }
 
-    private static MatchCandidate BuildBestCandidate(LlmFinding finding, IReadOnlyList<VulnerabilityDefinition> vulnerabilities, SourceDocument source, ScoringProfile profile)
+    private static MatchCandidate PickBestCandidate(LlmFinding finding, IReadOnlyList<MatchCandidate> candidates)
     {
         MatchCandidate? best = null;
-        foreach (var vulnerability in vulnerabilities)
+        foreach (var candidate in candidates)
         {
-            var candidate = ScoreCandidate(finding, vulnerability, source, profile);
             if (best is null || candidate.Score > best.Score)
             {
                 best = candidate;
@@ -632,13 +674,187 @@ public sealed class ScoringEngine
         return best ?? new MatchCandidate(finding, null, 0, [], 0, 0, false, false, [], [], []);
     }
 
+    /// <summary>
+    /// Globally optimal one-to-one assignment (Hungarian method). Lexicographic objective:
+    /// most credited vulnerabilities, then most full matches, then the highest match scores,
+    /// then reported confidence. Assigned findings take the candidate of their assigned
+    /// vulnerability, so a finding whose best vulnerability is already credited can still be
+    /// credited for another vulnerability it matches instead of becoming a duplicate.
+    /// </summary>
+    private static Dictionary<string, MatchCandidate> AssignOptimally(
+        IReadOnlyList<List<MatchCandidate>> candidateSets,
+        List<MatchCandidate> bestCandidates,
+        ScoringProfile profile)
+    {
+        var assigned = new Dictionary<string, MatchCandidate>(StringComparer.OrdinalIgnoreCase);
+        var rows = candidateSets.Count;
+        var columns = rows == 0 ? 0 : candidateSets.Max(set => set.Count);
+        if (rows == 0 || columns == 0)
+        {
+            return assigned;
+        }
+
+        var weights = new double[rows, columns];
+        for (var i = 0; i < rows; i++)
+        {
+            var best = bestCandidates[i];
+            for (var j = 0; j < candidateSets[i].Count; j++)
+            {
+                var candidate = candidateSets[i][j];
+                if (candidate.Vulnerability is null
+                    || candidate.Score < profile.PartialThreshold
+                    || !IsAllowedAlternative(candidate, best, profile.Matching))
+                {
+                    continue;
+                }
+
+                weights[i, j] = 10.0
+                                + (candidate.Score >= profile.FullThreshold ? 5.0 : 0.0)
+                                + candidate.Score
+                                + TextUtil.Clamp01(candidate.Finding.Confidence) * 1e-6;
+            }
+        }
+
+        var assignment = HungarianMaximize(weights, rows, columns);
+        for (var i = 0; i < rows; i++)
+        {
+            var j = assignment[i];
+            if (j < 0 || j >= candidateSets[i].Count || weights[i, j] <= 0)
+            {
+                continue;
+            }
+
+            var candidate = candidateSets[i][j];
+            bestCandidates[i] = candidate;
+            assigned[candidate.Vulnerability!.Id] = candidate;
+        }
+
+        return assigned;
+    }
+
+    private static bool IsAllowedAlternative(MatchCandidate candidate, MatchCandidate best, ScoringMatchingOptions matching)
+    {
+        if (ReferenceEquals(candidate, best) || ReferenceEquals(candidate.Vulnerability, best.Vulnerability))
+        {
+            return true;
+        }
+
+        if (matching.AssignmentScoreMargin > 0 && candidate.Score < best.Score - matching.AssignmentScoreMargin)
+        {
+            return false;
+        }
+
+        return matching.AlternativeMinimumLocation <= 0
+               || (candidate.LocationAccuracy >= matching.AlternativeMinimumLocation
+                   && candidate.LocationAccuracy > best.LocationAccuracy);
+    }
+
+    /// <summary>Maximum-weight assignment of rows to columns; -1 for rows left unassigned.</summary>
+    private static int[] HungarianMaximize(double[,] weights, int rows, int columns)
+    {
+        var n = Math.Max(rows, columns);
+        var max = 0.0;
+        foreach (var weight in weights)
+        {
+            max = Math.Max(max, weight);
+        }
+
+        // Square cost matrix (1-based, classic O(n^3) potentials formulation).
+        var cost = new double[n + 1, n + 1];
+        for (var i = 1; i <= n; i++)
+        {
+            for (var j = 1; j <= n; j++)
+            {
+                var weight = i <= rows && j <= columns ? weights[i - 1, j - 1] : 0.0;
+                cost[i, j] = max - weight;
+            }
+        }
+
+        var u = new double[n + 1];
+        var v = new double[n + 1];
+        var p = new int[n + 1];
+        var way = new int[n + 1];
+        for (var i = 1; i <= n; i++)
+        {
+            p[0] = i;
+            var j0 = 0;
+            var minv = Enumerable.Repeat(double.PositiveInfinity, n + 1).ToArray();
+            var used = new bool[n + 1];
+            do
+            {
+                used[j0] = true;
+                var i0 = p[j0];
+                var delta = double.PositiveInfinity;
+                var j1 = 0;
+                for (var j = 1; j <= n; j++)
+                {
+                    if (used[j])
+                    {
+                        continue;
+                    }
+
+                    var current = cost[i0, j] - u[i0] - v[j];
+                    if (current < minv[j])
+                    {
+                        minv[j] = current;
+                        way[j] = j0;
+                    }
+
+                    if (minv[j] < delta)
+                    {
+                        delta = minv[j];
+                        j1 = j;
+                    }
+                }
+
+                for (var j = 0; j <= n; j++)
+                {
+                    if (used[j])
+                    {
+                        u[p[j]] += delta;
+                        v[j] -= delta;
+                    }
+                    else
+                    {
+                        minv[j] -= delta;
+                    }
+                }
+
+                j0 = j1;
+            }
+            while (p[j0] != 0);
+
+            do
+            {
+                var j1 = way[j0];
+                p[j0] = p[j1];
+                j0 = j1;
+            }
+            while (j0 != 0);
+        }
+
+        var result = Enumerable.Repeat(-1, rows).ToArray();
+        for (var j = 1; j <= n; j++)
+        {
+            var row = p[j] - 1;
+            var column = j - 1;
+            if (row >= 0 && row < rows && column < columns)
+            {
+                result[row] = column;
+            }
+        }
+
+        return result;
+    }
+
     private static MatchCandidate ScoreCandidate(LlmFinding finding, VulnerabilityDefinition vulnerability, SourceDocument source, ScoringProfile profile)
     {
-        var alias = ScoreAlias(finding, vulnerability);
-        var location = ScoreLocation(finding, vulnerability);
-        var evidence = ScoreEvidence(finding, vulnerability, source);
-        var cweSeverity = ScoreCweSeverity(finding, vulnerability);
-        var impact = ScoreImpact(finding, vulnerability);
+        var matching = profile.Matching;
+        var alias = ScoreAlias(finding, vulnerability, matching);
+        var location = ScoreLocation(finding, vulnerability, matching);
+        var evidence = ScoreEvidence(finding, vulnerability, source, matching);
+        var cweSeverity = ScoreCweSeverity(finding, vulnerability, matching);
+        var impact = ScoreImpact(finding, vulnerability, matching);
 
         var signals = new List<SignalScore>
         {
@@ -651,6 +867,13 @@ public sealed class ScoringEngine
 
         var score = signals.Sum(s => s.Weighted);
         var gateDetail = ApplyProfileGates(profile, alias.Score, location.Score, evidence.Score, ref score);
+        if (matching.MinimumReportedLocation > 0
+            && ReportsLocation(finding)
+            && location.Score < matching.MinimumReportedLocation)
+        {
+            score = Math.Min(score, profile.PartialThreshold - 0.0001);
+            gateDetail = string.Join("; ", new[] { gateDetail, $"blocked TP: reported location does not point at this vulnerability (location {location.Score:0.00})" }.Where(d => !string.IsNullOrWhiteSpace(d)));
+        }
         if (!string.IsNullOrWhiteSpace(gateDetail))
         {
             signals.Add(new SignalScore { Name = "gate", Weight = 0, Value = score, Detail = gateDetail });
@@ -669,6 +892,15 @@ public sealed class ScoringEngine
             evidence.MissingMustAnchors,
             evidence.RejectedBecause);
     }
+
+    private static bool ReportsLocation(LlmFinding finding)
+        => finding.LineStart > 0 || !string.IsNullOrWhiteSpace(finding.FunctionOrSymbol);
+
+    /// <summary>Frozen profiles match raw normalized substrings; opted-in profiles match whole terms.</summary>
+    private static bool Contains(ScoringMatchingOptions matching, string? haystack, string? needle)
+        => matching.WordBoundaryTerms
+            ? TextUtil.ContainsTerm(haystack, needle)
+            : TextUtil.ContainsNormalized(haystack, needle);
 
     private static string ApplyProfileGates(ScoringProfile profile, double aliasScore, double locationScore, double evidenceScore, ref double score)
     {
@@ -694,11 +926,11 @@ public sealed class ScoringEngine
         return string.Join("; ", details);
     }
 
-    private static (double Score, string Detail) ScoreAlias(LlmFinding finding, VulnerabilityDefinition vulnerability)
+    private static (double Score, string Detail) ScoreAlias(LlmFinding finding, VulnerabilityDefinition vulnerability, ScoringMatchingOptions matching)
     {
         var combined = CombinedFindingText(finding);
         var exactAliases = vulnerability.Aliases
-            .Where(alias => TextUtil.ContainsNormalized(combined, alias))
+            .Where(alias => Contains(matching, combined, alias))
             .ToList();
 
         if (exactAliases.Count > 0)
@@ -706,7 +938,7 @@ public sealed class ScoringEngine
             return (1.0, $"Alias matched: {string.Join(", ", exactAliases.Take(3))}");
         }
 
-        var cweAliases = vulnerability.Cwe.Where(cwe => TextUtil.ContainsNormalized(combined, cwe)).ToList();
+        var cweAliases = vulnerability.Cwe.Where(cwe => Contains(matching, combined, cwe)).ToList();
         if (cweAliases.Count > 0)
         {
             return (0.85, $"CWE alias matched: {string.Join(", ", cweAliases)}");
@@ -719,7 +951,7 @@ public sealed class ScoringEngine
         return (overlap >= 0.5 ? 0.65 : overlap * 0.8, overlap > 0 ? $"Title/type token overlap {overlap:0.00}." : "No type/alias overlap.");
     }
 
-    private static (double Score, string Detail) ScoreLocation(LlmFinding finding, VulnerabilityDefinition vulnerability)
+    private static (double Score, string Detail) ScoreLocation(LlmFinding finding, VulnerabilityDefinition vulnerability, ScoringMatchingOptions matching)
     {
         var details = new List<string>();
         var best = 0.0;
@@ -734,7 +966,7 @@ public sealed class ScoringEngine
                 score += 0.15;
             }
 
-            var symbolScore = SymbolScore(finding.FunctionOrSymbol, location.Symbol, finding.Title + " " + finding.Evidence);
+            var symbolScore = SymbolScore(finding.FunctionOrSymbol, location.Symbol, finding.Title + " " + finding.Evidence, matching);
             score += 0.35 * symbolScore;
             if (symbolScore > 0)
             {
@@ -742,6 +974,10 @@ public sealed class ScoringEngine
             }
 
             var lineScore = LineOverlapScore(finding.LineStart, finding.LineEnd, location.LineStart, location.LineEnd);
+            if (matching.MaxPreciseLineSpan > 0 && ReportedSpan(finding) > matching.MaxPreciseLineSpan)
+            {
+                lineScore *= 0.5;
+            }
             score += 0.50 * lineScore;
             if (lineScore > 0)
             {
@@ -754,7 +990,7 @@ public sealed class ScoringEngine
         return (best, details.Count > 0 ? string.Join("; ", details.Take(4)) : "No location signal.");
     }
 
-    private static double SymbolScore(string reportedSymbol, string groundTruthSymbol, string fallbackText)
+    private static double SymbolScore(string reportedSymbol, string groundTruthSymbol, string fallbackText, ScoringMatchingOptions matching)
     {
         if (string.IsNullOrWhiteSpace(groundTruthSymbol))
         {
@@ -762,12 +998,12 @@ public sealed class ScoringEngine
         }
 
         var symbolLeaf = TextUtil.SymbolLeaf(groundTruthSymbol);
-        if (TextUtil.ContainsNormalized(reportedSymbol, groundTruthSymbol) || TextUtil.ContainsNormalized(reportedSymbol, symbolLeaf))
+        if (Contains(matching, reportedSymbol, groundTruthSymbol) || Contains(matching, reportedSymbol, symbolLeaf))
         {
             return 1.0;
         }
 
-        if (TextUtil.ContainsNormalized(fallbackText, symbolLeaf))
+        if (Contains(matching, fallbackText, symbolLeaf))
         {
             return 0.7;
         }
@@ -775,6 +1011,9 @@ public sealed class ScoringEngine
         var overlap = TextUtil.TokenOverlap(reportedSymbol, groundTruthSymbol);
         return overlap >= 0.5 ? 0.6 : 0;
     }
+
+    private static int ReportedSpan(LlmFinding finding)
+        => finding.LineStart <= 0 ? 0 : Math.Abs((finding.LineEnd <= 0 ? finding.LineStart : finding.LineEnd) - finding.LineStart) + 1;
 
     private static double LineOverlapScore(int findingStart, int findingEnd, int truthStart, int truthEnd)
     {
@@ -810,7 +1049,7 @@ public sealed class ScoringEngine
         };
     }
 
-    private static EvidenceScoreDetail ScoreEvidence(LlmFinding finding, VulnerabilityDefinition vulnerability, SourceDocument source)
+    private static EvidenceScoreDetail ScoreEvidence(LlmFinding finding, VulnerabilityDefinition vulnerability, SourceDocument source, ScoringMatchingOptions matching)
     {
         var combined = CombinedFindingText(finding);
         var anchors = vulnerability.EvidenceAnchors.HasAny
@@ -818,16 +1057,17 @@ public sealed class ScoringEngine
             : new EvidenceAnchorSet { Must = vulnerability.RequiredEvidence.ToList() };
         var positiveAnchors = anchors.Positive;
         var acceptedAnchors = positiveAnchors
-            .Where(evidence => TextUtil.ContainsNormalized(combined, evidence))
+            .Where(evidence => Contains(matching, combined, evidence))
             .ToList();
         var missingMustAnchors = anchors.Must
-            .Where(evidence => !string.IsNullOrWhiteSpace(evidence) && !TextUtil.ContainsNormalized(combined, evidence))
+            .Where(evidence => !string.IsNullOrWhiteSpace(evidence) && !Contains(matching, combined, evidence))
             .ToList();
         var negativeHits = anchors.Negative
-            .Where(evidence => !string.IsNullOrWhiteSpace(evidence) && TextUtil.ContainsNormalized(combined, evidence))
+            .Where(evidence => !string.IsNullOrWhiteSpace(evidence) && Contains(matching, combined, evidence))
             .ToList();
 
-        var sourceEvidence = EvidenceAppearsInSource(finding.Evidence, source.Text);
+        var quotedEvidence = matching.NormalizeQuotedEvidence ? NormalizeQuotedEvidence(finding.Evidence) : finding.Evidence;
+        var sourceEvidence = EvidenceAppearsInSource(quotedEvidence, source.Text);
         var sourceEvidenceScore = sourceEvidence.AnyMatch ? 0.35 : 0;
         var requiredScore = positiveAnchors.Count == 0
             ? 0
@@ -866,6 +1106,30 @@ public sealed class ScoringEngine
             sourceEvidence.NormalizedMatch);
     }
 
+    /// <summary>
+    /// Double-escaped JSON leaves a literal "\n" in quoted code, and the prompt shows the source
+    /// as "0317: code", a prefix models copy although it is not part of the file. Both are undone
+    /// before the quote is looked up in the source.
+    /// </summary>
+    internal static string NormalizeQuotedEvidence(string? evidence)
+    {
+        if (string.IsNullOrEmpty(evidence))
+        {
+            return evidence ?? string.Empty;
+        }
+
+        var unescaped = evidence
+            .Replace(@"\r\n", "\n", StringComparison.Ordinal)
+            .Replace(@"\n", "\n", StringComparison.Ordinal)
+            .Replace(@"\r", "\n", StringComparison.Ordinal)
+            .Replace(@"\t", "\t", StringComparison.Ordinal);
+        return LineNumberPrefixRegex.Replace(unescaped, string.Empty);
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex LineNumberPrefixRegex = new(
+        @"(?im)^[ \t]*(?:line[ \t]*|l)?\d{1,5}[ \t]*[:|][ \t]?",
+        System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
     private static EvidenceSourceMatch EvidenceAppearsInSource(string evidence, string sourceText)
     {
         if (string.IsNullOrWhiteSpace(evidence))
@@ -890,9 +1154,9 @@ public sealed class ScoringEngine
         return new EvidenceSourceMatch(false, normalized);
     }
 
-    private static (double Score, string Detail) ScoreCweSeverity(LlmFinding finding, VulnerabilityDefinition vulnerability)
+    private static (double Score, string Detail) ScoreCweSeverity(LlmFinding finding, VulnerabilityDefinition vulnerability, ScoringMatchingOptions matching)
     {
-        var cweMatches = vulnerability.Cwe.Where(cwe => TextUtil.ContainsNormalized(finding.Cwe + " " + CombinedFindingText(finding), cwe)).ToList();
+        var cweMatches = vulnerability.Cwe.Where(cwe => Contains(matching, finding.Cwe + " " + CombinedFindingText(finding), cwe)).ToList();
         var cweScore = cweMatches.Count > 0 ? 0.65 : 0;
         var severityScore = IsSeverityMismatch(finding.Severity, vulnerability.Severity) ? 0 : 0.35;
 
@@ -905,15 +1169,15 @@ public sealed class ScoringEngine
         return (TextUtil.Clamp01(cweScore + severityScore), detail);
     }
 
-    private static (double Score, string Detail) ScoreImpact(LlmFinding finding, VulnerabilityDefinition vulnerability)
+    private static (double Score, string Detail) ScoreImpact(LlmFinding finding, VulnerabilityDefinition vulnerability, ScoringMatchingOptions matching)
     {
         var impactText = string.Join(' ', finding.Impact, finding.Trigger, finding.Title, finding.VulnerabilityType);
-        if (!string.IsNullOrWhiteSpace(vulnerability.Trigger) && TextUtil.ContainsNormalized(impactText, vulnerability.Trigger))
+        if (!string.IsNullOrWhiteSpace(vulnerability.Trigger) && Contains(matching, impactText, vulnerability.Trigger))
         {
             return (1.0, "Trigger matched.");
         }
 
-        var aliasMatches = vulnerability.Aliases.Count(alias => TextUtil.ContainsNormalized(impactText, alias));
+        var aliasMatches = vulnerability.Aliases.Count(alias => Contains(matching, impactText, alias));
         if (aliasMatches > 0)
         {
             return (0.65, "Impact/trigger text contains vulnerability alias.");
@@ -928,7 +1192,7 @@ public sealed class ScoringEngine
         return (0, "No impact/trigger signal.");
     }
 
-    private static bool IsSeverityMismatch(string reported, string expected)
+    internal static bool IsSeverityMismatch(string reported, string expected)
     {
         if (string.IsNullOrWhiteSpace(reported) || string.Equals(reported, "Unknown", StringComparison.OrdinalIgnoreCase))
         {

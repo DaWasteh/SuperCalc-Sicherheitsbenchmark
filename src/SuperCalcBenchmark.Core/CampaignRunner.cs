@@ -320,7 +320,10 @@ public sealed class CampaignRunner
                         campaignId: campaignId,
                         campaignItemLabel: item.Label,
                         serverApiKey: serverApiKey,
-                        quantOverride: item.QuantOverride);
+                        // Each campaign item carries its own identity. A manual quant label from the
+                        // base options would otherwise be stamped onto every model of the campaign.
+                        quantOverride: item.QuantOverride,
+                        clearQuantOverride: true);
 
                     progress?.Invoke(repeats > 1 ? $"--- {item.Label}: repeat {repeat}/{repeats} (seed {options.Seed}) ---" : $"--- {item.Label} (seed {options.Seed}) ---");
                     onRunStarting?.Invoke(state, repeat);

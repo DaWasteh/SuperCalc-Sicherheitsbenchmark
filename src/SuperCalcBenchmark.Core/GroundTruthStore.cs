@@ -58,7 +58,10 @@ public sealed class GroundTruthStore
                 throw new InvalidOperationException($"Ground truth file '{path}' contains a null location entry.");
             }
 
-            if (!vulnerability.EvidenceAnchors.HasAny && vulnerability.RequiredEvidence.Count > 0)
+            // Legacy required_evidence becomes "must" whenever the v2 anchors carry no must/should
+            // anchor (an entry with only may/negative anchors would otherwise lose its evidence).
+            var hasPrimaryAnchors = vulnerability.EvidenceAnchors.Must.Count > 0 || vulnerability.EvidenceAnchors.Should.Count > 0;
+            if (!hasPrimaryAnchors && vulnerability.RequiredEvidence.Count > 0)
             {
                 vulnerability.EvidenceAnchors.Must = vulnerability.RequiredEvidence
                     .Where(anchor => !string.IsNullOrWhiteSpace(anchor))

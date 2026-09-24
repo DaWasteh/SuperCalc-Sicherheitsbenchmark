@@ -7,18 +7,20 @@ public sealed partial class ResponseParser
 {
     public const string LegacyParserVersion = "parser-v1";
     public const string ParserV2Version = "parser-v2";
+    public const string ParserV3Version = "parser-v3";
 
     /// <summary>
-    /// parser-v3 adds a lenient JSON repair pass (leading zeros, invalid escapes, raw control
-    /// characters, unescaped inner quotes, missing commas) that only runs after strict parsing
-    /// failed, accepts findings embedded in an echoed schema's <c>properties</c> object, and
-    /// treats text before a stray <c>&lt;/think&gt;</c> as reasoning. Matching and scoring are
-    /// unchanged; parser identity is versioned so older scorecards stay comparable history.
+    /// parser-v4 keeps every parser-v3 rule (strict-first lenient JSON repair, schema-embedded
+    /// findings, stray <c>&lt;/think&gt;</c>) and additionally reads confidences given on a 0..100
+    /// scale as percentages, normalizes decorated severities ("High (CVSS 8.1)", bare CVSS
+    /// scores), never strips ", }" / ", ]" inside JSON strings, and prefers an explicit
+    /// "Severity:" field in the text fallback. Parser identity is versioned so older scorecards
+    /// stay comparable history.
     /// </summary>
-    public const string CurrentParserVersion = "parser-v3";
+    public const string CurrentParserVersion = "parser-v4";
 
     /// <summary>Every parser identity that has ever been written into an archive, oldest first.</summary>
-    public static readonly IReadOnlyList<string> KnownParserVersions = [LegacyParserVersion, ParserV2Version, CurrentParserVersion];
+    public static readonly IReadOnlyList<string> KnownParserVersions = [LegacyParserVersion, ParserV2Version, ParserV3Version, CurrentParserVersion];
 
     private static readonly JsonDocumentOptions DocumentOptions = new()
     {
@@ -162,20 +164,35 @@ public sealed partial class ResponseParser
             return null;
         }
 
-        var cleaned = RemoveTrailingCommas(json.Trim());
+        var trimmed = json.Trim();
         try
         {
-            return JsonDocument.Parse(cleaned, DocumentOptions);
+            // AllowTrailingCommas already accepts ", }" / ", ]"; valid JSON is parsed untouched,
+            // including string values that happen to contain ", ]" (e.g. quoted C++ code).
+            return JsonDocument.Parse(trimmed, DocumentOptions);
         }
         catch (JsonException)
         {
             // Fall through to the repair pass below.
         }
 
+        var cleaned = RemoveTrailingCommas(trimmed);
         var repaired = LenientJsonRepair.Repair(cleaned);
         if (!repaired.Changed)
         {
-            return null;
+            if (string.Equals(cleaned, trimmed, StringComparison.Ordinal))
+            {
+                return null;
+            }
+
+            try
+            {
+                return JsonDocument.Parse(cleaned, DocumentOptions);
+            }
+            catch (JsonException)
+            {
+                return null;
+            }
         }
 
         try
@@ -888,6 +905,13 @@ public sealed partial class ResponseParser
         {
             if (TryGetProperty(item, name, out var property) && TryReadFiniteDouble(property, out var number))
             {
+                // A confidence of 85 means 85 %, not "more than certain". Values on a 0..100
+                // scale are read as percentages instead of being clamped to 1.0.
+                if (number > 1 && number <= 100)
+                {
+                    number /= 100.0;
+                }
+
                 return TextUtil.Clamp01(number);
             }
         }
@@ -960,15 +984,47 @@ public sealed partial class ResponseParser
     private static string NormalizeSeverity(string severity)
     {
         var normalized = severity.Trim().ToLowerInvariant();
-        return normalized switch
+        var exact = normalized switch
         {
             "critical" or "crit" => "Critical",
             "high" => "High",
             "medium" or "med" or "moderate" => "Medium",
             "low" => "Low",
             "info" or "informational" => "Informational",
-            _ => string.IsNullOrWhiteSpace(severity) ? "Unknown" : severity.Trim()
+            _ => null
         };
+        if (exact is not null)
+        {
+            return exact;
+        }
+
+        if (string.IsNullOrWhiteSpace(severity))
+        {
+            return "Unknown";
+        }
+
+        // Decorated labels such as "High (CVSS 8.1)" or "CRITICAL - RCE" start with the label.
+        var leading = LeadingSeverityRegex().Match(normalized);
+        if (leading.Success)
+        {
+            return NormalizeSeverity(leading.Groups[1].Value);
+        }
+
+        // A bare CVSS v3 base score maps to its qualitative rating.
+        if (double.TryParse(normalized, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var cvss)
+            && cvss is >= 0 and <= 10)
+        {
+            return cvss switch
+            {
+                >= 9.0 => "Critical",
+                >= 7.0 => "High",
+                >= 4.0 => "Medium",
+                > 0 => "Low",
+                _ => "Informational"
+            };
+        }
+
+        return severity.Trim();
     }
 
     private static List<JsonCandidate> ExtractFencedJsonCandidates(string text)
@@ -1240,7 +1296,9 @@ public sealed partial class ResponseParser
                 continue;
             }
 
-            var severity = SeverityRegex().Match(section);
+            // Prefer an explicit "Severity: X" field over the first severity-like word in prose.
+            var severityField = ExtractField(section, "severity") ?? ExtractField(section, "risk");
+            var severity = SeverityRegex().Match(string.IsNullOrWhiteSpace(severityField) ? section : severityField);
             var cwe = CweRegex().Match(section);
             var lines = LineRangeRegex().Match(section);
             var lineStart = 0;
@@ -1340,9 +1398,59 @@ public sealed partial class ResponseParser
         return match.Success ? match.Groups[1].Value.Trim() : null;
     }
 
+    /// <summary>Removes ", }" / ", ]" outside JSON strings only; quoted code keeps its commas.</summary>
     private static string RemoveTrailingCommas(string json)
     {
-        return TrailingCommaRegex().Replace(json, "$1");
+        var builder = new System.Text.StringBuilder(json.Length);
+        var inString = false;
+        var escaped = false;
+        for (var i = 0; i < json.Length; i++)
+        {
+            var c = json[i];
+            if (inString)
+            {
+                builder.Append(c);
+                if (escaped)
+                {
+                    escaped = false;
+                }
+                else if (c == '\\')
+                {
+                    escaped = true;
+                }
+                else if (c == '"')
+                {
+                    inString = false;
+                }
+
+                continue;
+            }
+
+            if (c == '"')
+            {
+                inString = true;
+                builder.Append(c);
+                continue;
+            }
+
+            if (c == ',')
+            {
+                var next = i + 1;
+                while (next < json.Length && char.IsWhiteSpace(json[next]))
+                {
+                    next++;
+                }
+
+                if (next < json.Length && json[next] is '}' or ']')
+                {
+                    continue;
+                }
+            }
+
+            builder.Append(c);
+        }
+
+        return builder.ToString();
     }
 
     [GeneratedRegex("```\\w*\\s*(.*?)```", RegexOptions.Singleline)]
@@ -1356,6 +1464,9 @@ public sealed partial class ResponseParser
 
     [GeneratedRegex("(?i)CWE-\\d+")]
     private static partial Regex CweRegex();
+
+    [GeneratedRegex(@"^(critical|crit|high|medium|med|moderate|low|informational|info)\b")]
+    private static partial Regex LeadingSeverityRegex();
 
     [GeneratedRegex("(?i)(?:line|lines|linenumber|line_start|at)\\D+(\\d+)(?:\\D+(\\d+))?")]
     private static partial Regex LineRangeRegex();
@@ -1375,6 +1486,5 @@ public sealed partial class ResponseParser
     [GeneratedRegex("[A-Za-z_][A-Za-z0-9_:]*\\s*\\(")]
     private static partial Regex FunctionLikeRegex();
 
-    [GeneratedRegex(",\\s*([}\\]])")]
-    private static partial Regex TrailingCommaRegex();
+
 }

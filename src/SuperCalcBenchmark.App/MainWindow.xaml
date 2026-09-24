@@ -92,6 +92,8 @@
                         <CheckBox x:Name="DisableThinkingCheckBox" Content="Thinking deaktivieren (Debug)" IsChecked="False" VerticalAlignment="Center" Margin="16,4,4,4" />
                         <TextBlock Text="Quant (optional)" VerticalAlignment="Center" Margin="16,4,4,4" />
                         <TextBox x:Name="QuantTextBox" Width="110" ToolTip="Leer lassen für Auto-Erkennung. Nur setzen, wenn Modell-ID/Server den Quant nicht liefern; Refresh Models leert manuelle Werte." />
+                        <TextBlock Text="Scoring-Profil" VerticalAlignment="Center" Margin="16,4,4,4" />
+                        <ComboBox x:Name="ScoringProfileComboBox" Width="120" SelectionChanged="ScoringProfileComboBox_SelectionChanged" ToolTip="Bewertungsprofil für neue Runs und für den Vergleich. Standard ist immer das neueste Profil; ältere Profile bleiben für die Historie wählbar. Profile werden nie gemischt. Gibt es noch keine Runs mit dem gewählten Profil, zeigt der Vergleich das neueste Profil mit Runs." />
                         <Button x:Name="PreviewPromptButton" Content="Prompt anzeigen" Margin="16,4,4,4" Click="PreviewPromptButton_Click" ToolTip="Zeigt den generierten Prompt und die erste Request-JSON, ohne den Server aufzurufen." />
                         <TextBlock Text="Output-Ordner optional" VerticalAlignment="Center" Margin="16,4,4,4" />
                         <TextBox x:Name="OutputDirectoryTextBox" Width="320" ToolTip="Leer = gemeinsamer Datenpool/Runs; relative Pfade werden gegen den Datenpool aufgelöst" />

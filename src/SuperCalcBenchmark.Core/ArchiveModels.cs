@@ -259,6 +259,9 @@ public sealed class ArchiveServerMetadata
     [JsonPropertyName("specType")]
     public string? SpecType { get; set; }
 
+    [JsonPropertyName("samplerSettings")]
+    public string? SamplerSettings { get; set; }
+
     [JsonPropertyName("draftModel")]
     public string? DraftModel { get; set; }
 
@@ -337,6 +340,7 @@ public sealed class ArchiveServerMetadata
         metadata.KvTypeV = runtime.KvTypeV;
         metadata.FlashAttention = runtime.FlashAttention;
         metadata.SpecType = runtime.SpecType;
+        metadata.SamplerSettings = runtime.SamplerSettings;
         metadata.DraftModel = runtime.DraftModel;
         metadata.MmProj = runtime.MmProj;
         metadata.Environment = runtime.Environment.Count == 0 ? null : new Dictionary<string, string>(runtime.Environment, StringComparer.OrdinalIgnoreCase);
@@ -489,6 +493,10 @@ public sealed class ArchiveRunScore
                                        && string.Equals(
                                            ParserVersion,
                                            ResponseParser.CurrentParserVersion,
+                                           StringComparison.OrdinalIgnoreCase)
+                                       && string.Equals(
+                                           ScoringProfile,
+                                           ScoringProfiles.Latest.Name,
                                            StringComparison.OrdinalIgnoreCase);
 
     [JsonPropertyName("scorePercent")]
@@ -659,10 +667,22 @@ public sealed class ArchiveRunScore
     /// A genuinely poor but complete run (e.g. the model returned valid JSON yet found nothing)
     /// is <em>not</em> degenerate because it still produced a real model-authored answer.
     /// </summary>
+    /// <summary>
+    /// The answer ended before the model finished: token/context limit ("length"), a stream
+    /// that broke off or timed out. Salvaged findings stay visible, but the run is incomplete.
+    /// </summary>
+    [JsonIgnore]
+    public bool IsTruncated =>
+        FinishReason is not null
+        && (string.Equals(FinishReason, "length", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(FinishReason, "stream_error", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(FinishReason, "stream_timeout", StringComparison.OrdinalIgnoreCase));
+
     [JsonIgnore]
     public bool IsDegenerate =>
         ManuallyStopped
         || LoopDetected
+        || IsTruncated
         || string.Equals(FinishReason, "manual_abort", StringComparison.OrdinalIgnoreCase)
         || (ResponseChars <= 0
             && ScorePercent <= 0

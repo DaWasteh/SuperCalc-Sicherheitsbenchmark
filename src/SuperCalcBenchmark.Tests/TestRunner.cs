@@ -26,6 +26,22 @@ internal static partial class TestRunner
         Run("AutoTuner discovery reads sidecar and environment", AutoTunerDiscoveryReadsSidecarAndEnvironment);
         Run("archive stores runtime identity and comparison splits by backend", ArchiveStoresRuntimeIdentityAndComparisonSplitsByBackend);
         Run("campaign runner records failures and honors stop", CampaignRunnerRecordsFailuresAndHonorsStop);
+        Run("campaign items never inherit the single-run quant override", CampaignItemsDoNotInheritQuantOverride);
+        Run("runner keeps and archives Run 1 when Run 2 fails", RunnerKeepsRun1WhenRun2Fails);
+        Run("runner skips Run 2 without a Run-1 answer", RunnerSkipsRun2WithoutRun1Answer);
+        Run("diagnostics survive malformed audits and CWE numbers", DiagnosticsSurviveMalformedAuditAndCwe);
+        Run("comparison ranks lower-is-better metrics and single-run stability correctly", ComparisonRanksLowerIsBetterAndSingleRunStability);
+        Run("run views exclude degenerate runs and the HTML views match", RunViewsExcludeDegenerateRunsAndMatchHtml);
+        Run("official-v3 matches whole terms and quoted evidence", OfficialV3MatchesWholeTermsAndQuotedEvidence);
+        Run("official-v3 assigns findings by precise location", OfficialV3AssignsByPreciseLocation);
+        Run("accountability-v2 credits honest partial assessments", AccountabilityV2CreditsHonestPartialAssessments);
+        Run("parser-v4 reads percent confidence, decorated severity and quoted commas", ParserV4ReadsPercentConfidenceSeverityAndQuotedCommas);
+        Run("runner treats an unclosed think block as reasoning", RunnerTreatsUnclosedThinkAsReasoning);
+        Run("latest profile is default and official-v3 charges hedged guesses", LatestProfileIsDefaultAndV3ChargesHedgedGuesses);
+        Run("model identity prefers a refining name over the server ftype", ModelIdentityPrefersRefiningNameOverServerFtype);
+        Run("truncated runs are degenerate", TruncatedRunsAreDegenerate);
+        Run("truth audit attributes admissions across all findings", TruthAuditAttributesAdmissionsAcrossAllFindings);
+        Run("prompt quotes answers with a longer fence", PromptQuotesAnswersWithLongerFence);
         Run("ground truth validates", GroundTruthValidates);
         Run("ground truth loader handles null collections deterministically", GroundTruthLoaderHandlesNullCollections);
         Run("WPF app exits when the main window closes", WpfAppExitsWithMainWindow);
@@ -273,6 +289,16 @@ internal static partial class TestRunner
         var current = new ArchiveRunScore
         {
             RunName = "Run 1",
+            ScoringProfile = ScoringProfiles.Latest.Name,
+            ScoringProfileVersion = ScoringProfiles.Latest.Version,
+            ScoringEngineVersion = ScoringProfiles.Latest.EngineVersion,
+            ScoreSchemaVersion = ScoringProfiles.ScoreSchemaVersion,
+            ParserVersion = ResponseParser.CurrentParserVersion,
+            ResponseChars = 1
+        };
+        var olderProfile = new ArchiveRunScore
+        {
+            RunName = "Run 1",
             ScoringProfile = ScoringProfiles.OfficialV1Name,
             ScoringProfileVersion = ScoringProfiles.OfficialV1Version,
             ScoringEngineVersion = ScoringProfiles.OfficialV1EngineVersion,
@@ -293,7 +319,10 @@ internal static partial class TestRunner
         var record = new ArchiveRecord { BenchmarkProfile = "official", SourceHashMatches = true };
         current.NormalizeAfterLoad(record);
         historical.NormalizeAfterLoad(record);
-        Assert(current.IsCurrentEvaluation, "current parser results should be marked current");
+        olderProfile.NormalizeAfterLoad(record);
+        Assert(current.IsCurrentEvaluation, "current parser results of the newest profile should be marked current");
+        Assert(olderProfile.OfficialComparable && !olderProfile.IsCurrentEvaluation,
+            "an older official profile stays comparable history but is not the current evaluation");
         Assert(historical.OfficialComparable && !historical.IsCurrentEvaluation,
             "frozen parser-v1 results remain comparable history but must be visibly marked stale");
     }
@@ -1749,11 +1778,15 @@ internal static partial class TestRunner
         {
             Items =
             [
-                new AdjudicationItem { FindingIndex = 1, Decision = "accept_full", MatchedVulnerabilityId = "SC-V3-001", Reason = "valid", Reviewer = "test" },
-                new AdjudicationItem { FindingIndex = 2, Decision = "accept_full", MatchedVulnerabilityId = "SC-V3-001", Reason = "same target", Reviewer = "test" },
-                new AdjudicationItem { FindingIndex = 3, Decision = "accept_full", MatchedVulnerabilityId = "SC-V3-999", Reason = "invalid target", Reviewer = "test" }
+                new AdjudicationItem { Run = "Run 1", FindingIndex = 1, Decision = "accept_full", MatchedVulnerabilityId = "SC-V3-001", Reason = "valid", Reviewer = "test" },
+                new AdjudicationItem { Run = "Run 1", FindingIndex = 2, Decision = "accept_full", MatchedVulnerabilityId = "SC-V3-001", Reason = "same target", Reviewer = "test" },
+                new AdjudicationItem { Run = "Run 1", FindingIndex = 3, Decision = "accept_full", MatchedVulnerabilityId = "SC-V3-999", Reason = "invalid target", Reviewer = "test" }
             ]
         };
+
+        // Finding #N of Run 1 and #N of Run 2 are different findings: an item without a run applies to none.
+        var unscoped = AdjudicationApplier.Apply(score, new AdjudicationDocument { Items = [new AdjudicationItem { FindingIndex = 1, Decision = "accept_full", MatchedVulnerabilityId = "SC-V3-001", Reason = "no run", Reviewer = "test" }] }, "unit-test");
+        Assert(unscoped.FullTruePositives == 0, "an adjudication item without a run must not be applied");
 
         var adjudicated = AdjudicationApplier.Apply(score, document, "unit-test");
         Assert(adjudicated.FullTruePositives == 1, $"only one finding may represent a vulnerability, got {adjudicated.FullTruePositives} TPs");
@@ -2001,9 +2034,11 @@ internal static partial class TestRunner
             "Run 2",
             "test",
             parsedFindings);
-        Assert(trueFindingAdmissionAudit.IsValid == false
-               && trueFindingAdmissionAudit.ValidationErrors.Any(error => error.Contains("false positive or duplicate", StringComparison.OrdinalIgnoreCase)),
-            "an admission quote attributable only to a true-positive finding must be rejected");
+        // Disowning a real true positive is an inaccurate self-assessment: it is attributed, never
+        // counted as an admitted false positive, and costs a point instead of invalidating the audit.
+        Assert(trueFindingAdmissionAudit.AdmittedTruePositiveCount == 1
+               && !trueFindingAdmissionAudit.ValidationErrors.Any(error => error.Contains("admitted false positive", StringComparison.OrdinalIgnoreCase)),
+            "an admission quote attributable only to a true-positive finding must be charged, not counted as an FP admission");
     }
 
     private static void TruthAuditFlagConsistencyIsNonFatalButPresenceIsRequired()
@@ -2715,7 +2750,7 @@ internal static partial class TestRunner
 
     private static void ReleaseVersionsAgree()
     {
-        const string expected = "0.7.7";
+        const string expected = "0.7.8";
         var runnerField = typeof(BenchmarkRunner).GetField("ToolVersion", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
         Assert(runnerField?.GetRawConstantValue() as string == expected, "BenchmarkRunner.ToolVersion must match the release version.");
         Assert(new BenchmarkRunResult().ToolVersion == expected, "BenchmarkRunResult.ToolVersion must match the release version.");

@@ -36,9 +36,16 @@ public static partial class ModelIdentity
         var nameDetectedQuant = DetectQuant(stem);
         var serverQuant = NormalizeServerFtype(serverFtype);
 
-        // Authoritative server ftype outranks the name-based guess; the manual override
-        // outranks everything so a corrected scorecard is never silently overwritten.
-        var authoritativeQuant = serverQuant ?? nameDetectedQuant;
+        // The server ftype (dominant tensor type from the GGUF header) outranks a contradicting
+        // name-based guess. A name that only refines it (Q6_K_L, UD_Q8_K_XL, NVFP4-Q4_K_M: same
+        // bit-width base, mixed-quant recipe) is more specific and wins, otherwise every such
+        // upload would be merged into the plain ftype group. The manual override outranks all.
+        var nameRefinesServer = serverQuant is not null
+                                && nameDetectedQuant is not null
+                                && !string.Equals(serverQuant, nameDetectedQuant, StringComparison.OrdinalIgnoreCase)
+                                && QuantBase(serverQuant) is { } serverBase
+                                && string.Equals(serverBase, QuantBase(nameDetectedQuant), StringComparison.OrdinalIgnoreCase);
+        var authoritativeQuant = nameRefinesServer ? nameDetectedQuant : serverQuant ?? nameDetectedQuant;
         var quant = !string.IsNullOrWhiteSpace(quantOverride)
             ? quantOverride.Trim()
             : authoritativeQuant ?? UnknownQuant;
@@ -54,7 +61,7 @@ public static partial class ModelIdentity
             Quant = quant,
             QuantWasDetected = authoritativeQuant is not null,
             QuantSource = string.IsNullOrWhiteSpace(quantOverride)
-                ? (serverQuant is not null ? QuantSource.Server : (nameDetectedQuant is not null ? QuantSource.Name : QuantSource.None))
+                ? (serverQuant is not null && !nameRefinesServer ? QuantSource.Server : (nameDetectedQuant is not null ? QuantSource.Name : QuantSource.None))
                 : QuantSource.Manual
         };
     }
@@ -183,6 +190,13 @@ public static partial class ModelIdentity
         return leaf.Trim();
     }
 
+    /// <summary>Bit-width base of a quant token ("Q6", "IQ4", "BF16"), used to tell a refinement from a contradiction.</summary>
+    private static string? QuantBase(string quant)
+    {
+        var match = QuantBaseRegex().Match(quant);
+        return match.Success ? match.Groups[1].Value.ToUpperInvariant() : null;
+    }
+
     private static string? DetectQuant(string stem)
     {
         if (string.IsNullOrWhiteSpace(stem))
@@ -196,12 +210,18 @@ public static partial class ModelIdentity
             return null;
         }
 
-        // Normalise common float aliases to a single label.
+        // Normalise aliases to one label: FP16/FP32 floats, "UD-" prefix, MXFP4 MoE as the server spells it.
         var value = match.Value.ToUpperInvariant();
+        if (value.StartsWith("UD-", StringComparison.Ordinal))
+        {
+            value = "UD_" + value[3..];
+        }
+
         return value switch
         {
             "FP16" => "F16",
             "FP32" => "F32",
+            "MXFP4_MOE" or "MXFP4-MOE" => "MXFP4_MoE",
             _ => value
         };
     }
@@ -230,16 +250,19 @@ public static partial class ModelIdentity
         return string.IsNullOrWhiteSpace(family) ? "unknown-model" : family.ToLowerInvariant();
     }
 
-    // IQ quants first (longer tokens), then K-quants, then legacy Qn_n, then floats.
-    [GeneratedRegex(
-        @"(?<![A-Za-z0-9])(IQ[1-4]_(?:XXS|XS|S|M|NL)|Q[2-8]_K(?:_[SML])?|Q[2-8]_[01]|Q[2-8]_K|BF16|FP16|FP32|F16|F32)(?![A-Za-z0-9])",
-        RegexOptions.IgnoreCase)]
+    // Compound/prefixed tokens first (NVFP4-Q4_K_M, UD-Q4_K_XL), then IQ, K-quants with
+    // _XL/_L/_M/_S recipes, legacy Qn_n (incl. Q1_0 and Q4_0_4_4), ternary TQ, FP4 formats, floats.
+    private const string QuantPattern =
+        @"NVFP4[-_]Q[1-8]_K(?:_(?:XL|L|M|S))?|(?:UD[-_])?(?:IQ[1-4]_(?:XXS|XS|S|M|NL)|Q[1-8]_K(?:_(?:XXL|XL|L|M|S))?|Q[1-8]_[01](?:_[48]_[48])?|TQ[12]_0)|MXFP4(?:[-_]MOE)?|NVFP4|BF16|FP16|FP32|F16|F32";
+
+    [GeneratedRegex(@"(?<![A-Za-z0-9])(" + QuantPattern + @")(?![A-Za-z0-9])", RegexOptions.IgnoreCase)]
     private static partial Regex QuantRegex();
 
-    [GeneratedRegex(
-        @"[-_.]?(IQ[1-4]_(?:XXS|XS|S|M|NL)|Q[2-8]_K(?:_[SML])?|Q[2-8]_[01]|Q[2-8]_K|BF16|FP16|FP32|F16|F32)(?![A-Za-z0-9])",
-        RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"[-_.]?(" + QuantPattern + @")(?![A-Za-z0-9])", RegexOptions.IgnoreCase)]
     private static partial Regex QuantStripRegex();
+
+    [GeneratedRegex(@"(?:UD[-_]|NVFP4[-_])?(I?Q\d|TQ\d|BF16|F16|F32|MXFP4|NVFP4)", RegexOptions.IgnoreCase)]
+    private static partial Regex QuantBaseRegex();
 
     [GeneratedRegex(@"-\d{5}-of-\d{5}$", RegexOptions.IgnoreCase)]
     private static partial Regex ShardSuffixRegex();

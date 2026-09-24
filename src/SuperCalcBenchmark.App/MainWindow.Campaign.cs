@@ -174,19 +174,21 @@ public partial class MainWindow
             return;
         }
 
+        // The Quant field belongs to the single-run tab. Campaign models are identified by the
+        // server ftype / GGUF name; inheriting the field would mislabel every model of the batch.
         var selectedRuntimes = _campaignRuntimes.Where(r => r.Selected).ToList();
         var items = new List<CampaignItem>();
         foreach (var model in selectedModels)
         {
             if (selectedRuntimes.Count == 0)
             {
-                items.Add(new CampaignItem { ModelId = model.Id, ModelName = model.Name, Repeats = repeats, QuantOverride = baseOptions.QuantOverride });
+                items.Add(new CampaignItem { ModelId = model.Id, ModelName = model.Name, Repeats = repeats });
                 continue;
             }
 
             foreach (var runtime in selectedRuntimes)
             {
-                items.Add(new CampaignItem { ModelId = model.Id, ModelName = model.Name, RuntimeId = runtime.Id, RuntimeLabel = runtime.Label, Repeats = repeats, QuantOverride = baseOptions.QuantOverride });
+                items.Add(new CampaignItem { ModelId = model.Id, ModelName = model.Name, RuntimeId = runtime.Id, RuntimeLabel = runtime.Label, Repeats = repeats });
             }
         }
 

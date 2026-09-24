@@ -4,7 +4,7 @@ namespace SuperCalcBenchmark.Core;
 
 public sealed class BenchmarkRunner
 {
-    private const string ToolVersion = "0.7.7";
+    private const string ToolVersion = "0.7.8";
 
     private readonly GroundTruthStore _groundTruthStore;
     private readonly PromptBuilder _promptBuilder;
@@ -13,6 +13,7 @@ public sealed class BenchmarkRunner
     private readonly TruthAuditParser _truthAuditParser;
     private readonly TruthAuditScoringEngine _truthAuditScoringEngine;
     private readonly ReportWriter _reportWriter;
+    private readonly Func<BenchmarkOptions, LlamaCppClient> _clientFactory;
 
     public BenchmarkRunner(
         GroundTruthStore? groundTruthStore = null,
@@ -21,7 +22,8 @@ public sealed class BenchmarkRunner
         ScoringEngine? scoringEngine = null,
         TruthAuditParser? truthAuditParser = null,
         TruthAuditScoringEngine? truthAuditScoringEngine = null,
-        ReportWriter? reportWriter = null)
+        ReportWriter? reportWriter = null,
+        Func<BenchmarkOptions, LlamaCppClient>? clientFactory = null)
     {
         _groundTruthStore = groundTruthStore ?? new GroundTruthStore();
         _promptBuilder = promptBuilder ?? new PromptBuilder();
@@ -30,6 +32,7 @@ public sealed class BenchmarkRunner
         _truthAuditParser = truthAuditParser ?? new TruthAuditParser();
         _truthAuditScoringEngine = truthAuditScoringEngine ?? new TruthAuditScoringEngine();
         _reportWriter = reportWriter ?? new ReportWriter();
+        _clientFactory = clientFactory ?? (options => new LlamaCppClient(options.Timeout, apiKey: options.ServerApiKey));
     }
 
     public async Task<BenchmarkRunResult> RunAsync(
@@ -58,8 +61,9 @@ public sealed class BenchmarkRunner
             options.TruthAuditPromptPath,
             options.TruthAuditSchemaPath);
         ValidatePreflight(options, source, groundTruth);
+        var assetIdentity = ResolveAssetIdentity(options);
 
-        using var client = new LlamaCppClient(options.Timeout, apiKey: options.ServerApiKey);
+        using var client = _clientFactory(options);
         progress?.Invoke("Reading server context window...");
         var serverContextSize = await client.GetServerContextSizeAsync(options.ServerUrl, cancellationToken).ConfigureAwait(false);
 
@@ -107,7 +111,11 @@ public sealed class BenchmarkRunner
         {
             ToolVersion = ToolVersion,
             BenchmarkId = groundTruth.BenchmarkId,
-            BenchmarkProfile = options.BenchmarkProfile,
+            // Custom prompts, schema or answer key produce a result that is not comparable with
+            // official runs; it is labelled instead of silently entering official comparisons.
+            BenchmarkProfile = assetIdentity.CustomAssets && string.Equals(options.BenchmarkProfile, "official", StringComparison.OrdinalIgnoreCase)
+                ? "custom-assets"
+                : options.BenchmarkProfile,
             StartedAt = startedAt,
             ServerUrl = options.ServerUrl,
             Model = options.Model,
@@ -146,6 +154,11 @@ public sealed class BenchmarkRunner
             cancellationToken,
             run1ManualAbortToken).ConfigureAwait(false);
 
+        if (run1Completion.DiscardedEmptyAttempts > 0)
+        {
+            AddRunNote(result, progress, $"Run 1: the server first returned only reasoning; the request was re-sampled {run1Completion.DiscardedEmptyAttempts}x and the discarded attempt's tokens are included in the token count.");
+        }
+
         if (run1Completion.ManuallyStopped)
         {
             progress?.Invoke("Run 1 manually stopped by user; parsing/scoring partial output and visible thinking...");
@@ -170,7 +183,7 @@ public sealed class BenchmarkRunner
             {
                 GroundTruthSha256 = groundTruthSha256,
                 SourceSha256 = source.Sha256,
-                PromptVersion = PromptVersions.AnalysisV1
+                PromptVersion = assetIdentity.AnalysisPromptVersion
             });
         run1Score = ApplyAdjudicationIfConfigured(run1Score, options);
         var run1ReasoningDisclosure = BuildReasoningDisclosure("Run 1", run1Content.ReasoningContent, run1Score, groundTruth, source, scoringProfile, groundTruthSha256);
@@ -178,7 +191,7 @@ public sealed class BenchmarkRunner
         result.Run1 = new BenchmarkRunArtifacts
         {
             RunName = "Run 1",
-            PromptVersion = PromptVersions.AnalysisV1,
+            PromptVersion = assetIdentity.AnalysisPromptVersion,
             RunKind = "blind_analysis",
             StartedAt = run1StartedAt,
             CompletedAt = run1CompletedAt,
@@ -208,167 +221,205 @@ public sealed class BenchmarkRunner
         // matrix and raw output while Run 2 is still in flight.
         onRunCompleted?.Invoke(result.Run1);
 
-        progress?.Invoke("Building Run 2 self-validation prompt...");
-        var run2Prompt = _promptBuilder.BuildSelfValidationPrompt(source, options.SelfValidatePromptPath, options.SchemaPath, run1Content.OutputContent);
-        var run2StartedAt = DateTimeOffset.UtcNow;
-        progress?.Invoke("Sending Run 2 self-validation to llama-server...");
-        var run2Completion = await client.CreateChatCompletionAsync(
-            options.ServerUrl,
-            options.Model,
-            BuildSystemPrompt("Run 2 self-validation"),
-            run2Prompt,
-            options,
-            streamProgress,
-            cancellationToken,
-            run2ManualAbortToken).ConfigureAwait(false);
+        if (string.IsNullOrWhiteSpace(run1Content.OutputContent))
+        {
+            // Without a final Run-1 answer, Run 2 would be a second blind attempt rather than a
+            // self-validation, and its score would silently become the headline.
+            AddRunNote(result, progress, "Run 2 skipped: Run 1 produced no final answer to self-validate.");
+        }
+        else
+        {
+            try
+            {
+                progress?.Invoke("Building Run 2 self-validation prompt...");
+                var run2Prompt = _promptBuilder.BuildSelfValidationPrompt(source, options.SelfValidatePromptPath, options.SchemaPath, run1Content.OutputContent);
+                var run2StartedAt = DateTimeOffset.UtcNow;
+                progress?.Invoke("Sending Run 2 self-validation to llama-server...");
+                var run2Completion = await client.CreateChatCompletionAsync(
+                    options.ServerUrl,
+                    options.Model,
+                    BuildSystemPrompt("Run 2 self-validation"),
+                    run2Prompt,
+                    options,
+                    streamProgress,
+                    cancellationToken,
+                    run2ManualAbortToken).ConfigureAwait(false);
+
+                if (run2Completion.DiscardedEmptyAttempts > 0)
+        {
+            AddRunNote(result, progress, $"Run 2: the server first returned only reasoning; the request was re-sampled {run2Completion.DiscardedEmptyAttempts}x and the discarded attempt's tokens are included in the token count.");
+        }
 
         if (run2Completion.ManuallyStopped)
-        {
-            progress?.Invoke("Run 2 manually stopped by user; parsing/scoring partial output and visible thinking...");
-        }
+                {
+                    progress?.Invoke("Run 2 manually stopped by user; parsing/scoring partial output and visible thinking...");
+                }
 
-        if (run2Completion.LoopDetected)
-        {
-            progress?.Invoke($"Run 2 stopped early by loop guard: {run2Completion.LoopDiagnosticsSummary}");
-        }
+                if (run2Completion.LoopDetected)
+                {
+                    progress?.Invoke($"Run 2 stopped early by loop guard: {run2Completion.LoopDiagnosticsSummary}");
+                }
 
-        progress?.Invoke("Parsing and scoring Run 2...");
-        var run2Content = SplitThinkingContent(run2Completion.AssistantContent, run2Completion.ReasoningContent);
-        var run2Tokens = await CountCompletionTokensAsync(client, options.ServerUrl, options.Model, run2Content, run2Completion, cancellationToken).ConfigureAwait(false);
-        var run2Parse = _responseParser.Parse(run2Content.OutputContent);
-        var run2Score = _scoringEngine.Score(
-            "Run 2",
-            run2Parse.Findings,
-            groundTruth,
-            source,
-            profile: scoringProfile,
-            context: new ScoreComputationContext
+                progress?.Invoke("Parsing and scoring Run 2...");
+                var run2Content = SplitThinkingContent(run2Completion.AssistantContent, run2Completion.ReasoningContent);
+                var run2Tokens = await CountCompletionTokensAsync(client, options.ServerUrl, options.Model, run2Content, run2Completion, cancellationToken).ConfigureAwait(false);
+                var run2Parse = _responseParser.Parse(run2Content.OutputContent);
+                var run2Score = _scoringEngine.Score(
+                    "Run 2",
+                    run2Parse.Findings,
+                    groundTruth,
+                    source,
+                    profile: scoringProfile,
+                    context: new ScoreComputationContext
+                    {
+                        GroundTruthSha256 = groundTruthSha256,
+                        SourceSha256 = source.Sha256,
+                        PromptVersion = assetIdentity.SelfValidatePromptVersion
+                    });
+                run2Score = ApplyAdjudicationIfConfigured(run2Score, options);
+                var run2ReasoningDisclosure = BuildReasoningDisclosure("Run 2", run2Content.ReasoningContent, run2Score, groundTruth, source, scoringProfile, groundTruthSha256);
+                var run2CompletedAt = DateTimeOffset.UtcNow;
+                result.Run2 = new BenchmarkRunArtifacts
+                {
+                    RunName = "Run 2",
+                    PromptVersion = assetIdentity.SelfValidatePromptVersion,
+                    RunKind = "self_validation",
+                    StartedAt = run2StartedAt,
+                    CompletedAt = run2CompletedAt,
+                    Prompt = run2Prompt,
+                    Response = run2Content.OutputContent,
+                    ReasoningContent = run2Content.ReasoningContent,
+                    RawResponse = run2Completion.RawResponse,
+                    RequestJson = run2Completion.RequestJson,
+                    FinishReason = run2Completion.FinishReason,
+                    PromptTokens = run2Completion.PromptTokens,
+                    ResponseTokens = run2Tokens.Output,
+                    ReasoningTokens = run2Tokens.Reasoning,
+                    CompletionTokens = run2Tokens.Total,
+                    LoopDetected = run2Completion.LoopDetected,
+                    LoopDiagnosticsSummary = run2Completion.LoopDiagnosticsSummary,
+                    ManuallyStopped = run2Completion.ManuallyStopped,
+                    UsedResponseFormat = run2Completion.UsedResponseFormat,
+                    RetriedWithoutResponseFormat = run2Completion.RetriedWithoutResponseFormat,
+                    UsedThinkingControl = run2Completion.UsedThinkingControl,
+                    RetriedWithoutThinkingControl = run2Completion.RetriedWithoutThinkingControl,
+                    Parse = run2Parse,
+                    Score = run2Score,
+                    ReasoningDisclosure = run2ReasoningDisclosure
+                };
+
+                onRunCompleted?.Invoke(result.Run2);
+
+                result.Comparison = _scoringEngine.Compare(run1Score, run2Score);
+                result.Comparison.ParseQualityDelta = BehavioralDiagnosticsCalculator.ParseTransition(run1Parse.ParseMode, run2Parse.ParseMode).Delta;
+            }
+            catch (Exception ex) when (IsRecoverableRunFailure(ex, cancellationToken))
             {
-                GroundTruthSha256 = groundTruthSha256,
-                SourceSha256 = source.Sha256,
-                PromptVersion = PromptVersions.SelfValidateV1
-            });
-        run2Score = ApplyAdjudicationIfConfigured(run2Score, options);
-        var run2ReasoningDisclosure = BuildReasoningDisclosure("Run 2", run2Content.ReasoningContent, run2Score, groundTruth, source, scoringProfile, groundTruthSha256);
-        var run2CompletedAt = DateTimeOffset.UtcNow;
-        result.Run2 = new BenchmarkRunArtifacts
-        {
-            RunName = "Run 2",
-            PromptVersion = PromptVersions.SelfValidateV1,
-            RunKind = "self_validation",
-            StartedAt = run2StartedAt,
-            CompletedAt = run2CompletedAt,
-            Prompt = run2Prompt,
-            Response = run2Content.OutputContent,
-            ReasoningContent = run2Content.ReasoningContent,
-            RawResponse = run2Completion.RawResponse,
-            RequestJson = run2Completion.RequestJson,
-            FinishReason = run2Completion.FinishReason,
-            PromptTokens = run2Completion.PromptTokens,
-            ResponseTokens = run2Tokens.Output,
-            ReasoningTokens = run2Tokens.Reasoning,
-            CompletionTokens = run2Tokens.Total,
-            LoopDetected = run2Completion.LoopDetected,
-            LoopDiagnosticsSummary = run2Completion.LoopDiagnosticsSummary,
-            ManuallyStopped = run2Completion.ManuallyStopped,
-            UsedResponseFormat = run2Completion.UsedResponseFormat,
-            RetriedWithoutResponseFormat = run2Completion.RetriedWithoutResponseFormat,
-            UsedThinkingControl = run2Completion.UsedThinkingControl,
-            RetriedWithoutThinkingControl = run2Completion.RetriedWithoutThinkingControl,
-            Parse = run2Parse,
-            Score = run2Score,
-            ReasoningDisclosure = run2ReasoningDisclosure
-        };
-
-        onRunCompleted?.Invoke(result.Run2);
-
-        result.Comparison = _scoringEngine.Compare(run1Score, run2Score);
+                // Keep the completed Run 1: it is still written, reported and archived below.
+                result.Run2 = null;
+                result.Comparison = null;
+                AddRunNote(result, progress, $"Run 2 failed and was not scored: {ex.GetType().Name}: {ex.Message}");
+            }
+        }
 
         if (options.WithTruthAudit)
         {
-            var auditTarget = SelectTruthAuditTarget(result, options.TruthAuditSource);
-            progress?.Invoke($"Building Run 3 truth-audit prompt for {auditTarget.Artifacts.RunName}...");
-            var run3Prompt = _promptBuilder.BuildTruthAuditPrompt(
-                groundTruth,
-                options.TruthAuditPromptPath,
-                options.TruthAuditSchemaPath,
-                auditTarget.Artifacts.RunName,
-                auditTarget.Artifacts.Response,
-                source);
-            var run3StartedAt = DateTimeOffset.UtcNow;
-            progress?.Invoke("Sending Run 3 truth audit to llama-server...");
-            var run3Completion = await client.CreateChatCompletionAsync(
-                options.ServerUrl,
-                options.Model,
-                BuildSystemPrompt("Run 3 truth audit / non-blind accountability evaluation"),
-                run3Prompt,
-                options,
-                streamProgress,
-                cancellationToken,
-                run3ManualAbortToken).ConfigureAwait(false);
-
-            if (run3Completion.ManuallyStopped)
+            try
             {
-                progress?.Invoke("Run 3 manually stopped by user; parsing/scoring partial output and visible thinking...");
-            }
+                var auditTarget = SelectTruthAuditTarget(result, options.TruthAuditSource);
+                progress?.Invoke($"Building Run 3 truth-audit prompt for {auditTarget.Artifacts.RunName}...");
+                var run3Prompt = _promptBuilder.BuildTruthAuditPrompt(
+                    groundTruth,
+                    options.TruthAuditPromptPath,
+                    options.TruthAuditSchemaPath,
+                    auditTarget.Artifacts.RunName,
+                    auditTarget.Artifacts.Response,
+                    source);
+                var run3StartedAt = DateTimeOffset.UtcNow;
+                progress?.Invoke("Sending Run 3 truth audit to llama-server...");
+                var run3Completion = await client.CreateChatCompletionAsync(
+                    options.ServerUrl,
+                    options.Model,
+                    BuildSystemPrompt("Run 3 truth audit / non-blind accountability evaluation"),
+                    run3Prompt,
+                    options,
+                    streamProgress,
+                    cancellationToken,
+                    run3ManualAbortToken).ConfigureAwait(false);
 
-            progress?.Invoke("Parsing and scoring Run 3 truth audit...");
-            var run3Content = SplitThinkingContent(run3Completion.AssistantContent, run3Completion.ReasoningContent);
-            var run3Tokens = await CountCompletionTokensAsync(client, options.ServerUrl, options.Model, run3Content, run3Completion, cancellationToken).ConfigureAwait(false);
-            var truthAuditResponse = _truthAuditParser.Parse(run3Content.OutputContent);
-            var truthAudit = _truthAuditScoringEngine.Score(
-                truthAuditResponse,
-                auditTarget.Artifacts.Score,
-                auditTarget.Artifacts.Response,
-                auditTarget.Artifacts.RunName,
-                auditTarget.SelectionReason,
-                auditTarget.Artifacts.Parse.Findings,
-                truthAuditPromptVersion);
-            var run3CompletedAt = DateTimeOffset.UtcNow;
-            result.Run3 = new BenchmarkRunArtifacts
-            {
-                RunName = "Run 3",
-                PromptVersion = truthAuditPromptVersion,
-                RunKind = "truth_audit",
-                GroundTruthVisibleToModel = true,
-                StartedAt = run3StartedAt,
-                CompletedAt = run3CompletedAt,
-                Prompt = run3Prompt,
-                Response = run3Content.OutputContent,
-                ReasoningContent = run3Content.ReasoningContent,
-                RawResponse = run3Completion.RawResponse,
-                RequestJson = run3Completion.RequestJson,
-                FinishReason = run3Completion.FinishReason,
-                PromptTokens = run3Completion.PromptTokens,
-                ResponseTokens = run3Tokens.Output,
-                ReasoningTokens = run3Tokens.Reasoning,
-                CompletionTokens = run3Tokens.Total,
-                LoopDetected = run3Completion.LoopDetected,
-                LoopDiagnosticsSummary = run3Completion.LoopDiagnosticsSummary,
-                ManuallyStopped = run3Completion.ManuallyStopped,
-                UsedResponseFormat = run3Completion.UsedResponseFormat,
-                RetriedWithoutResponseFormat = run3Completion.RetriedWithoutResponseFormat,
-                UsedThinkingControl = run3Completion.UsedThinkingControl,
-                RetriedWithoutThinkingControl = run3Completion.RetriedWithoutThinkingControl,
-                Parse = BuildTruthAuditParseResult(run3Content.OutputContent, truthAuditResponse, truthAudit),
-                Score = new ScoringResult
+                if (run3Completion.DiscardedEmptyAttempts > 0)
+        {
+            AddRunNote(result, progress, $"Run 3: the server first returned only reasoning; the request was re-sampled {run3Completion.DiscardedEmptyAttempts}x and the discarded attempt's tokens are included in the token count.");
+        }
+
+        if (run3Completion.ManuallyStopped)
+                {
+                    progress?.Invoke("Run 3 manually stopped by user; parsing/scoring partial output and visible thinking...");
+                }
+
+                progress?.Invoke("Parsing and scoring Run 3 truth audit...");
+                var run3Content = SplitThinkingContent(run3Completion.AssistantContent, run3Completion.ReasoningContent);
+                var run3Tokens = await CountCompletionTokensAsync(client, options.ServerUrl, options.Model, run3Content, run3Completion, cancellationToken).ConfigureAwait(false);
+                var truthAuditResponse = _truthAuditParser.Parse(run3Content.OutputContent);
+                var truthAudit = _truthAuditScoringEngine.Score(
+                    truthAuditResponse,
+                    auditTarget.Artifacts.Score,
+                    auditTarget.Artifacts.Response,
+                    auditTarget.Artifacts.RunName,
+                    auditTarget.SelectionReason,
+                    auditTarget.Artifacts.Parse.Findings,
+                    truthAuditPromptVersion);
+                var run3CompletedAt = DateTimeOffset.UtcNow;
+                result.Run3 = new BenchmarkRunArtifacts
                 {
                     RunName = "Run 3",
-                    ScoringProfile = auditTarget.Artifacts.Score.ScoringProfile,
-                    ScoringProfileVersion = auditTarget.Artifacts.Score.ScoringProfileVersion,
-                    ScoringEngineVersion = auditTarget.Artifacts.Score.ScoringEngineVersion,
-                    ParserVersion = ResponseParser.CurrentParserVersion,
-                    GroundTruthSha256 = groundTruthSha256,
-                    SourceSha256 = source.Sha256,
                     PromptVersion = truthAuditPromptVersion,
-                    ScorePercent = truthAudit.AccountabilityScore,
-                    RawPoints = truthAudit.AccountabilityScore
-                },
-                TruthAudit = truthAudit
-            };
+                    RunKind = "truth_audit",
+                    GroundTruthVisibleToModel = true,
+                    StartedAt = run3StartedAt,
+                    CompletedAt = run3CompletedAt,
+                    Prompt = run3Prompt,
+                    Response = run3Content.OutputContent,
+                    ReasoningContent = run3Content.ReasoningContent,
+                    RawResponse = run3Completion.RawResponse,
+                    RequestJson = run3Completion.RequestJson,
+                    FinishReason = run3Completion.FinishReason,
+                    PromptTokens = run3Completion.PromptTokens,
+                    ResponseTokens = run3Tokens.Output,
+                    ReasoningTokens = run3Tokens.Reasoning,
+                    CompletionTokens = run3Tokens.Total,
+                    LoopDetected = run3Completion.LoopDetected,
+                    LoopDiagnosticsSummary = run3Completion.LoopDiagnosticsSummary,
+                    ManuallyStopped = run3Completion.ManuallyStopped,
+                    UsedResponseFormat = run3Completion.UsedResponseFormat,
+                    RetriedWithoutResponseFormat = run3Completion.RetriedWithoutResponseFormat,
+                    UsedThinkingControl = run3Completion.UsedThinkingControl,
+                    RetriedWithoutThinkingControl = run3Completion.RetriedWithoutThinkingControl,
+                    Parse = BuildTruthAuditParseResult(run3Content.OutputContent, truthAuditResponse, truthAudit),
+                    Score = new ScoringResult
+                    {
+                        RunName = "Run 3",
+                        ScoringProfile = auditTarget.Artifacts.Score.ScoringProfile,
+                        ScoringProfileVersion = auditTarget.Artifacts.Score.ScoringProfileVersion,
+                        ScoringEngineVersion = auditTarget.Artifacts.Score.ScoringEngineVersion,
+                        ParserVersion = ResponseParser.CurrentParserVersion,
+                        GroundTruthSha256 = groundTruthSha256,
+                        SourceSha256 = source.Sha256,
+                        PromptVersion = truthAuditPromptVersion,
+                        ScorePercent = truthAudit.AccountabilityScore,
+                        RawPoints = truthAudit.AccountabilityScore
+                    },
+                    TruthAudit = truthAudit
+                };
 
-            result.BehavioralDiagnostics = BehavioralDiagnosticsCalculator.Calculate(result, truthAuditResponse, auditTarget.Artifacts);
-            onRunCompleted?.Invoke(result.Run3);
+                result.BehavioralDiagnostics = TryCalculateDiagnostics(result, truthAuditResponse, auditTarget.Artifacts, progress);
+                onRunCompleted?.Invoke(result.Run3);
+            }
+            catch (Exception ex) when (IsRecoverableRunFailure(ex, cancellationToken))
+            {
+                result.Run3 = null;
+                AddRunNote(result, progress, $"Run 3 truth audit failed and was not scored: {ex.GetType().Name}: {ex.Message}");
+            }
         }
 
         result.CompletedAt = DateTimeOffset.UtcNow;
@@ -403,7 +454,7 @@ public sealed class BenchmarkRunner
             options.TruthAuditSchemaPath);
         ValidatePreflight(options, source, groundTruth);
 
-        using var client = new LlamaCppClient(options.Timeout, apiKey: options.ServerApiKey);
+        using var client = _clientFactory(options);
         var auditTarget = SelectTruthAuditTarget(result, options.TruthAuditSource);
         progress?.Invoke($"Building Run 3 truth-audit prompt for {auditTarget.Artifacts.RunName}...");
         var run3Prompt = _promptBuilder.BuildTruthAuditPrompt(
@@ -479,7 +530,7 @@ public sealed class BenchmarkRunner
             TruthAudit = truthAudit
         };
 
-        result.BehavioralDiagnostics = BehavioralDiagnosticsCalculator.Calculate(result, truthAuditResponse, auditTarget.Artifacts);
+        result.BehavioralDiagnostics = TryCalculateDiagnostics(result, truthAuditResponse, auditTarget.Artifacts, progress);
         result.CompletedAt = DateTimeOffset.UtcNow;
         onRunCompleted?.Invoke(result.Run3);
         progress?.Invoke("Writing updated truth-audit artifacts and report...");
@@ -631,13 +682,13 @@ public sealed class BenchmarkRunner
             var strayBlock = assistantContent[..firstClose];
 
             // Only prose counts as stray reasoning. If the text before the tag already carries
-            // the answer payload (a findings object or a fenced block), the tag is noise inside
-            // the output (typically a looping tail) and must not swallow the real answer.
-            var prefixLooksLikeAnswer = strayBlock.Contains("\"findings\"", StringComparison.OrdinalIgnoreCase)
-                                        || strayBlock.Contains("```", StringComparison.Ordinal)
-                                        || strayBlock.TrimStart().StartsWith('{')
-                                        || strayBlock.TrimStart().StartsWith('[');
-            if (!prefixLooksLikeAnswer)
+            // the answer payload (a findings object or a fenced block) and nothing answer-like
+            // follows the tag, the tag is noise inside the output (typically a looping tail) and
+            // must not swallow the real answer. Reasoning often quotes code in fences, so when an
+            // answer follows the tag the prefix is reasoning even if it contains a fence.
+            var prefixLooksLikeAnswer = LooksLikeAnswerPayload(strayBlock);
+            var suffixLooksLikeAnswer = LooksLikeAnswerPayload(assistantContent[(firstClose + "</think>".Length)..]);
+            if (!prefixLooksLikeAnswer || suffixLooksLikeAnswer)
             {
                 if (!string.IsNullOrWhiteSpace(strayBlock))
                 {
@@ -668,6 +719,26 @@ public sealed class BenchmarkRunner
             var end = assistantContent.IndexOf("</think>", tagEnd + 1, StringComparison.OrdinalIgnoreCase);
             if (end < 0)
             {
+                // An opening tag without a close means the output ended inside the reasoning
+                // (e.g. truncated at the token limit). With no answer before it, the remainder is
+                // reasoning, not a final answer whose draft JSON would otherwise be scored.
+                if (string.IsNullOrWhiteSpace(assistantContent[cursor..start]) && output.Length == 0)
+                {
+                    extractedAnyBlock = true;
+                    var unclosed = assistantContent[(tagEnd + 1)..].Trim();
+                    if (!string.IsNullOrWhiteSpace(unclosed))
+                    {
+                        if (reasoning.Length > 0)
+                        {
+                            reasoning.AppendLine().AppendLine();
+                        }
+
+                        reasoning.Append(unclosed);
+                    }
+
+                    break;
+                }
+
                 output.Append(assistantContent, cursor, assistantContent.Length - cursor);
                 break;
             }
@@ -692,6 +763,13 @@ public sealed class BenchmarkRunner
             ? (output.ToString().Trim(), reasoning.ToString().Trim())
             : (assistantContent, string.Empty);
     }
+
+    private static bool LooksLikeAnswerPayload(string text)
+        => text.Contains("\"findings\"", StringComparison.OrdinalIgnoreCase)
+           || text.Contains("\"truth_items\"", StringComparison.OrdinalIgnoreCase)
+           || text.Contains("```", StringComparison.Ordinal)
+           || text.TrimStart().StartsWith('{')
+           || text.TrimStart().StartsWith('[');
 
     private static string CombineReasoning(string reasoningContent, string inlineReasoning)
     {
@@ -735,15 +813,92 @@ public sealed class BenchmarkRunner
         return ReasoningDisclosureAnalyzer.Analyze(reasoningContent, reasoningParse, reasoningScore, outputScore);
     }
 
+    /// <summary>
+    /// A failure in a later run (server error, context overflow, timeout) must not discard the
+    /// runs that already completed. Only a cancellation the caller requested stops everything.
+    /// </summary>
+    private sealed record AssetIdentity(string AnalysisPromptVersion, string SelfValidatePromptVersion, bool CustomAssets);
+
+    /// <summary>
+    /// Prompt versions follow the prompt files actually used: the bundled version when the file
+    /// equals the bundled asset, otherwise "custom:&lt;file&gt;". Any custom prompt, findings
+    /// schema or answer key marks the run as not official.
+    /// </summary>
+    private static AssetIdentity ResolveAssetIdentity(BenchmarkOptions options)
+    {
+        BenchmarkPathSet? bundled = null;
+        try
+        {
+            bundled = BenchmarkPathResolver.Resolve();
+        }
+        catch (Exception exception) when (exception is DirectoryNotFoundException or IOException or ArgumentException)
+        {
+            // Without resolvable bundled assets fall back to the file names below.
+        }
+
+        string Version(string path, string? bundledPath, string bundledFile, string bundledVersion)
+            => bundledPath is not null
+                ? PromptVersions.ForPromptFile(path, bundledPath, bundledVersion)
+                : string.Equals(Path.GetFileName(path), bundledFile, StringComparison.OrdinalIgnoreCase)
+                    ? bundledVersion
+                    : PromptVersions.CustomPrefix + Path.GetFileName(path);
+
+        var analysis = Version(options.AnalysisPromptPath, bundled?.AnalysisPromptPath, "analysis_v1.md", PromptVersions.AnalysisV1);
+        var selfValidate = Version(options.SelfValidatePromptPath, bundled?.SelfValidatePromptPath, "self_validate_v1.md", PromptVersions.SelfValidateV1);
+        var custom = analysis.StartsWith(PromptVersions.CustomPrefix, StringComparison.Ordinal)
+                     || selfValidate.StartsWith(PromptVersions.CustomPrefix, StringComparison.Ordinal)
+                     || (bundled is not null
+                         && (!PromptVersions.FilesIdentical(options.SchemaPath, bundled.FindingsSchemaPath)
+                             || !PromptVersions.FilesIdentical(options.GroundTruthPath, bundled.GroundTruthPath)));
+        return new AssetIdentity(analysis, selfValidate, custom);
+    }
+
+    private static bool IsRecoverableRunFailure(Exception exception, CancellationToken cancellationToken)
+        => exception is not OutOfMemoryException
+           && !(exception is OperationCanceledException && cancellationToken.IsCancellationRequested);
+
+    private static void AddRunNote(BenchmarkRunResult result, Action<string>? progress, string note)
+    {
+        result.RunNotes.Add(note);
+        progress?.Invoke(note);
+    }
+
+    /// <summary>
+    /// diagnostics-v1 is non-scoring. A malformed audit answer may make it unavailable, but it
+    /// must never abort the run before the report and scorecard are written.
+    /// </summary>
+    private static BehavioralDiagnosticsEnvelope? TryCalculateDiagnostics(
+        BenchmarkRunResult result,
+        TruthAuditResponse truthAuditResponse,
+        BenchmarkRunArtifacts target,
+        Action<string>? progress)
+    {
+        try
+        {
+            return BehavioralDiagnosticsCalculator.Calculate(result, truthAuditResponse, target);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            AddRunNote(result, progress, $"Behavioral diagnostics unavailable: {ex.GetType().Name}: {ex.Message}");
+            return null;
+        }
+    }
+
     private static (BenchmarkRunArtifacts Artifacts, string SelectionReason) SelectTruthAuditTarget(BenchmarkRunResult result, string requestedSource)
     {
-        var source = (requestedSource ?? "best").Trim().ToLowerInvariant();
-        if (source is "run1" or "run-1" or "1")
+        var requested = (requestedSource ?? "best").Trim();
+        var canonical = AuditedRunNames.Normalize(requested);
+        if (canonical is null && !string.Equals(requested, "best", StringComparison.OrdinalIgnoreCase) && requested.Length > 0)
+        {
+            throw new ArgumentException($"Unknown truth-audit source '{requestedSource}'. Use best, run1 or run2.");
+        }
+
+        if (canonical == "Run 1")
         {
             return (result.Run1, "forced_run1");
         }
 
-        if (source is "run2" or "run-2" or "2")
+        if (canonical == "Run 2")
         {
             return result.Run2 is null
                 ? (result.Run1, "forced_run2_unavailable_fallback_run1")

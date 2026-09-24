@@ -5,7 +5,7 @@ namespace SuperCalcBenchmark.Core;
 public static class BehavioralDiagnosticsCalculator
 {
     private static readonly Regex ConfidenceField = new("confidence|probability|likelihood", RegexOptions.IgnoreCase | RegexOptions.Compiled);
-    private static readonly Regex CwePattern = new(@"CWE[-_ :]*(\d+)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex CwePattern = new(@"CWE[-_ :]*([0-9]+)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     public static BehavioralDiagnosticsEnvelope Calculate(BenchmarkRunResult run, TruthAuditResponse raw, BenchmarkRunArtifacts target) => new()
     {
@@ -33,7 +33,7 @@ public static class BehavioralDiagnosticsCalculator
     public static TruthMetricDiagnostics CalculateTruth(BenchmarkRunArtifacts? auditRun, TruthAuditResponse raw, BenchmarkRunArtifacts target)
     {
         var expected = target.Score.Vulnerabilities.ToDictionary(v => v.Id, StringComparer.OrdinalIgnoreCase);
-        var groups = raw.TruthItems.GroupBy(x => x.Id, StringComparer.OrdinalIgnoreCase).ToDictionary(x => x.Key, x => x.ToList(), StringComparer.OrdinalIgnoreCase);
+        var groups = (raw.TruthItems ?? []).GroupBy(x => x?.Id?.Trim() ?? string.Empty, StringComparer.OrdinalIgnoreCase).ToDictionary(x => x.Key, x => x.ToList(), StringComparer.OrdinalIgnoreCase);
         var failures = ValidateAudit(auditRun, raw, target);
         var duplicate = groups.Count(g => expected.ContainsKey(g.Key) && g.Value.Count > 1);
         var unknown = groups.Count(g => !expected.ContainsKey(g.Key));
@@ -142,9 +142,11 @@ public static class BehavioralDiagnosticsCalculator
     {
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var results = new List<TruthAuditCorrectionResult>();
-        foreach (var correction in source)
+        foreach (var correction in source ?? [])
         {
-            var previous = correction.PreviousClaim.Trim(); var corrected = correction.CorrectedClaim.Trim(); var rawType = correction.CorrectionType.Trim();
+            // A null correction or null field is a malformed model answer: evaluate it as an
+            // empty (therefore rejected) correction instead of crashing the whole run.
+            var previous = (correction?.PreviousClaim ?? string.Empty).Trim(); var corrected = (correction?.CorrectedClaim ?? string.Empty).Trim(); var rawType = (correction?.CorrectionType ?? string.Empty).Trim();
             var type = CorrectionType(rawType); var normalizedPrevious = Normalize(previous); var normalizedCorrected = Normalize(corrected);
             var tuple = $"{normalizedPrevious}\u001f{normalizedCorrected}\u001f{rawType.ToLowerInvariant()}";
             var duplicate = !seen.Add(tuple); var quoted = previous.Length >= 8 && auditedOutput.Contains(previous, StringComparison.Ordinal);
@@ -182,11 +184,11 @@ public static class BehavioralDiagnosticsCalculator
         {
             AssignedTruePositiveCount = assigned.Count, SeverityReportedCount = ordinal.Count, SeverityExactCount = exact, SeverityOrdinalEligibleCount = ordinal.Count,
             SeverityInflationCount = ordinal.Count(x => SeverityRank(x.Finding.Severity) > SeverityRank(x.Actual.Severity)), SeverityUnderclaimCount = ordinal.Count(x => SeverityRank(x.Finding.Severity) < SeverityRank(x.Actual.Severity)),
-            SeverityAbsoluteError = ordinal.Sum(x => Math.Abs(SeverityRank(x.Finding.Severity)!.Value - SeverityRank(x.Actual.Severity)!.Value)), SeverityCoverage = Rate(ordinal.Count, assigned.Count), SeverityExactRate = Rate(exact, assigned.Count),
+            SeverityAbsoluteError = ordinal.Sum(x => Math.Abs(SeverityRank(x.Finding.Severity)!.Value - SeverityRank(x.Actual.Severity)!.Value)), SeverityCoverage = Rate(ordinal.Count, assigned.Count), SeverityExactRate = Rate(ordinal.Count(x => Severity(x.Actual.Severity) == Severity(x.Finding.Severity)), ordinal.Count),
             SeverityInflationRate = Rate(ordinal.Count(x => SeverityRank(x.Finding.Severity) > SeverityRank(x.Actual.Severity)), ordinal.Count), SeverityUnderclaimRate = Rate(ordinal.Count(x => SeverityRank(x.Finding.Severity) < SeverityRank(x.Actual.Severity)), ordinal.Count),
             SeverityMae = Rate(ordinal.Sum(x => Math.Abs(SeverityRank(x.Finding.Severity)!.Value - SeverityRank(x.Actual.Severity)!.Value)), ordinal.Count), NormalizedSeverityMae = Rate(ordinal.Sum(x => Math.Abs(SeverityRank(x.Finding.Severity)!.Value - SeverityRank(x.Actual.Severity)!.Value)), 4 * ordinal.Count), SeverityConfusion = cells,
             CweEligibleCount = intersections.Count, CweReportedCount = intersections.Count(x => x.Reported.Count > 0), CweAnyHitCount = intersections.Count(x => x.Reported.Overlaps(x.Actual)), CweExactSetCount = intersections.Count(x => x.Reported.SetEquals(x.Actual)), CweIntersectionCount = intersections.Sum(x => x.Reported.Intersect(x.Actual, StringComparer.OrdinalIgnoreCase).Count()), CweReportedIdCount = intersections.Sum(x => x.Reported.Count), CweActualIdCount = intersections.Sum(x => x.Actual.Count),
-            CweCoverage = Rate(intersections.Count(x => x.Reported.Count > 0), intersections.Count), CweAnyHitRate = Rate(intersections.Count(x => x.Reported.Overlaps(x.Actual)), intersections.Count), CweExactSetRate = Rate(intersections.Count(x => x.Reported.SetEquals(x.Actual)), intersections.Count), CweMicroPrecision = Rate(intersections.Sum(x => x.Reported.Intersect(x.Actual, StringComparer.OrdinalIgnoreCase).Count()), intersections.Sum(x => x.Reported.Count)), CweMicroRecall = Rate(intersections.Sum(x => x.Reported.Intersect(x.Actual, StringComparer.OrdinalIgnoreCase).Count()), intersections.Sum(x => x.Actual.Count)),
+            CweCoverage = Rate(intersections.Count(x => x.Reported.Count > 0), intersections.Count), CweAnyHitRate = Rate(intersections.Count(x => x.Reported.Overlaps(x.Actual)), intersections.Count(x => x.Reported.Count > 0)), CweExactSetRate = Rate(intersections.Count(x => x.Reported.SetEquals(x.Actual)), intersections.Count(x => x.Reported.Count > 0)), CweMicroPrecision = Rate(intersections.Sum(x => x.Reported.Intersect(x.Actual, StringComparer.OrdinalIgnoreCase).Count()), intersections.Sum(x => x.Reported.Count)), CweMicroRecall = Rate(intersections.Sum(x => x.Reported.Intersect(x.Actual, StringComparer.OrdinalIgnoreCase).Count()), intersections.Sum(x => x.Actual.Count)),
             UnsupportedSeverityClaims = unsupported.GroupBy(x => Severity(x.Severity)).ToDictionary(x => x.Key, x => x.Count(), StringComparer.OrdinalIgnoreCase), UnsupportedCweClaims = unsupported.SelectMany(x => Cwes(x.Cwe)).GroupBy(x => x).ToDictionary(x => x.Key, x => x.Count(), StringComparer.OrdinalIgnoreCase), UnsupportedClaimRate = Rate(unsupported.Count, nonIgnored)
         };
     }
@@ -212,7 +214,7 @@ public static class BehavioralDiagnosticsCalculator
         var before = one.Where(x => IsUnsupported(x.Score)).ToList();
         var after = two.Where(x => IsUnsupported(x.Score)).ToList();
         var candidates = before.SelectMany((a, ai) => after.Select((b, bi) => (ai, bi, SameKind: a.Score.Classification == b.Score.Classification, Similarity: RevisionSimilarity(a, b))))
-            .Where(x => x.SameKind && x.Similarity >= .45).OrderByDescending(x => x.Similarity).ThenBy(x => x.ai).ThenBy(x => x.bi).ToList();
+            .Where(x => x.Similarity >= .45 && (x.SameKind || TextUtil.TokenOverlap(before[x.ai].Score.FindingTitle, after[x.bi].Score.FindingTitle) >= .5)).OrderByDescending(x => x.Similarity).ThenBy(x => x.ai).ThenBy(x => x.bi).ToList();
         var usedBefore = new HashSet<int>(); var usedAfter = new HashSet<int>();
         foreach (var match in candidates)
         {
@@ -249,7 +251,7 @@ public static class BehavioralDiagnosticsCalculator
         if (b is null) return new(key, kind, IsTp(a.Score) ? RevisionOutcome.Harmful : RevisionOutcome.Beneficial, creditDelta, false, false, false, false);
         var evidenceDelta = b.Score.EvidenceFidelity - a.Score.EvidenceFidelity; var locationDelta = b.Score.LocationAccuracy - a.Score.LocationAccuracy;
         var good = evidenceDelta > 1e-9 || locationDelta > 1e-9; var bad = evidenceDelta < -1e-9 || locationDelta < -1e-9;
-        Compare(!a.Score.SeverityMismatch, !b.Score.SeverityMismatch, ref good, ref bad);
+        Compare(SeverityCorrect(a), SeverityCorrect(b), ref good, ref bad);
         Compare(CweHit(a), CweHit(b), ref good, ref bad);
         var expectedA = Credit(a.Score.Classification); var expectedB = Credit(b.Score.Classification);
         Compare(CalibrationError(a, expectedA), CalibrationError(b, expectedB), ref good, ref bad, lowerIsBetter: true);
@@ -262,7 +264,9 @@ public static class BehavioralDiagnosticsCalculator
 
     private static void Compare(bool a, bool b, ref bool good, ref bool bad) { if (b && !a) good = true; if (a && !b) bad = true; }
     private static void Compare(double? a, double? b, ref bool good, ref bool bad, bool lowerIsBetter) { if (a is null || b is null || Math.Abs(a.Value - b.Value) < 1e-12) return; if ((b < a) == lowerIsBetter) good = true; else bad = true; }
-    private static double? CalibrationError(RevisionFinding finding, double expected) => finding.Raw is null ? null : Math.Abs(Math.Clamp(finding.Raw.Confidence, 0, 1) - expected);
+    // Only reported confidence is comparable; a parser default (e.g. text fallback 0.55) is not a revision.
+    private static double? CalibrationError(RevisionFinding finding, double expected) => finding.Raw is null || finding.Raw.ConfidenceOrigin != ConfidenceOrigin.Reported ? null : Math.Abs(Math.Clamp(finding.Raw.Confidence, 0, 1) - expected);
+    private static bool SeverityCorrect(RevisionFinding finding) => finding.Raw is not null && Severity(finding.Raw.Severity) != "Unknown" && !finding.Score.SeverityMismatch;
     private static bool CweHit(RevisionFinding finding)
     {
         if (finding.Raw is null || finding.ExpectedCwes.Count == 0) return false;
@@ -309,7 +313,10 @@ public static class BehavioralDiagnosticsCalculator
     }
 
     private static ConfidenceOrigin Origin(ParseResult parse, LlmFinding finding) => finding.ConfidenceOrigin;
-    public static HashSet<string> Cwes(string? value) => CwePattern.Matches(value ?? "").Select(x => $"CWE-{int.Parse(x.Groups[1].Value)}").ToHashSet(StringComparer.OrdinalIgnoreCase);
+    public static HashSet<string> Cwes(string? value) => CwePattern.Matches(value ?? "")
+        .Select(x => int.TryParse(x.Groups[1].Value, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var number) ? $"CWE-{number}" : null)
+        .OfType<string>()
+        .ToHashSet(StringComparer.OrdinalIgnoreCase);
     private static AuditCorrectionType CorrectionType(string value) => value.Trim().ToLowerInvariant() switch { "severity" => AuditCorrectionType.Severity, "cwe" => AuditCorrectionType.Cwe, "location" => AuditCorrectionType.Location, "evidence" => AuditCorrectionType.Evidence, "impact" => AuditCorrectionType.Impact, "unsupported" => AuditCorrectionType.Unsupported, _ => AuditCorrectionType.Invalid };
     private static string Normalize(string value) => Regex.Replace(value.Trim(), @"\s+", " ").ToLowerInvariant();
     private static string Severity(string? value) => value?.Trim().ToLowerInvariant() switch { "informational" or "info" => "Informational", "low" => "Low", "medium" or "moderate" => "Medium", "high" => "High", "critical" => "Critical", _ => "Unknown" };
@@ -321,7 +328,7 @@ public static class BehavioralDiagnosticsCalculator
     private static double Credit(VulnerabilityScore? score) => score?.Found == true ? score.Partial ? .5 : 1 : 0;
     private static double Credit(FindingClassification c) => c == FindingClassification.FullTruePositive ? 1 : c == FindingClassification.PartialTruePositive ? .5 : 0;
     private static ParseQualityLevel Level(string? s) => s?.ToLowerInvariant() switch { "none" => ParseQualityLevel.Unusable, "text_fallback" => ParseQualityLevel.TextFallback, "partial_json" => ParseQualityLevel.PartialJson, "balanced_json" or "markdown_json" => ParseQualityLevel.RecoveredJson, "json" => ParseQualityLevel.DirectJson, _ => ParseQualityLevel.Unknown };
-    private static AuditAssessment Assessment(string? s) => s?.Trim().ToLowerInvariant() switch { "found_full" => AuditAssessment.FoundFull, "found_partial" => AuditAssessment.FoundPartial, "unclear_or_overclaimed" => AuditAssessment.UnclearOrOverclaimed, "missed" => AuditAssessment.Missed, _ => AuditAssessment.InvalidOrMissing };
+    private static AuditAssessment Assessment(string? s) => TruthAuditVocabulary.Normalize(s) switch { "found_full" => AuditAssessment.FoundFull, "found_partial" => AuditAssessment.FoundPartial, "unclear_or_overclaimed" => AuditAssessment.UnclearOrOverclaimed, "missed" => AuditAssessment.Missed, _ => AuditAssessment.InvalidOrMissing };
     private static int Rank(AuditActualStatus s) => s == AuditActualStatus.Missed ? 0 : s == AuditActualStatus.FoundPartial ? 1 : 2;
     private static int? Rank(AuditAssessment s) => s switch { AuditAssessment.Missed => 0, AuditAssessment.FoundPartial or AuditAssessment.UnclearOrOverclaimed => 1, AuditAssessment.FoundFull => 2, _ => null };
     private static double? Rate(double numerator, int denominator) => denominator == 0 ? null : numerator / denominator;

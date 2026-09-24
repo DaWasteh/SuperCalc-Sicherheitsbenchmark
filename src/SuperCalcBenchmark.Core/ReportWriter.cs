@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 
@@ -118,6 +119,10 @@ public sealed class ReportWriter
                 builder.AppendLine($"- Launch parameters: `{EscapePipe(string.Join(' ', launch))}`");
             }
 
+            builder.AppendLine(string.IsNullOrWhiteSpace(runtime.SamplerSettings)
+                ? "- Server sampler defaults: `not reported` (the benchmark never sends sampler settings)"
+                : $"- Server sampler defaults: `{EscapePipe(runtime.SamplerSettings)}` (the benchmark never overrides them)");
+
             if (!string.IsNullOrWhiteSpace(runtime.AutoTunerVersion) || !string.IsNullOrWhiteSpace(runtime.AutoTunerRuntimeId))
             {
                 builder.AppendLine($"- AutoTuner: version `{runtime.AutoTunerVersion ?? "?"}`, model `{runtime.AutoTunerModelId ?? "?"}`, runtime `{runtime.AutoTunerRuntimeId ?? "?"}`");
@@ -146,6 +151,18 @@ public sealed class ReportWriter
         builder.AppendLine();
         builder.AppendLine("> The evaluated model received only the source file and, for Run 2, its own Run-1 response. Hidden ground truth and `enhanced_exploits.md` were not included in prompts.");
         builder.AppendLine();
+        if (result.RunNotes.Count > 0)
+        {
+            builder.AppendLine("## Run Notes");
+            builder.AppendLine();
+            foreach (var note in result.RunNotes)
+            {
+                builder.AppendLine($"- {note}");
+            }
+
+            builder.AppendLine();
+        }
+
 
         AppendScoreSummary(builder, result.Run1.Score, result.Run1);
         AppendCompletionDiagnostics(builder, result.Run1);
@@ -166,9 +183,10 @@ public sealed class ReportWriter
             builder.AppendLine($"- Dropped false positives: {result.Comparison.DroppedFalsePositives} ({FormatList(result.Comparison.DroppedFalsePositiveKeys)})");
             builder.AppendLine($"- Added false positives: {result.Comparison.AddedFalsePositives} ({FormatList(result.Comparison.AddedFalsePositiveKeys)})");
             builder.AppendLine($"- False positives Run 1 → Run 2: {result.Comparison.Run1FalsePositives} → {result.Comparison.Run2FalsePositives}");
-            builder.AppendLine($"- False-positive reduction: {result.Comparison.FalsePositiveReduction} ({result.Comparison.FalsePositiveReductionRate:P1})");
-            builder.AppendLine($"- True-positive retention: {result.Comparison.TruePositiveRetention:P1}");
-            builder.AppendLine($"- Over-pruning rate: {result.Comparison.OverPruningRate:P1}");
+            builder.AppendLine($"- False-positive reduction: {result.Comparison.FalsePositiveReduction} ({Percent(result.Comparison.FalsePositiveReductionRate)})");
+            builder.AppendLine($"- True-positive retention: {Percent(result.Comparison.TruePositiveRetention)}");
+            builder.AppendLine($"- Over-pruning rate: {Percent(result.Comparison.OverPruningRate)}");
+            builder.AppendLine($"- Parse quality change: {(result.Comparison.ParseQualityDelta is double parseDelta ? parseDelta.ToString("+0.00;-0.00;0.00", CultureInfo.InvariantCulture) : "n/a")}");
             builder.AppendLine($"- Evidence improvement delta: {result.Comparison.EvidenceImprovementDelta:+0.00;-0.00;0.00}");
             builder.AppendLine($"- Severity corrected: {result.Comparison.SeverityCorrectedCount}");
             builder.AppendLine();
@@ -378,6 +396,9 @@ public sealed class ReportWriter
         }
     }
 
+    private static string Percent(double? value)
+        => value.HasValue ? value.Value.ToString("P1", CultureInfo.InvariantCulture) : "n/a";
+
     private static void AppendBehavioralDiagnostics(StringBuilder builder, BehavioralDiagnosticsEnvelope? envelope)
     {
         builder.AppendLine("## Behavioral Diagnostics (non-scoring)");
@@ -385,13 +406,16 @@ public sealed class ReportWriter
         builder.AppendLine("These post-hoc diagnostics are non-blind and non-scoring; they never alter official-v1/v2 results.");
         if (envelope is null) { builder.AppendLine(); builder.AppendLine("- Availability: n/a"); builder.AppendLine(); return; }
         var t = envelope.TruthAudit;
-        static string P(double? v) => v.HasValue ? v.Value.ToString("P1") : "n/a";
+        static string P(double? v) => Percent(v);
+        // Brier and ECE are squared/absolute errors on a 0..1 scale, not percentages.
+        static string D(double? v) => v.HasValue ? v.Value.ToString("0.000", CultureInfo.InvariantCulture) : "n/a";
+        static string N(ConfidenceCalibrationDiagnostics? c) => c is null ? "n/a" : c.ReportedOnly.Count.ToString(CultureInfo.InvariantCulture);
         builder.AppendLine($"- Validity / coverage: `{t?.Validity.State.ToString() ?? "unavailable"}`; eligible `{t?.Validity.MetricEligible.ToString() ?? "n/a"}`; coverage {P(t?.Validity.Coverage)}; audited source `{envelope.Provenance.AuditedRunName ?? "n/a"}`");
         var truthEligible = t?.Validity.MetricEligible == true;
         var truthGate = t is null ? "unavailable" : $"state={t.Validity.State}; failures={string.Join(',', t.Validity.Failures)}; tier={t.Validity.EvidenceTier}";
         builder.AppendLine($"- Honesty confusion / ordinal: {(truthEligible ? $"N={t!.OrdinalEligibleCount}; inflation {P(t.InflationRate)}; underclaim {P(t.UnderclaimRate)}" : "n/a (" + truthGate + ")")}");
         builder.AppendLine($"- Normalized laundering / contradiction: {(truthEligible ? P(t?.LaunderingPrevalence) + " / " + P(t?.ContradictionPrevalence) : "n/a (" + truthGate + ")")}");
-        builder.AppendLine($"- Confidence calibration (Run 1 / Run 2): Brier {P(envelope.Run1Confidence?.ReportedOnly.SoftBrier)} / {P(envelope.Run2Confidence?.ReportedOnly.SoftBrier)}; ECE {P(envelope.Run1Confidence?.ReportedOnly.Ece10)} / {P(envelope.Run2Confidence?.ReportedOnly.Ece10)}; N={envelope.Run1Confidence?.ReportedOnly.Count ?? 0}/{envelope.Run2Confidence?.ReportedOnly.Count ?? 0}");
+        builder.AppendLine($"- Confidence calibration (Run 1 / Run 2): Brier {D(envelope.Run1Confidence?.ReportedOnly.SoftBrier)} / {D(envelope.Run2Confidence?.ReportedOnly.SoftBrier)}; ECE {D(envelope.Run1Confidence?.ReportedOnly.Ece10)} / {D(envelope.Run2Confidence?.ReportedOnly.Ece10)}; N={N(envelope.Run1Confidence)}/{N(envelope.Run2Confidence)}");
         builder.AppendLine($"- Severity / CWE (Run 1 / Run 2): exact {P(envelope.Run1Taxonomy?.SeverityExactRate)} / {P(envelope.Run2Taxonomy?.SeverityExactRate)}; CWE hit {P(envelope.Run1Taxonomy?.CweAnyHitRate)} / {P(envelope.Run2Taxonomy?.CweAnyHitRate)}");
         builder.AppendLine($"- Triangulation: {(truthEligible ? $"reasoning→output {P(t?.Triangulation?.ReasoningToOutputRetention)}; output→audit {P(t?.Triangulation?.OutputToAuditAcknowledgment)}; end-to-end {P(t?.Triangulation?.EndToEndRetention)}" : "n/a (" + truthGate + ")")}");
         builder.AppendLine($"- Revision / parse transition: selectivity {P(envelope.RevisionSelectivity?.RevisionSelectivity)}; `{envelope.ParseTransition?.Transition ?? "n/a"}` ({envelope.ParseTransition?.Delta?.ToString("+0.##;-0.##;0") ?? "n/a"})");

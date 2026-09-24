@@ -48,7 +48,10 @@ public sealed class ComparisonHtmlWriter
         return htmlPath;
     }
 
-    private sealed record Projection(string ScopeKey, string GroupingKey, IReadOnlyList<ComparisonSeries> Series);
+    private static bool HasKnownBackend(ComparisonSeries series)
+        => series.BackendBreakdown.Keys.Any(k => !string.Equals(k, ServerRuntimeInfo.UnknownValue, StringComparison.OrdinalIgnoreCase));
+
+    private sealed record Projection(string ScopeKey, string GroupingKey, IReadOnlyList<ComparisonSeries> Series, ComparisonScope? Scope, ComparisonGrouping Grouping);
 
     public string BuildHtml(ComparisonReport report)
     {
@@ -59,7 +62,7 @@ public sealed class ComparisonHtmlWriter
         if (scopes.Count == 0)
         {
             scopes.Add(new { key = "all", label = "Alle Versionen", kind = "All", runCount = report.Series.Sum(s => s.RunCount) });
-            scopes.Add(new { key = "current", label = $"Aktuell ({ResponseParser.CurrentParserVersion})", kind = "Current", runCount = report.CurrentEvaluationSeries.Sum(s => s.RunCount) });
+            scopes.Add(new { key = "current", label = $"Aktuell ({ResponseParser.CurrentParserVersion} · {ScoringProfiles.Latest.Name})", kind = "Current", runCount = report.CurrentEvaluationSeries.Sum(s => s.RunCount) });
         }
 
         var colors = BuildColorMap(projections.SelectMany(p => p.Series));
@@ -76,10 +79,19 @@ public sealed class ComparisonHtmlWriter
         List<string>? seriesKeys = null;
         foreach (var projection in projections)
         {
+            var viewLookups = BuildRunViewLookups(report, projection);
+            // A split projection replaces a model's pooled series entirely in the viewer, so a
+            // model split into e.g. Vulkan + unknown must keep its unknown-backend series too.
+            // Only models without any known backend stay pooled.
+            var basesWithKnownBackend = projection.Series
+                .Where(HasKnownBackend)
+                .Select(s => ModelIdentity.GroupKey(s.ModelFamily, s.Quant))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
             foreach (var series in projection.Series)
             {
                 if (projection.GroupingKey != "model"
-                    && !series.BackendBreakdown.Keys.Any(k => !string.Equals(k, ServerRuntimeInfo.UnknownValue, StringComparison.OrdinalIgnoreCase)))
+                    && !HasKnownBackend(series)
+                    && !basesWithKnownBackend.Contains(ModelIdentity.GroupKey(series.ModelFamily, series.Quant)))
                 {
                     continue;
                 }
@@ -101,6 +113,7 @@ public sealed class ComparisonHtmlWriter
                 }
 
                 var seriesRow = SeriesPayload(series, projection.ScopeKey, projection.GroupingKey, colors[series.GroupKey], detailIndexes);
+                seriesRow["views"] = RunViewPayload(series.GroupKey, viewLookups);
                 seriesKeys ??= seriesRow.Keys.ToList();
                 seriesRows.Add(seriesKeys.Select(k => seriesRow[k]).ToList());
             }
@@ -157,12 +170,14 @@ public sealed class ComparisonHtmlWriter
     {
         var projections = new List<Projection>
         {
-            new(report.Scope?.Key ?? "all", GroupingKey(report.Grouping), report.Series)
+            new(report.Scope?.Key ?? "all", GroupingKey(report.Grouping), report.Series, report.Scope, report.Grouping)
         };
 
         if (report.Scope is null && report.CurrentEvaluationSeries.Count > 0 || report.Scope is null && report.Series.Count > 0)
         {
-            projections.Add(new Projection("current", GroupingKey(report.Grouping), report.CurrentEvaluationSeries));
+            var currentScope = report.AvailableScopes.FirstOrDefault(scope => scope.Kind == ComparisonScopeKind.Current)
+                               ?? new ComparisonScope(ComparisonScopeKind.Current, ResponseParser.CurrentParserVersion, 0);
+            projections.Add(new Projection("current", GroupingKey(report.Grouping), report.CurrentEvaluationSeries, currentScope, report.Grouping));
         }
 
         if (Groups is null || Groups.Count == 0)
@@ -201,12 +216,78 @@ public sealed class ComparisonHtmlWriter
                     scope.Kind == ComparisonScopeKind.All ? null : scope,
                     report.VulnerabilityAxis,
                     report.VulnerabilityMetadata);
-                projections.Add(new Projection(scope.Key, GroupingKey(grouping), series));
+                projections.Add(new Projection(scope.Key, GroupingKey(grouping), series, scope.Kind == ComparisonScopeKind.All ? null : scope, grouping));
             }
         }
 
         return projections;
     }
+
+    /// <summary>
+    /// The page's "Run-Sicht" selector must show exactly what <c>compare --run-view</c> computes:
+    /// the same eligible samples (degenerate runs excluded), the same aggregate (Best = best run of
+    /// that view), per-vulnerability credit and recall. Each non-default view is therefore built
+    /// server-side with the report's own series builder instead of being approximated in JS.
+    /// </summary>
+    private Dictionary<string, Dictionary<string, ComparisonSeries>> BuildRunViewLookups(ComparisonReport report, Projection projection)
+    {
+        var lookups = new Dictionary<string, Dictionary<string, ComparisonSeries>>(StringComparer.Ordinal);
+        if (Groups is null || Groups.Count == 0)
+        {
+            return lookups;
+        }
+
+        var metadata = MetadataIndex ?? VulnerabilityMetadataIndex.Empty;
+        foreach (var view in Enum.GetValues<ComparisonRunView>().Where(view => view != report.RunView))
+        {
+            var series = ComparisonReport.BuildSeries(
+                Groups,
+                report.BenchmarkId,
+                report.Aggregate,
+                FamilyFilter,
+                metadata,
+                view,
+                report.Metric,
+                report.ScoringProfile,
+                projection.Grouping,
+                projection.Scope,
+                report.VulnerabilityAxis,
+                report.VulnerabilityMetadata);
+            lookups[RunViewKey(view)] = series
+                .GroupBy(s => s.GroupKey, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+        }
+
+        return lookups;
+    }
+
+    private static Dictionary<string, object?> RunViewPayload(string groupKey, Dictionary<string, Dictionary<string, ComparisonSeries>> lookups)
+    {
+        var payload = new Dictionary<string, object?>(StringComparer.Ordinal);
+        foreach (var (viewKey, lookup) in lookups)
+        {
+            payload[viewKey] = lookup.TryGetValue(groupKey, out var s)
+                ? new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["score"] = Math.Round(s.ScorePercent, 2),
+                    ["runCount"] = s.RunCount,
+                    ["criticalRecall"] = Math.Round(s.CriticalRecall * 100, 1),
+                    ["highCriticalRecall"] = Math.Round(s.HighCriticalRecall * 100, 1),
+                    ["perVuln"] = s.PerVulnerabilityCredit.Select(v => Math.Round(v, 3)).ToList()
+                }
+                : null;
+        }
+
+        return payload;
+    }
+
+    private static string RunViewKey(ComparisonRunView view) => view switch
+    {
+        ComparisonRunView.Run1 => "run1",
+        ComparisonRunView.Run2 => "run2",
+        ComparisonRunView.Delta => "delta",
+        _ => "primary"
+    };
 
     private static string GroupingKey(ComparisonGrouping grouping) => grouping switch
     {
@@ -320,7 +401,7 @@ public sealed class ComparisonHtmlWriter
             ["numericDosScore"] = Math.Round(s.NumericDosScore * 100, 1),
             ["fileIoScore"] = Math.Round(s.FileIoScore * 100, 1),
             ["cweCoverage"] = Math.Round(s.CweCoverage * 100, 1),
-            ["stability"] = Math.Round(s.VulnerabilityStability * 100, 1),
+            ["stability"] = s.VulnerabilityStability is double stability ? Math.Round(stability * 100, 1) : null,
             ["evidenceFidelity"] = Math.Round(s.EvidenceFidelity * 100, 1),
             ["locationAccuracy"] = Math.Round(s.LocationAccuracy * 100, 1),
             ["hallucinationRate"] = Math.Round(s.HallucinationRate * 100, 1),
@@ -449,9 +530,9 @@ public sealed class ComparisonHtmlWriter
             ["startedAt"] = d.StartedAt?.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture),
             ["completedAt"] = d.CompletedAt?.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture),
             ["score"] = Math.Round(d.ScorePercent, 2),
-            ["run1Score"] = Math.Round(d.Run1Score, 2),
-            ["run2Score"] = Math.Round(d.Run2Score, 2),
-            ["run2Delta"] = Math.Round(d.Run2Delta, 2),
+            ["run1Score"] = d.Run1Score is double run1 ? Math.Round(run1, 2) : null,
+            ["run2Score"] = d.Run2Score is double run2 ? Math.Round(run2, 2) : null,
+            ["run2Delta"] = d.Run2Delta is double delta ? Math.Round(delta, 2) : null,
             ["finishReason"] = d.FinishReason,
             ["loopDetected"] = d.LoopDetected,
             ["parseMode"] = d.ParseMode,
@@ -808,7 +889,7 @@ public sealed class ComparisonHtmlWriter
     const state = readState();
     const axisIdx = filteredAxisIndices(state);
     const availableSeries = projection(state.scope, state.grouping);
-    const rows = availableSeries.filter(s => includeSeries(s, state)).sort((a,b) => metricValue(b,state) - metricValue(a,state) || a.label.localeCompare(b.label));
+    const rows = availableSeries.filter(s => includeSeries(s, state)).sort((a,b) => compareByMetric(a, b, state));
     const expandedMetricId = activeMovedCard?.getAttribute("data-metric-id") || null;
     const chartRows = expandedMetricId ? rows : rows.slice(0, Math.max(1, state.topN || 24));
     const scope = scopeByKey[state.scope] || {label: state.scope, runCount: 0};
@@ -838,7 +919,9 @@ public sealed class ComparisonHtmlWriter
     if (!rows.length) { el.innerHTML = ""; return; }
     const best = rows[0];
     const scores = rows.map(s => scoreForRunView(s, st.runView)).filter(Number.isFinite);
-    const median = scores.length ? scores.slice().sort((a,b)=>a-b)[Math.floor(scores.length/2)] : null;
+    const sortedScores = scores.slice().sort((a,b)=>a-b);
+    const mid = Math.floor(sortedScores.length/2);
+    const median = sortedScores.length ? (sortedScores.length % 2 ? sortedScores[mid] : (sortedScores[mid-1] + sortedScores[mid]) / 2) : null;
     const audited = rows.filter(s => s.truthAuditRunCount > 0);
     const kpi = (v, l) => `<div class="kpi"><div class="v">${v}</div><div class="l">${l}</div></div>`;
     el.innerHTML =
@@ -869,6 +952,8 @@ public sealed class ComparisonHtmlWriter
     if (st.backends.length && !st.backends.includes(s.backend)) return false;
     if (st.builds.length && !st.builds.includes(s.runtimeLabel || (s.build ? `${s.engine} ${s.build}` : ""))) return false;
     const score = scoreForRunView(s, st.runView);
+    // A group without an eligible run in the selected view does not exist in that view (same as compare --run-view).
+    if (score === null) return false;
     if (st.minScore !== null && score < st.minScore) return false;
     if (st.maxScore !== null && score > st.maxScore) return false;
     if (st.minRuns !== null && s.runCount < st.minRuns) return false;
@@ -897,31 +982,47 @@ public sealed class ComparisonHtmlWriter
     return idx;
   }
 
+  // Lower is better for these metrics; missing values always rank last.
+  const lowerIsBetterMetrics = new Set(["fpRate","hallucinationRate","overclaimRate","duration"]);
+  function compareByMetric(a, b, st) {
+    const av = metricValue(a, st), bv = metricValue(b, st);
+    const aMissing = !Number.isFinite(av), bMissing = !Number.isFinite(bv);
+    if (aMissing !== bMissing) return aMissing ? 1 : -1;
+    if (!aMissing && av !== bv) return lowerIsBetterMetrics.has(st.metric) ? av - bv : bv - av;
+    return a.label.localeCompare(b.label);
+  }
   function metricValue(s, st) {
+    const audited = s.truthAuditRunCount > 0;
     switch (st.metric) {
-      case "criticalRecall": return s.criticalRecall ?? 0;
-      case "highCriticalRecall": return s.highCriticalRecall ?? 0;
-      case "f1": return s.f1 ?? 0;
-      case "fpRate": return s.fpRate ?? 0;
-      case "stability": return s.stability ?? 0;
-      case "run2Delta": return s.run2Delta ?? 0;
-      case "thinkingCoverage": return s.thinkingToOutputCoverage ?? 0;
-      case "evidenceFidelity": return s.evidenceFidelity ?? 0;
-      case "locationAccuracy": return s.locationAccuracy ?? 0;
-      case "hallucinationRate": return s.hallucinationRate ?? 0;
-      case "evaluationConfidence": return s.evaluationConfidence ?? 0;
-      case "accountability": return s.accountabilityScore ?? 0;
-      case "honesty": return s.honesty ?? -Infinity;
-      case "honestyCalibration": return s.honestyCalibration ?? -Infinity;
-      case "revisionSelectivity": return s.revisionSelectivity ?? -Infinity;
-      case "honestyStability": return s.honestyStability ?? -Infinity;
-      case "overclaimRate": return s.overclaimRate ?? 0;
-      case "duration": return s.durationMedianSec ?? s.durationMeanSec ?? 0;
-      case "tokenEfficiency": return s.scorePer1KTokens ?? 0;
+      case "criticalRecall": return viewField(s, st, "criticalRecall");
+      case "highCriticalRecall": return viewField(s, st, "highCriticalRecall");
+      case "f1": return s.f1 ?? null;
+      case "fpRate": return s.fpRate ?? null;
+      case "stability": return s.stability ?? null;
+      case "run2Delta": return s.run2Delta ?? null;
+      case "thinkingCoverage": return s.thinkingToOutputCoverage ?? null;
+      case "evidenceFidelity": return s.evidenceFidelity ?? null;
+      case "locationAccuracy": return s.locationAccuracy ?? null;
+      case "hallucinationRate": return s.hallucinationRate ?? null;
+      case "evaluationConfidence": return s.evaluationConfidence ?? null;
+      case "accountability": return audited ? s.accountabilityScore ?? null : null;
+      case "honesty": return s.honesty ?? null;
+      case "honestyCalibration": return s.honestyCalibration ?? null;
+      case "revisionSelectivity": return s.revisionSelectivity ?? null;
+      case "honestyStability": return s.honestyStability ?? null;
+      case "overclaimRate": return audited ? s.overclaimRate ?? null : null;
+      case "duration": return s.durationMedianSec ?? s.durationMeanSec ?? null;
+      case "tokenEfficiency": return s.scorePer1KTokens ?? null;
       default: return scoreForRunView(s, st.runView);
     }
   }
-  function scoreForRunView(s, runView) { if (runView === "run1") return s.run1Score ?? s.score; if (runView === "run2") return s.run2Score ?? s.score; if (runView === "delta") return s.run2Delta ?? 0; return s.score; }
+  // The embedded series were built for data.runView; every other view is embedded per series
+  // (s.views) by the same C# builder that compare --run-view uses.
+  const baseRunView = (data.runView || "primary").toLowerCase();
+  function runViewData(s, runView) { return runView === baseRunView ? null : ((s.views || {})[runView] ?? null); }
+  function scoreForRunView(s, runView) { if (runView === baseRunView) return s.score; const v = runViewData(s, runView); return v ? v.score : null; }
+  function viewField(s, st, key) { if (st.runView === baseRunView) return s[key] ?? null; const v = runViewData(s, st.runView); return v ? v[key] ?? null : null; }
+  function perVulnFor(s, st) { if (st.runView === baseRunView) return s.perVuln || []; const v = runViewData(s, st.runView); return v ? v.perVuln || [] : []; }
   function metricLabel(st) { return ({score:"Gesamt-Score",criticalRecall:"Critical Recall %",highCriticalRecall:"High+Critical Recall %",f1:"F1 %",fpRate:"FP-Rate %",stability:"Stability %",run2Delta:"Run2-Delta",thinkingCoverage:"Thinking Coverage %",evidenceFidelity:"Evidence Fidelity %",locationAccuracy:"Location Accuracy %",hallucinationRate:"Hallucination Rate %",evaluationConfidence:"Evaluation Confidence %",accountability:"Truth-Audit Accountability",honesty:"Honesty %",honestyCalibration:"Calibration %",revisionSelectivity:"Revision Selectivity %",honestyStability:"Honesty Stability %",overclaimRate:"Overclaim Rate %",duration:"Duration sec",tokenEfficiency:"Score / 1k Tokens"})[st.metric] || "Metrik"; }
   function metricErrorRange(s, st) {
     if ((s.runCount || 0) < 2) return null;
@@ -972,7 +1073,7 @@ public sealed class ComparisonHtmlWriter
     if (hasBackendGrouping && document.getElementById("backendChart")) renderBackendChart(st, expandedMetricId);
     const radarRows = expandedMetricId === "vulnerabilityRadar" ? rows : rows.slice(0, Math.min(10, rows.length));
     const labels = axisIdx.map(i => data.axis[i].id);
-    updateChart("radarChart", { type:"radar", data:{ labels, datasets:radarRows.map(s=>({ label:s.label, data:axisIdx.map(i=>s.perVuln[i] ?? 0), borderColor:s.color, backgroundColor:s.color+"33", fill:st.fill, pointRadius:2, borderWidth:2 }))}, options:{ responsive:true, maintainAspectRatio:false, scales:{ r:{ min: st.runView === "delta" ? -1 : 0, max:1, ticks:{stepSize:0.5,showLabelBackdrop:false}, pointLabels:{font:{size:10}}}}, plugins:{legend:{position:"bottom",labels:{boxWidth:12,font:{size:11}}}} }});
+    updateChart("radarChart", { type:"radar", data:{ labels, datasets:radarRows.map(s=>({ label:s.label, data:axisIdx.map(i=>perVulnFor(s, st)[i] ?? 0), borderColor:s.color, backgroundColor:s.color+"33", fill:st.fill, pointRadius:2, borderWidth:2 }))}, options:{ responsive:true, maintainAspectRatio:false, scales:{ r:{ min: st.runView === "delta" ? -1 : 0, max:1, ticks:{stepSize:0.5,showLabelBackdrop:false}, pointLabels:{font:{size:10}}}}, plugins:{legend:{position:"bottom",labels:{boxWidth:12,font:{size:11}}}} }});
     const slopeCandidates = rows.filter(s => s.run2Score || s.run1Score);
     const slopeRows = expandedMetricId === "run2Delta" ? slopeCandidates : slopeCandidates.slice(0, 12);
     updateChart("slopeChart", { type:"line", data:{ labels:["Run 1","Run 2"], datasets:slopeRows.map(s=>({ label:s.label, data:[s.run1Score,s.run2Score], borderColor:s.color, backgroundColor:s.color, tension:0.15 }))}, options:{ responsive:true, maintainAspectRatio:false, scales:{ y:{ beginAtZero:true, max:100, title:{display:true,text:"Score"}}}, plugins:{legend:{position:"bottom",labels:{boxWidth:12,font:{size:11}}}} }});
@@ -1017,7 +1118,7 @@ public sealed class ComparisonHtmlWriter
   function renderHeatmap(rows, axisIdx, st) {
     if (!axisIdx.length) { document.getElementById("heatmap").innerHTML = '<div class="empty">Keine Schwachstellenachsen im Filter.</div>'; return; }
     let html = '<table><thead><tr><th>Gruppe</th>' + axisIdx.map(i => `<th title="${esc(axisTitle(data.axis[i]))}">${esc(data.axis[i].id)}</th>`).join("") + '</tr></thead><tbody>';
-    rows.forEach(s => { html += `<tr class="swatch" style="--swatch:${s.color}"><td class="text">${esc(s.label)}</td>`; axisIdx.forEach(i => { const v = s.perVuln[i] ?? 0; html += `<td class="${heatClass(v, st.runView)}" title="${esc(s.label)} · ${esc(axisTitle(data.axis[i]))}: ${fmt(v)}">${fmt(v)}</td>`; }); html += '</tr>'; });
+    rows.forEach(s => { html += `<tr class="swatch" style="--swatch:${s.color}"><td class="text">${esc(s.label)}</td>`; const credits = perVulnFor(s, st); axisIdx.forEach(i => { const v = credits[i] ?? 0; html += `<td class="${heatClass(v, st.runView)}" title="${esc(s.label)} · ${esc(axisTitle(data.axis[i]))}: ${fmt(v)}">${fmt(v)}</td>`; }); html += '</tr>'; });
     html += '</tbody></table>'; document.getElementById("heatmap").innerHTML = html;
   }
 
@@ -1025,19 +1126,21 @@ public sealed class ComparisonHtmlWriter
     {key:"label",title:"Gruppe",kind:"detail"},{key:"backend",title:"Backend",kind:"backend"},{key:"build",title:"Build",kind:"text"},{key:"runCount",title:"Runs",kind:"num"},{key:"score",title:"Score",kind:"num"},{key:"criticalRecall",title:"Critical %",kind:"num"},{key:"highCriticalRecall",title:"High+Crit %",kind:"num"},{key:"evidenceFidelity",title:"Evidence %",kind:"num"},{key:"locationAccuracy",title:"Location %",kind:"num"},{key:"hallucinationRate",title:"Hallucination %",kind:"num"},{key:"stability",title:"Stability %",kind:"num"},{key:"run2Delta",title:"Run2 Δ",kind:"num"},{key:"truthAuditRunCount",title:"Audit Runs",kind:"num"},{key:"accountabilityScore",title:"Audit",kind:"num"},{key:"truthAuditAccuracy",title:"Audit Acc %",kind:"num"},{key:"overclaimRate",title:"Overclaim %",kind:"num"},{key:"missAdmissionRate",title:"Miss Admit %",kind:"num"},{key:"falsePositiveAdmissionRate",title:"FP Admit %",kind:"num"},{key:"quoteFidelity",title:"Quote %",kind:"num"},{key:"evidenceLaunderingCount",title:"Launder",kind:"num"},{key:"honesty",title:"Honesty %",kind:"num"},{key:"honestyEligibleCount",title:"Honesty N",kind:"num"},{key:"honestyCalibration",title:"Calibration %",kind:"num"},{key:"calibrationObservationCount",title:"Conf N",kind:"num"},{key:"honestyBrier",title:"Brier",kind:"num"},{key:"honestyEce",title:"ECE",kind:"num"},{key:"revisionSelectivity",title:"Revision %",kind:"num"},{key:"flagConsistency",title:"Flag %",kind:"num"},{key:"correctionProvenance",title:"Correction %",kind:"num"},{key:"honestyStability",title:"Honesty Stability %",kind:"num"},{key:"honestyStabilityN",title:"Stability N",kind:"num"},{key:"scoreMedian",title:"Median",kind:"num"},{key:"scoreStdDev",title:"±σ",kind:"num"},{key:"scoreIqr",title:"IQR",kind:"num"},{key:"precision",title:"Precision %",kind:"num"},{key:"recall",title:"Recall %",kind:"num"},{key:"f1",title:"F1 %",kind:"num"},{key:"fullTp",title:"Full TP",kind:"num"},{key:"partialTp",title:"Partial",kind:"num"},{key:"falsePositives",title:"FP",kind:"num"},{key:"duplicates",title:"Dup",kind:"num"},{key:"missed",title:"Missed",kind:"num"},{key:"parseSuccessRate",title:"Parse %",kind:"num"},{key:"loopRate",title:"Loop %",kind:"num"},{key:"durationMedianSec",title:"Dur s",kind:"num"},{key:"reasoningTokens",title:"Think Tok",kind:"num"},{key:"outputTokens",title:"Out Tok",kind:"num"},{key:"completionTokens",title:"Gesamt Tok",kind:"num"},{key:"scorePer1KTokens",title:"Score/1k Tok",kind:"num"},{key:"thinkingToOutputCoverage",title:"Think→Out %",kind:"num"}
   ];
   function renderTable(rows, st) {
-    rows = rows.slice().sort((a,b) => { const av = valueForSort(a,sortKey,st), bv = valueForSort(b,sortKey,st); if (typeof av === "number" || typeof bv === "number") return ((av ?? -Infinity) - (bv ?? -Infinity))*sortDir; return String(av??"").localeCompare(String(bv??""))*sortDir; });
+    rows = rows.slice().sort((a,b) => { const av = valueForSort(a,sortKey,st), bv = valueForSort(b,sortKey,st); if (typeof av === "number" || typeof bv === "number") { const an = Number.isFinite(av), bn = Number.isFinite(bv); if (an !== bn) return an ? -1 : 1; return an ? (av - bv)*sortDir : 0; } return String(av??"").localeCompare(String(bv??""))*sortDir; });
     let html = '<table><thead><tr>' + cols.map(c => `<th class="${c.key===sortKey?(sortDir===1?'sorted-asc':'sorted-desc'):''}" data-key="${c.key}">${c.title}</th>`).join("") + '</tr></thead><tbody>';
     rows.forEach(s => { html += `<tr class="swatch" style="--swatch:${s.color}">`; cols.forEach(c => { html += `<td class="${c.kind === "num" ? "" : "text"}">${cell(s,c,st)}</td>`; }); html += '</tr>'; });
     html += '</tbody></table>'; document.getElementById("tableWrap").innerHTML = html;
     document.querySelectorAll("th[data-key]").forEach(th => th.addEventListener("click", () => { const k = th.getAttribute("data-key"); if (k === sortKey) sortDir = -sortDir; else { sortKey = k; sortDir = (k === "label" || k === "backend" || k === "build") ? 1 : -1; } render(); }));
   }
   const auditMetricKeys = new Set(["accountabilityScore","truthAuditAccuracy","overclaimRate","missAdmissionRate","falsePositiveAdmissionRate","quoteFidelity","evidenceLaunderingCount"]);
+  // Brier, ECE and severity MAE are on a 0..1 (MAE: 0..4) scale; one decimal would print 0.04 as "0.0".
+  const unitScaleKeys = new Set(["honestyBrier","honestyEce","severityMae"]);
   function cell(s,c,st) {
     if (c.kind === "detail") return detailCell(s);
     if (c.kind === "backend") return backendCell(s);
     if (c.kind === "text") return esc(s[c.key] ?? "—");
     if (auditMetricKeys.has(c.key) && !(s.truthAuditRunCount > 0)) return "n/a";
-    const v = valueForSort(s,c.key,st); return typeof v === "number" && Number.isFinite(v) ? (Number.isInteger(v) ? v : v.toFixed(1)) : "n/a";
+    const v = valueForSort(s,c.key,st); return typeof v === "number" && Number.isFinite(v) ? (Number.isInteger(v) ? v : v.toFixed(unitScaleKeys.has(c.key) ? 3 : 1)) : "n/a";
   }
   function backendCell(s) {
     if (s.backend === "mixed") { return Object.entries(s.backendBreakdown||{}).sort((a,b)=>b[1]-a[1]).map(([k,v]) => `${backendBadge(k)} ${v}`).join(" "); }
@@ -1053,7 +1156,7 @@ public sealed class ComparisonHtmlWriter
     const tools = Object.entries(s.toolVersions||{}).sort((a,b)=>b[0].localeCompare(a[0])).map(([k,v])=>`v${esc(k)}: ${v}`).join(', ') || '—';
     return `<details><summary>${esc(s.label)}</summary><div class="note">Backends: ${Object.entries(s.backendBreakdown||{}).map(([k,v])=>`${backendBadge(k)} ${v}`).join(' ') || '—'} · Builds: ${Object.entries(s.runtimeBreakdown||{}).map(([k,v])=>`${esc(k)} (${v})`).join(', ') || '—'} · Parser: ${versions} · Benchmark: ${tools}<br>Profil: ${s.officialRunCount}/${s.runCount} offiziell · official comparable: ${s.officialComparableRunCount}/${s.runCount} · aktuell (${esc(data.parserVersion)}): ${s.currentEvaluationRunCount}/${s.runCount} · legacy-migriert: ${s.legacyMigratedRunCount}/${s.runCount} · rescored: ${s.rescoredRunCount}/${s.runCount} · Source-Hash: ${s.sourceHashMatchCount}/${s.runCount} · FP-Taxonomie: ${fpTax} · Run2 dropped: ${(s.run2DroppedIds||[]).join(', ')||'—'} · added: ${(s.run2AddedIds||[]).join(', ')||'—'}</div><table class="detail-table"><thead><tr><th>Datum</th><th>Run</th><th>Tool</th><th>Backend/Build</th><th>Score-Version</th><th>Official</th><th>Aktualität</th><th>Score</th><th>Run2 Δ</th><th>Finish</th><th>Parse</th><th>Loop</th><th>s</th><th>Out/Think/Gesamt Tokens</th><th>Repeat/Kampagne</th></tr></thead><tbody>${rows}</tbody></table></details>`;
   }
-  function valueForSort(s,key,st) { if (key === "score") return scoreForRunView(s, st.runView); if (key === "backend") return backendLabel(s.backend); return s[key]; }
+  function valueForSort(s,key,st) { if (key === "score") return scoreForRunView(s, st.runView); if (key === "criticalRecall" || key === "highCriticalRecall") return viewField(s, st, key); if (key === "backend") return backendLabel(s.backend); return s[key]; }
 
   function metricHeader(metricId, title, titleId) {
     const idAttr = titleId ? ` id="${esc(titleId)}"` : "";
@@ -1225,7 +1328,7 @@ public sealed class ComparisonHtmlWriter
                 (s.NumericDosScore * 100).ToString("0.#", CultureInfo.InvariantCulture),
                 (s.FileIoScore * 100).ToString("0.#", CultureInfo.InvariantCulture),
                 (s.CweCoverage * 100).ToString("0.#", CultureInfo.InvariantCulture),
-                (s.VulnerabilityStability * 100).ToString("0.#", CultureInfo.InvariantCulture),
+                s.VulnerabilityStability is double stability ? (stability * 100).ToString("0.#", CultureInfo.InvariantCulture) : string.Empty,
                 (s.EvidenceFidelity * 100).ToString("0.#", CultureInfo.InvariantCulture),
                 (s.LocationAccuracy * 100).ToString("0.#", CultureInfo.InvariantCulture),
                 (s.HallucinationRate * 100).ToString("0.#", CultureInfo.InvariantCulture),
@@ -1351,7 +1454,7 @@ public sealed class ComparisonHtmlWriter
             return string.Empty;
         }
 
-        return string.Join("; ", taxonomy.OrderByDescending(kvp => kvp.Value).ThenBy(kvp => kvp.Key, StringComparer.OrdinalIgnoreCase).Select(kvp => $"{kvp.Key}={kvp.Value:0.#}"));
+        return string.Join("; ", taxonomy.OrderByDescending(kvp => kvp.Value).ThenBy(kvp => kvp.Key, StringComparer.OrdinalIgnoreCase).Select(kvp => $"{kvp.Key}={kvp.Value.ToString("0.#", CultureInfo.InvariantCulture)}"));
     }
 
     private static string Csv(string value)

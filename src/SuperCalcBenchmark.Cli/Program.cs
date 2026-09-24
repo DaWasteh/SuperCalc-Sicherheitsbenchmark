@@ -433,9 +433,17 @@ internal static class Program
             var requestedRuntimes = (args.GetNullable("--runtimes") ?? args.GetNullable("--backends") ?? "default")
                 .Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
+            // --quant labels exactly one model. Applied to a multi-model campaign it would stamp the
+            // same quant onto every model and split each run away from its real archive group.
+            var itemQuant = requestedModels.Length == 1 ? baseOptions.QuantOverride : null;
+            if (requestedModels.Length > 1 && !string.IsNullOrWhiteSpace(baseOptions.QuantOverride))
+            {
+                Console.Error.WriteLine("Ignoring --quant for a multi-model campaign; set a per-item \"quant\" in a --plan file instead.");
+            }
+
             if (connection is null)
             {
-                items.AddRange(requestedModels.Select(model => new CampaignItem { ModelId = model, ModelName = model, Repeats = repeats, QuantOverride = baseOptions.QuantOverride }));
+                items.AddRange(requestedModels.Select(model => new CampaignItem { ModelId = model, ModelName = model, Repeats = repeats, QuantOverride = itemQuant }));
             }
             else
             {
@@ -468,7 +476,7 @@ internal static class Program
                             RuntimeId = runtime?.Id,
                             RuntimeLabel = runtime?.DisplayLabel,
                             Repeats = repeats,
-                            QuantOverride = baseOptions.QuantOverride
+                            QuantOverride = itemQuant
                         });
                     }
                 }
@@ -626,12 +634,19 @@ internal static class Program
             return 2;
         }
 
-        var groundTruth = new GroundTruthStore().Load(paths.GroundTruthPath);
-        var groundTruthSha = GroundTruthStore.ComputeSha256(paths.GroundTruthPath);
-        var source = SourceDocument.Load(paths.SourcePath);
+        var groundTruthPath = ResolveOptionPath(args, "--ground-truth", paths.GroundTruthPath);
+        var groundTruth = new GroundTruthStore().Load(groundTruthPath);
+        var groundTruthSha = GroundTruthStore.ComputeSha256(groundTruthPath);
+        var source = SourceDocument.Load(ResolveOptionPath(args, "--source", paths.SourcePath));
         var parser = new ResponseParser();
         var scorer = new ScoringEngine();
-        var profile = ScoringProfiles.Get(args.Get("--scoring-profile", ScoringProfiles.OfficialV1Name));
+        // A parser replay must hold the scorer constant: rescore each run with the profile it was
+        // stored with unless a profile is requested explicitly (then the delta mixes both effects).
+        var explicitProfile = args.GetNullable("--scoring-profile");
+        ScoringProfile ProfileFor(ScoringResult stored)
+            => !string.IsNullOrWhiteSpace(explicitProfile)
+                ? ScoringProfiles.Get(explicitProfile)
+                : ScoringProfiles.TryGet(stored.ScoringProfile, out var storedProfile) ? storedProfile : ScoringProfiles.Latest;
         var onlyChanged = !args.Has("--all");
         var readOptions = new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true, ReadCommentHandling = System.Text.Json.JsonCommentHandling.Skip, AllowTrailingCommas = true };
 
@@ -674,7 +689,7 @@ internal static class Program
                 runs++;
                 var split = BenchmarkRunner.ExtractInlineThinkBlocks(artifacts.Response ?? string.Empty);
                 var parse = parser.Parse(split.OutputContent);
-                var score = scorer.Score(artifacts.RunName, parse.Findings, groundTruth, source, profile, new ScoreComputationContext
+                var score = scorer.Score(artifacts.RunName, parse.Findings, groundTruth, source, ProfileFor(artifacts.Score), new ScoreComputationContext
                 {
                     GroundTruthSha256 = groundTruthSha,
                     SourceSha256 = source.Sha256,
@@ -712,7 +727,7 @@ internal static class Program
             }
         }
 
-        Console.WriteLine($"Parser audit ({ResponseParser.CurrentParserVersion}, {profile.Name}) over {runsRoot}");
+        Console.WriteLine($"Parser audit ({ResponseParser.CurrentParserVersion}, profile {(string.IsNullOrWhiteSpace(explicitProfile) ? "as stored per run" : ScoringProfiles.Get(explicitProfile).Name)}) over {runsRoot}");
         Console.WriteLine($"Detection runs re-parsed: {runs}");
         Console.WriteLine($"Parse mode changed: {changedMode} | finding count changed: {changedFindings} | score changed: {changedScore} (gained {gained}, lost {lost}, net delta sum {scoreDeltaSum:+0.##;-0.##;0})");
         Console.WriteLine($"Runs needing lenient JSON repair: {repaired}");
@@ -749,7 +764,13 @@ internal static class Program
         var aggregate = ParseAggregate(args.Get("--aggregate", "average"));
         var runView = ParseRunView(args.Get("--run-view", "primary"));
         var metric = ParseMetric(args.Get("--metric", "score"));
-        var scoringProfile = args.GetNullable("--scoring-profile");
+        // Scores from different profiles must never be averaged into one group. Default to the
+        // newest profile; "all" is an explicit opt-out for inspecting mixed archives.
+        var explicitProfile = args.GetNullable("--scoring-profile")?.Trim();
+        var requestedProfile = string.IsNullOrWhiteSpace(explicitProfile) ? ScoringProfiles.DefaultName : explicitProfile;
+        var scoringProfile = string.Equals(requestedProfile, "all", StringComparison.OrdinalIgnoreCase)
+            ? null
+            : ScoringProfiles.Get(requestedProfile).Name;
         var publicLabels = args.Has("--public-labels");
         var groundTruthPath = ResolveOptionPath(args, "--ground-truth", paths.GroundTruthPath);
         var metadata = VulnerabilityMetadataIndex.Load(groundTruthPath, publicLabels);
@@ -760,6 +781,16 @@ internal static class Program
         {
             Console.WriteLine($"No archived runs found in {archiveDir}.");
             return 0;
+        }
+
+        if (string.IsNullOrWhiteSpace(explicitProfile))
+        {
+            var resolved = ComparisonReport.ResolveDefaultScoringProfile(groups, scoringProfile);
+            if (!string.Equals(resolved, scoringProfile, StringComparison.OrdinalIgnoreCase))
+            {
+                Console.WriteLine($"No archived runs are scored with {scoringProfile} yet; comparing the newest archived profile {resolved}. New runs use {scoringProfile}.");
+                scoringProfile = resolved;
+            }
         }
 
         var grouping = ParseGrouping(args.Get("--group-by", "model"));
@@ -781,7 +812,8 @@ internal static class Program
         {
             var selectedMetric = DisplayMetricValue(series, metric);
             var backend = string.Equals(series.Backend, ServerRuntimeInfo.UnknownValue, StringComparison.OrdinalIgnoreCase) ? string.Empty : $" [{RuntimeKeys.DisplayBackend(series.Backend)}{(series.Build is null ? string.Empty : " " + series.Build)}]";
-            Console.WriteLine($"  {selectedMetric,6:0.##}  {series.Label}{backend}  (metric={metric}, score={series.ScorePercent:0.##}, runs={series.RunCount}, median={series.ScoreMedian:0.##}, avg={series.ScoreMean:0.##}, σ={series.ScoreStdDev:0.##}, range={series.ScoreMin:0.##}-{series.ScoreMax:0.##})");
+            var metricText = double.IsNaN(selectedMetric) ? "n/a" : selectedMetric.ToString("0.##");
+            Console.WriteLine($"  {metricText,6}  {series.Label}{backend}  (metric={metric}, score={series.ScorePercent:0.##}, runs={series.RunCount}, median={series.ScoreMedian:0.##}, avg={series.ScoreMean:0.##}, σ={series.ScoreStdDev:0.##}, range={series.ScoreMin:0.##}-{series.ScoreMax:0.##})");
         }
 
         Console.WriteLine();
@@ -880,42 +912,18 @@ internal static class Program
         string? outputDirectory = null,
         string? archiveDirectory = null)
     {
-        return new BenchmarkOptions
-        {
-            ServerUrl = original.ServerUrl,
-            Model = original.Model,
-            SourcePath = original.SourcePath,
-            GroundTruthPath = original.GroundTruthPath,
-            AnalysisPromptPath = original.AnalysisPromptPath,
-            SelfValidatePromptPath = original.SelfValidatePromptPath,
-            TruthAuditPromptPath = original.TruthAuditPromptPath,
-            SchemaPath = original.SchemaPath,
-            TruthAuditSchemaPath = original.TruthAuditSchemaPath,
-            OutputDirectory = outputDirectory ?? original.OutputDirectory,
-            Temperature = original.Temperature,
-            TopP = original.TopP,
-            MaxTokens = original.MaxTokens,
-            Seed = seed,
-            Repeats = original.Repeats,
-            SeedStart = original.SeedStart,
-            RepeatGroupId = repeatGroupId,
-            RepeatIndex = repeatIndex,
-            RepeatCount = repeatCount,
-            TruthAuditRepeatMode = original.TruthAuditRepeatMode,
-            Timeout = original.Timeout,
-            AllowHashMismatch = original.AllowHashMismatch,
-            SkipResponseFormat = original.SkipResponseFormat,
-            DisableThinking = original.DisableThinking,
-            BenchmarkProfile = original.BenchmarkProfile,
-            ScoringProfile = original.ScoringProfile,
-            WithTruthAudit = withTruthAudit,
-            TruthAuditSource = original.TruthAuditSource,
-            AbortOnLoop = original.AbortOnLoop,
-            ArchiveDirectory = archiveDirectory is null ? original.ArchiveDirectory : (archiveDirectory.Length == 0 ? null : archiveDirectory),
-            ArchiveMirrorDirectory = original.ArchiveMirrorDirectory,
-            QuantOverride = original.QuantOverride,
-            AdjudicationPath = original.AdjudicationPath
-        };
+        // BenchmarkOptions.With copies every option (API key, runtime override/probe flag,
+        // truth-audit prompt version, campaign identity, ...); a hand-written copy silently
+        // dropped the ones added later.
+        return original.With(
+            seed: seed,
+            repeatGroupId: repeatGroupId,
+            repeatIndex: repeatIndex,
+            repeatCount: repeatCount,
+            withTruthAudit: withTruthAudit,
+            outputDirectory: outputDirectory,
+            archiveDirectory: string.IsNullOrEmpty(archiveDirectory) ? null : archiveDirectory,
+            clearArchiveDirectory: archiveDirectory is { Length: 0 });
     }
 
     private static BenchmarkOptions BuildOptions(
@@ -977,9 +985,9 @@ internal static class Program
             SkipResponseFormat = args.Has("--skip-response-format"),
             DisableThinking = args.Has("--disable-thinking"),
             BenchmarkProfile = args.Get("--profile", args.Get("--benchmark-profile", "official")),
-            ScoringProfile = args.Get("--scoring-profile", ScoringProfiles.OfficialV1Name),
+            ScoringProfile = ScoringProfiles.Get(args.Get("--scoring-profile", ScoringProfiles.DefaultName)).Name,
             WithTruthAudit = withTruthAudit,
-            TruthAuditSource = args.Get("--truth-audit-source", "best"),
+            TruthAuditSource = ValidateTruthAuditSource(args.Get("--truth-audit-source", "best")),
             AbortOnLoop = !args.Has("--no-loop-abort"),
             ArchiveDirectory = archiveDirectory,
             ArchiveMirrorDirectory = archiveMirrorDirectory,
@@ -1104,7 +1112,7 @@ internal static class Program
         ComparisonMetric.HighCriticalRecall => series.HighCriticalRecall * 100,
         ComparisonMetric.F1 => series.F1 * 100,
         ComparisonMetric.FpRate => series.FpPerFinding * 100,
-        ComparisonMetric.Stability => series.VulnerabilityStability * 100,
+        ComparisonMetric.Stability => series.VulnerabilityStability is double stability ? stability * 100 : double.NaN,
         ComparisonMetric.Run2Delta => series.Run2ScoreDelta,
         ComparisonMetric.ThinkingCoverage => (series.ReasoningToOutputCoverage ?? 0) * 100,
         ComparisonMetric.EvidenceFidelity => series.EvidenceFidelity * 100,
@@ -1205,8 +1213,8 @@ internal static class Program
         Console.WriteLine("  --source <file>            Default: <asset-root>/enhanced_calc.cpp");
         Console.WriteLine("  --ground-truth <file>      Default: <asset-root>/benchmarks/supercalc-v3/ground_truth.json");
         Console.WriteLine("  --out <dir>                Default: <data-root>/Runs/<timestamp_model_guid>");
-        Console.WriteLine("  --temperature <number>     Default: 0.0");
-        Console.WriteLine("  --top-p <number>           Default: 1.0");
+        Console.WriteLine("  (sampling)                 Never sent: temperature/top-p/... come from the server (AutoTuner);");
+        Console.WriteLine("                             the server defaults are recorded per run as samplerSettings.");
         Console.WriteLine("  --seed <int>               Default: 12345");
         Console.WriteLine("  --repeats <int>            Run N independent repeats as one repeatGroupId. Default: 1");
         Console.WriteLine("  --seed-start <int>         First seed for --repeats; seeds increment by 1");
@@ -1215,7 +1223,7 @@ internal static class Program
         Console.WriteLine("  --skip-response-format     Do not send llama.cpp response_format");
         Console.WriteLine("  --disable-thinking         Send chat_template_kwargs.enable_thinking=false for Qwen/debug runs");
         Console.WriteLine("  --profile <official|debug|fixture>  Label archived run context. Default: official");
-        Console.WriteLine("  --scoring-profile <official-v1|official-v2>  Scoring profile for run/fixture/compare. Default: official-v1");
+        Console.WriteLine("  --scoring-profile <official-v1|official-v2|official-v3>  Scoring profile for run/fixture/parse-audit. Default: official-v1");
         Console.WriteLine("  --with-truth-audit [always|never|only-best-repeat]  Run non-blind Run 3 honesty/accountability audit after Run 1+2");
         Console.WriteLine("  --truth-audit-source <best|run1|run2>  Previous answer audited by Run 3. Default: best");
         Console.WriteLine("  --truth-audit-prompt-version <id>  Provenance id for custom audit prompt/schema assets; custom assets default to unknown");
@@ -1249,7 +1257,7 @@ internal static class Program
         Console.WriteLine("  --aggregate <average|median|best> compare: headline score per group. Default: average");
         Console.WriteLine("  --run-view <primary|run1|run2|delta> compare: selected run perspective. Default: primary");
         Console.WriteLine("  --metric <score|critical-recall|f1|fp-rate|stability|run2-delta|thinking-coverage|evidence-fidelity|location-accuracy|hallucination-rate|accountability|duration|token-efficiency|honesty|honesty-calibration|revision-selectivity|honesty-stability>");
-        Console.WriteLine("  --scoring-profile <name>   compare: include only runs scored with this profile (e.g. official-v1)");
+        Console.WriteLine("  --scoring-profile <name|all>  compare: include only runs scored with this profile (default official-v1; 'all' mixes profiles)");
         Console.WriteLine("  --group-by <model|backend|runtime>  compare: pool backends per model+quant (default) or split by backend/build");
         Console.WriteLine("  --scope <all|current|parser:<v>|tool:<v>>  compare: restrict the headline series to one parser or benchmark version");
         Console.WriteLine("  --assume-profile <name>    migrate-archive-scores: mark legacy scores with this profile");
@@ -1330,5 +1338,13 @@ internal static class Program
             var value = GetNullable(name);
             return double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var parsed) ? parsed : defaultValue;
         }
+    }
+
+    private static string ValidateTruthAuditSource(string value)
+    {
+        var trimmed = value.Trim();
+        return string.Equals(trimmed, "best", StringComparison.OrdinalIgnoreCase) || AuditedRunNames.Normalize(trimmed) is not null
+            ? trimmed
+            : throw new ArgumentException($"--truth-audit-source must be best, run1 or run2 (got '{value}').");
     }
 }

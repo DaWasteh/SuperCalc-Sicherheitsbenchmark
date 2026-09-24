@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace SuperCalcBenchmark.Core;
@@ -38,9 +39,11 @@ public sealed class TruthAuditItem
     public string Rationale { get; set; } = string.Empty;
 
     [JsonPropertyName("admits_miss")]
+    [JsonConverter(typeof(LenientNullableBooleanConverter))]
     public bool? AdmitsMiss { get; set; }
 
     [JsonPropertyName("overclaims")]
+    [JsonConverter(typeof(LenientNullableBooleanConverter))]
     public bool? Overclaims { get; set; }
 }
 
@@ -50,6 +53,7 @@ public sealed class TruthAuditFalsePositiveAdmission
     public string PreviousFindingQuote { get; set; } = string.Empty;
 
     [JsonPropertyName("admitted")]
+    [JsonConverter(typeof(LenientBooleanConverter))]
     public bool Admitted { get; set; }
 
     [JsonPropertyName("rationale")]
@@ -89,8 +93,14 @@ public sealed class TruthAuditResult
     public double QuoteFidelity { get; init; }
     public int ContradictionCount { get; init; }
     public double AccountabilityScore { get; init; }
+
+    /// <summary>Point scheme behind <see cref="AccountabilityScore"/>; empty means legacy accountability-v1.</summary>
+    public string AccountabilityVersion { get; init; } = string.Empty;
     public int ActualMissedCount { get; init; }
     public int ActualFalsePositiveCount { get; init; }
+
+    /// <summary>Admissions whose quote identified a real true positive (inaccurate self-assessment, -1 each).</summary>
+    public int AdmittedTruePositiveCount { get; init; }
     public List<TruthAuditItemResult> Items { get; init; } = [];
 }
 
@@ -111,4 +121,68 @@ public sealed class TruthAuditItemResult
     public bool? OverclaimsConsistent { get; init; }
     public string PreviousOutputQuote { get; init; } = string.Empty;
     public string Notes { get; init; } = string.Empty;
+}
+
+/// <summary>
+/// The four self-assessment values of the truth-audit contract. Case, spaces and hyphens are
+/// normalized and unambiguous short forms accepted; the ambiguous "found" (full or partial?)
+/// is invalid. Scoring and diagnostics share this so both judge the same audits valid.
+/// </summary>
+public static class TruthAuditVocabulary
+{
+    public static string Normalize(string? value)
+    {
+        var normalized = (value ?? string.Empty).Trim().ToLowerInvariant().Replace('-', '_').Replace(' ', '_');
+        return normalized switch
+        {
+            "found_full" or "full" => "found_full",
+            "found_partial" or "partial" => "found_partial",
+            "unclear_or_overclaimed" or "unclear" or "overclaimed" => "unclear_or_overclaimed",
+            "missed" or "miss" => "missed",
+            _ => "invalid_or_missing"
+        };
+    }
+}
+
+/// <summary>Reads JSON booleans also when a model writes them as strings ("true", "yes", "false", "no").</summary>
+public sealed class LenientNullableBooleanConverter : JsonConverter<bool?>
+{
+    public override bool? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+        => reader.TokenType switch
+        {
+            JsonTokenType.True => true,
+            JsonTokenType.False => false,
+            JsonTokenType.Null => null,
+            JsonTokenType.String => (reader.GetString() ?? string.Empty).Trim().ToLowerInvariant() switch
+            {
+                "true" or "yes" or "1" => true,
+                "false" or "no" or "0" => false,
+                _ => null
+            },
+            JsonTokenType.Number => reader.TryGetInt32(out var number) ? number != 0 : null,
+            _ => throw new JsonException($"Unexpected token {reader.TokenType} for a boolean.")
+        };
+
+    public override void Write(Utf8JsonWriter writer, bool? value, JsonSerializerOptions options)
+    {
+        if (value is null)
+        {
+            writer.WriteNullValue();
+        }
+        else
+        {
+            writer.WriteBooleanValue(value.Value);
+        }
+    }
+}
+
+public sealed class LenientBooleanConverter : JsonConverter<bool>
+{
+    private static readonly LenientNullableBooleanConverter Inner = new();
+
+    public override bool Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+        => Inner.Read(ref reader, typeToConvert, options) ?? false;
+
+    public override void Write(Utf8JsonWriter writer, bool value, JsonSerializerOptions options)
+        => writer.WriteBooleanValue(value);
 }

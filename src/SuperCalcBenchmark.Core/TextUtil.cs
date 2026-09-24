@@ -76,6 +76,73 @@ internal static partial class TextUtil
         return Normalize(haystack).Contains(normalizedNeedle, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// Whole-term containment used by matching profiles that opt into word boundaries.
+    /// A single-word needle (letters/digits only, e.g. "system", "fact", "TEMP") must equal a
+    /// whole identifier of the haystack, where '_' belongs to the identifier: "system_clock",
+    /// "parse_factor" and "login_attempts_" therefore do not contain "system", "fact" or "temp".
+    /// A needle with separators ("CWE-78", "format string", "result_cache_") must occur as a
+    /// whole phrase of the normalized haystack: "CWE-787" does not contain "CWE-78".
+    /// A trailing plural "s"/"es" on the haystack side is tolerated in both cases.
+    /// </summary>
+    public static bool ContainsTerm(string? haystack, string? needle)
+    {
+        var trimmedNeedle = (needle ?? string.Empty).Trim();
+        if (trimmedNeedle.Length == 0 || string.IsNullOrWhiteSpace(haystack))
+        {
+            return false;
+        }
+
+        // Models that double-escape JSON leave a literal "\n" in quoted code; "{\nstrcpy(" must
+        // still contain the identifier "strcpy" rather than "nstrcpy".
+        haystack = LiteralEscapeRegex().Replace(haystack, " ");
+
+        var singleWord = trimmedNeedle.All(char.IsLetterOrDigit);
+        if (singleWord)
+        {
+            var identifierNeedle = IdentifierNormalize(trimmedNeedle);
+            return identifierNeedle.Length > 0
+                   && TermRegex(identifierNeedle, identifierChars: true).IsMatch(IdentifierNormalize(haystack));
+        }
+
+        var phrase = Normalize(trimmedNeedle);
+        return phrase.Length > 0 && TermRegex(phrase, identifierChars: false).IsMatch(Normalize(haystack));
+    }
+
+    /// <summary>Like <see cref="Normalize"/>, but keeps '_' as part of identifiers.</summary>
+    private static string IdentifierNormalize(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+
+        var formD = value.Normalize(NormalizationForm.FormD);
+        var builder = new StringBuilder(formD.Length);
+        foreach (var c in formD)
+        {
+            if (CharUnicodeInfo.GetUnicodeCategory(c) == UnicodeCategory.NonSpacingMark)
+            {
+                continue;
+            }
+
+            builder.Append(char.IsLetterOrDigit(c) || c == '_' ? char.ToLowerInvariant(c) : ' ');
+        }
+
+        return WhitespaceRegex().Replace(builder.ToString(), " ").Trim();
+    }
+
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<(string Needle, bool IdentifierChars), Regex> TermRegexCache = new();
+
+    private static Regex TermRegex(string normalizedNeedle, bool identifierChars)
+        => TermRegexCache.GetOrAdd((normalizedNeedle, identifierChars), key =>
+        {
+            var wordClass = key.IdentifierChars ? "[\\p{L}\\p{Nd}_]" : "[\\p{L}\\p{Nd}]";
+            return new Regex(
+                $"(?<!{wordClass}){Regex.Escape(key.Needle)}(?:e?s)?(?!{wordClass})",
+                RegexOptions.CultureInvariant);
+        });
+
     public static string SymbolLeaf(string? symbol)
     {
         if (string.IsNullOrWhiteSpace(symbol))
@@ -115,4 +182,7 @@ internal static partial class TextUtil
 
     [GeneratedRegex("\\s+")]
     private static partial Regex WhitespaceRegex();
+
+    [GeneratedRegex(@"\\[nrt]")]
+    private static partial Regex LiteralEscapeRegex();
 }

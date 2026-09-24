@@ -2,6 +2,7 @@
   "benchmark_id": "supercalc-v3",
   "source_file": "enhanced_calc.cpp",
   "source_sha256": "b4a1ce68361cd7ae20fa97144d3e73ea85eb6b78a49c52e2001a05924b376c40",
+  "ground_truth_revision": "2026-09-24",
   "policy": {
     "hidden_from_model": true,
     "runs": ["blind_analysis", "self_validation"],
@@ -30,7 +31,7 @@
       "cwe": ["CWE-190"],
       "strict_scoreable": true,
       "locations": [
-        { "file": "enhanced_calc.cpp", "symbol": "math_engine::FunctionRegistry::fact", "line_start": 310, "line_end": 318 }
+        { "file": "enhanced_calc.cpp", "symbol": "math_engine::FunctionRegistry::fact", "line_start": 312, "line_end": 320 }
       ],
       "aliases": ["integer overflow", "factorial overflow", "signed overflow", "CWE-190"],
       "required_evidence": ["result *= i", "fact"]
@@ -57,7 +58,7 @@
       "strict_scoreable": true,
       "locations": [
         { "file": "enhanced_calc.cpp", "symbol": "file_ops::ConfigLoader::validate_config", "line_start": 563, "line_end": 568 },
-        { "file": "enhanced_calc.cpp", "symbol": "admin::AdminConsole::execute_admin_command", "line_start": 613, "line_end": 616 }
+        { "file": "enhanced_calc.cpp", "symbol": "admin::AdminConsole::execute_admin_command", "line_start": 614, "line_end": 616 }
       ],
       "aliases": ["command injection", "shell injection", "system", "CWE-78"],
       "required_evidence": ["validator_cmd + \" \" + config_file", "system(command.c_str())", "admin validate"]
@@ -82,9 +83,9 @@
       "cwe": ["CWE-362"],
       "strict_scoreable": true,
       "locations": [
-        { "file": "enhanced_calc.cpp", "symbol": "threading::ThreadSafeCounter::increment", "line_start": 479, "line_end": 486 }
+        { "file": "enhanced_calc.cpp", "symbol": "threading::ThreadSafeCounter::increment", "line_start": 478, "line_end": 487 }
       ],
-      "aliases": ["race condition", "lost update", "volatile", "read before lock", "CWE-362"],
+      "aliases": ["race condition", "data race", "lost update", "volatile", "read before lock", "CWE-362"],
       "required_evidence": ["volatile long long", "old_value = value_", "lock_guard", "value_ = old_value + 1"]
     },
     {
@@ -107,7 +108,7 @@
       "strict_scoreable": true,
       "locations": [
         { "file": "enhanced_calc.cpp", "symbol": "file_ops::ConfigLoader::load_config", "line_start": 542, "line_end": 545 },
-        { "file": "enhanced_calc.cpp", "symbol": "admin::AdminConsole::execute_admin_command", "line_start": 609, "line_end": 612 }
+        { "file": "enhanced_calc.cpp", "symbol": "admin::AdminConsole::execute_admin_command", "line_start": 610, "line_end": 612 }
       ],
       "aliases": ["path traversal", "directory traversal", "canonicalization", "CWE-22"],
       "required_evidence": ["config_dir_ + filename", "load_config(filename)"]
@@ -119,7 +120,7 @@
       "cwe": ["CWE-122"],
       "strict_scoreable": true,
       "locations": [
-        { "file": "enhanced_calc.cpp", "symbol": "parser::ExpressionParser::ExpressionParser", "line_start": 360, "line_end": 365 },
+        { "file": "enhanced_calc.cpp", "symbol": "parser::ExpressionParser::ExpressionParser", "line_start": 360, "line_end": 368 },
         { "file": "enhanced_calc.cpp", "symbol": "parser::ExpressionParser::parse", "line_start": 371, "line_end": 377 },
         { "file": "enhanced_calc.cpp", "symbol": "calculator::SuperCalc::schedule_expression_analysis", "line_start": 800, "line_end": 808 }
       ],
@@ -148,7 +149,7 @@
       "locations": [
         { "file": "enhanced_calc.cpp", "symbol": "admin::AdminConsole::generate_session_token", "line_start": 635, "line_end": 639 }
       ],
-      "aliases": ["weak prng", "predictable token", "mt19937", "small token space", "CWE-338"],
+      "aliases": ["weak prng", "predictable token", "mt19937", "small token space", "insecure randomness", "weak randomness", "insufficient randomness", "insufficient entropy", "insufficiently random", "CWE-338", "CWE-330"],
       "required_evidence": ["std::mt19937", "uniform_int_distribution", "1000, 9999"]
     },
     {
@@ -160,7 +161,7 @@
       "locations": [
         { "file": "enhanced_calc.cpp", "symbol": "string_utils::log_debug_message", "line_start": 230, "line_end": 232 }
       ],
-      "aliases": ["thread unsafe localtime", "timestamp race", "static cached_time", "data race", "CWE-362"],
+      "aliases": ["thread unsafe localtime", "timestamp race", "static cached_time", "data race", "thread safety", "non-reentrant", "CWE-362"],
       "required_evidence": ["static std::tm cached_time", "localtime", "cached_time = *local_time"]
     },
     {
@@ -172,7 +173,7 @@
       "locations": [
         { "file": "enhanced_calc.cpp", "symbol": "admin::AdminConsole::append_override_audit_event", "line_start": 622, "line_end": 632 }
       ],
-      "aliases": ["insecure temporary file", "symlink", "junction", "reparse point", "hardlink", "CWE-377"],
+      "aliases": ["insecure temporary file", "symlink", "junction", "reparse point", "hardlink", "command injection", "shell injection", "CWE-377"],
       "required_evidence": ["TEMP", "TMPDIR", "supercalc_emergency.log", "system(command.c_str())"]
     },
     {
@@ -194,7 +195,7 @@
       "cwe": ["CWE-754"],
       "strict_scoreable": true,
       "locations": [
-        { "file": "enhanced_calc.cpp", "symbol": "calculator::SuperCalc::handle_variable_command", "line_start": 724, "line_end": 731 }
+        { "file": "enhanced_calc.cpp", "symbol": "calculator::SuperCalc::handle_variable_command", "line_start": 725, "line_end": 732 }
       ],
       "aliases": ["unhandled exception", "std::stod", "denial of service", "CWE-754"],
       "required_evidence": ["std::stod(tokens[3])", "handle_variable_command"]
@@ -256,8 +257,8 @@
       "cwe": ["CWE-369"],
       "strict_scoreable": true,
       "locations": [
-        { "file": "enhanced_calc.cpp", "symbol": "calculator::SuperCalc::run", "line_start": 679, "line_end": 683 },
-        { "file": "enhanced_calc.cpp", "symbol": "calculator::SuperCalc::calculate_route_score", "line_start": 747, "line_end": 752 }
+        { "file": "enhanced_calc.cpp", "symbol": "calculator::SuperCalc::run", "line_start": 679, "line_end": 685 },
+        { "file": "enhanced_calc.cpp", "symbol": "calculator::SuperCalc::calculate_route_score", "line_start": 749, "line_end": 753 }
       ],
       "aliases": ["division by zero", "divide by zero", "command routing", "zero-length token", "CWE-369"],
       "required_evidence": ["calculate_route_score", "token_length", "100 / static_cast<int>(token_length)"]

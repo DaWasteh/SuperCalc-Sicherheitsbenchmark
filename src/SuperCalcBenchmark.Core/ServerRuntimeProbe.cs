@@ -209,6 +209,7 @@ public sealed class ServerRuntimeProbe : IDisposable
             SpecType = FirstNonEmpty(autoTunerRuntime?.SpecType, launch.SpecType),
             DraftModel = FirstNonEmpty(autoTunerRuntime?.DraftModel, launch.DraftModel),
             MmProj = FirstNonEmpty(autoTunerRuntime?.MmProj, launch.MmProj),
+            SamplerSettings = FirstNonEmpty(observed.SamplerSettings, autoTunerRuntime?.SamplerSettings),
             Environment = environment,
             AutoTunerVersion = autoTunerRuntime?.AutoTunerVersion,
             AutoTunerModelId = autoTunerRuntime?.AutoTunerModelId,
@@ -434,6 +435,7 @@ public sealed class ServerRuntimeProbe : IDisposable
         public string? ModelFtype { get; set; }
         public int? ContextSize { get; set; }
         public int? TotalSlots { get; set; }
+        public string? SamplerSettings { get; set; }
         public bool LooksOpenAiCompatible { get; set; }
     }
 
@@ -477,12 +479,42 @@ public sealed class ServerRuntimeProbe : IDisposable
         }
 
         if (root.TryGetProperty("default_generation_settings", out var settings)
-            && settings.ValueKind == JsonValueKind.Object
-            && settings.TryGetProperty("n_ctx", out var nCtx)
-            && nCtx.TryGetInt32(out var contextSize))
+            && settings.ValueKind == JsonValueKind.Object)
         {
-            observed.ContextSize = contextSize;
+            if (settings.TryGetProperty("n_ctx", out var nCtx) && nCtx.TryGetInt32(out var contextSize))
+            {
+                observed.ContextSize = contextSize;
+            }
+
+            observed.SamplerSettings = ReadSamplerSettings(settings);
         }
+    }
+
+    private static readonly string[] SamplerKeys =
+    [
+        "temperature", "dynatemp_range", "top_k", "top_p", "min_p", "typical_p", "top_n_sigma",
+        "repeat_penalty", "repeat_last_n", "presence_penalty", "frequency_penalty",
+        "dry_multiplier", "xtc_probability", "mirostat", "n_predict", "seed"
+    ];
+
+    /// <summary>
+    /// The benchmark never sends sampler settings (they are tuned per model on the server), so
+    /// the server's defaults are what every run is sampled with; record them for comparability.
+    /// Newer llama.cpp nests them under <c>params</c>.
+    /// </summary>
+    public static string? ReadSamplerSettings(JsonElement settings)
+    {
+        var source = settings.TryGetProperty("params", out var nested) && nested.ValueKind == JsonValueKind.Object ? nested : settings;
+        var parts = new List<string>();
+        foreach (var key in SamplerKeys)
+        {
+            if (source.TryGetProperty(key, out var value) && value.ValueKind is JsonValueKind.Number or JsonValueKind.String or JsonValueKind.True or JsonValueKind.False)
+            {
+                parts.Add($"{key}={(value.ValueKind == JsonValueKind.String ? value.GetString() : value.GetRawText())}");
+            }
+        }
+
+        return parts.Count == 0 ? null : string.Join(' ', parts);
     }
 
     public static void ReadModels(JsonDocument? models, ObservedFacts observed)

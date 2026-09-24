@@ -92,6 +92,8 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        ScoringProfileComboBox.ItemsSource = ScoringProfiles.All.Select(profile => profile.Name).ToList();
+        ScoringProfileComboBox.SelectedItem = ScoringProfiles.DefaultName;
         _paths = BenchmarkPathResolver.Resolve();
         _repositoryRoot = _paths.AssetRoot;
         RestoreWindowPlacement();
@@ -1101,9 +1103,17 @@ public partial class MainWindow : Window
             TruthAuditSource = "best",
             ArchiveDirectory = _paths.ArchiveRoot,
             ArchiveMirrorDirectory = _paths.RepositoryArchiveRoot,
-            QuantOverride = string.IsNullOrWhiteSpace(QuantTextBox.Text) ? null : QuantTextBox.Text.Trim()
+            QuantOverride = string.IsNullOrWhiteSpace(QuantTextBox.Text) ? null : QuantTextBox.Text.Trim(),
+            ScoringProfile = SelectedScoringProfile
         };
     }
+
+    /// <summary>Profile for new runs and the comparison filter; scores of different profiles are never pooled.</summary>
+    private string SelectedScoringProfile =>
+        ScoringProfileComboBox?.SelectedItem as string ?? ScoringProfiles.DefaultName;
+
+    private void ScoringProfileComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        => ComparisonFilter_Changed(sender, e);
 
     // ---- Live streaming + per-run rendering ---------------------------------
 
@@ -1311,7 +1321,11 @@ public partial class MainWindow : Window
                 $"TP verloren: {result.Comparison.DroppedTruePositiveIds.Count}\n" +
                 $"TP neu: {result.Comparison.AddedTruePositiveIds.Count}\n" +
                 $"FP Run1 → Run2: {result.Comparison.Run1FalsePositives} → {result.Comparison.Run2FalsePositives}\n" +
-                $"TP-Retention: {result.Comparison.TruePositiveRetention:P1}";
+                $"TP-Retention: {(result.Comparison.TruePositiveRetention is double retention ? retention.ToString("P1") : "n/a")}";
+        }
+        else if (result.RunNotes.Count > 0)
+        {
+            ComparisonTextBlock.Text = string.Join("\n", result.RunNotes);
         }
 
         OutputPathTextBlock.Text = result.OutputDirectory;
@@ -1362,7 +1376,10 @@ public partial class MainWindow : Window
 
         ComparisonGrid.SelectedItem = row;
 
-        if (_editingComparisonGroupKey is not null)
+        // Keep the originals only while the same group stays in edit. A stale state from another
+        // row (e.g. a lost-focus event on a recycled container) must never be carried over:
+        // it would write this row's family/quant into the other group's scorecards.
+        if (string.Equals(_editingComparisonGroupKey, row.GroupKey, StringComparison.OrdinalIgnoreCase))
         {
             return;
         }
@@ -1411,6 +1428,15 @@ public partial class MainWindow : Window
             || _editingComparisonOriginalModelFamily is null
             || _editingComparisonOriginalQuant is null)
         {
+            ClearComparisonEditState();
+            return;
+        }
+
+        if (!string.Equals(row.GroupKey, _editingComparisonGroupKey, StringComparison.OrdinalIgnoreCase))
+        {
+            // The container was recycled for another group while editing; never commit across groups.
+            ClearComparisonEditState();
+            QueueComparisonRefresh(preserveSelection: true);
             return;
         }
 
@@ -1618,7 +1644,8 @@ public partial class MainWindow : Window
 
         var metadata = VulnerabilityMetadataIndex.Load(Path.Combine(_repositoryRoot, "benchmarks", "supercalc-v3", "ground_truth.json"));
         var scope = SelectedScope is { Kind: not ComparisonScopeKind.All } selectedScope ? selectedScope : null;
-        var report = ComparisonReport.Build(_comparisonGroups, benchmarkId, SelectedAggregate, familyFilter, metadata, SelectedRunView, SelectedMetric, null, SelectedGrouping, scope);
+        var comparisonProfile = ComparisonReport.ResolveDefaultScoringProfile(_comparisonGroups, SelectedScoringProfile);
+        var report = ComparisonReport.Build(_comparisonGroups, benchmarkId, SelectedAggregate, familyFilter, metadata, SelectedRunView, SelectedMetric, comparisonProfile, SelectedGrouping, scope);
         return (report, metadata, familyFilter);
     }
 
@@ -1706,7 +1733,7 @@ public partial class MainWindow : Window
         public string CurrentDisplay { get; init; } = string.Empty;
         public double ScorePercent { get; init; }
         public double CriticalRecall { get; init; }
-        public double Stability { get; init; }
+        public double? Stability { get; init; }
         public double EvidenceFidelity { get; init; }
         public double LocationAccuracy { get; init; }
         public double HallucinationRate { get; init; }

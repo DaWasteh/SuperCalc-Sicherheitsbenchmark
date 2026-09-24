@@ -285,6 +285,8 @@ public sealed class LlamaCppClient : IDisposable
         var errors = new List<string>();
         ChatCompletionResult? firstSuccessful = null;
         var attempts = BuildAttempts(options);
+        var discardedCompletionTokens = 0;
+        var discardedAttempts = 0;
 
         for (var i = 0; i < attempts.Count; i++)
         {
@@ -315,6 +317,17 @@ public sealed class LlamaCppClient : IDisposable
                 RetriedWithoutThinkingControl = attempt.RetriedWithoutThinkingControl
             };
 
+            if (discardedAttempts > 0)
+            {
+                // A retry after a reasoning-only answer re-samples the question; the discarded
+                // attempt's generation still counts towards the run's token cost.
+                result = result with
+                {
+                    CompletionTokens = result.CompletionTokens + discardedCompletionTokens,
+                    DiscardedEmptyAttempts = discardedAttempts
+                };
+            }
+
             firstSuccessful ??= result;
             if (result.LoopDetected || result.ManuallyStopped)
             {
@@ -326,6 +339,8 @@ public sealed class LlamaCppClient : IDisposable
                 return result;
             }
 
+            discardedAttempts++;
+            discardedCompletionTokens += result.CompletionTokens ?? 0;
             errors.Add($"{attempt.Label}: server returned empty assistant content with {result.ReasoningContent.Length} chars reasoning_content (finish_reason='{result.FinishReason}').");
         }
 
@@ -523,7 +538,12 @@ public sealed class LlamaCppClient : IDisposable
         var loopDetected = false;
         var loopDiagnosticsSummary = string.Empty;
         var loopState = new StreamLoopState();
-        using var linkedCancellation = CreateLinkedCancellation(cancellationToken, manualAbortToken);
+        // With ResponseHeadersRead, HttpClient.Timeout does not cover reading the body; enforce
+        // the configured request timeout on the whole stream so it cannot hang indefinitely.
+        using var streamTimeout = _httpClient.Timeout == Timeout.InfiniteTimeSpan ? null : new CancellationTokenSource(_httpClient.Timeout);
+        using var linkedCancellation = streamTimeout is null
+            ? CreateLinkedCancellation(cancellationToken, manualAbortToken)
+            : CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, manualAbortToken, streamTimeout.Token);
         var operationToken = linkedCancellation?.Token ?? cancellationToken;
 
         try
@@ -614,13 +634,31 @@ public sealed class LlamaCppClient : IDisposable
                 promptTokens: promptTokens,
                 completionTokens: completionTokens), string.Empty);
         }
+        catch (OperationCanceledException) when (streamTimeout?.IsCancellationRequested == true
+                                                  && !cancellationToken.IsCancellationRequested
+                                                  && !manualAbortToken.IsCancellationRequested)
+        {
+            if (contentBuilder.Length == 0 && reasoningBuilder.Length == 0)
+            {
+                return (false, null, $"Streaming read exceeded the request timeout of {_httpClient.Timeout}.");
+            }
+
+            // Keep the partial answer for transparency, but mark it: an incomplete stream is
+            // not a finished answer and must not be archived as an official result.
+            finishReason = "stream_timeout";
+        }
         catch (Exception ex) when (ex is IOException or HttpRequestException or JsonException)
         {
             // If we already accumulated something, fall through and return it as a partial
-            // success so the run still has data; otherwise report the error.
+            // result so the run still has data (flagged as incomplete); otherwise report the error.
             if (contentBuilder.Length == 0 && reasoningBuilder.Length == 0)
             {
                 return (false, null, $"Streaming read failed: {ex.Message}");
+            }
+
+            if (string.IsNullOrWhiteSpace(finishReason) || string.Equals(finishReason, "stop", StringComparison.OrdinalIgnoreCase))
+            {
+                finishReason = "stream_error";
             }
         }
 
