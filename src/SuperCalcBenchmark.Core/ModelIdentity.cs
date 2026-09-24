@@ -34,7 +34,11 @@ public static partial class ModelIdentity
         var stem = StripPathAndExtension(raw);
 
         var nameDetectedQuant = DetectQuant(stem);
-        var serverQuant = NormalizeServerFtype(serverFtype);
+        // MXFP4 exists only as the MoE file type; the archive uses one label for every spelling
+        // ("mxfp4_moe", "moe-mxfp4", server "MXFP4 MoE") so uploads of one model share a group.
+        var serverQuant = NormalizeServerFtype(serverFtype) is { } ftypeQuant && ftypeQuant.StartsWith("MXFP4", StringComparison.OrdinalIgnoreCase)
+            ? "MXFP4"
+            : NormalizeServerFtype(serverFtype);
 
         // The server ftype (dominant tensor type from the GGUF header) outranks a contradicting
         // name-based guess. A name that only refines it (Q6_K_L, UD_Q8_K_XL, NVFP4-Q4_K_M: same
@@ -210,8 +214,13 @@ public static partial class ModelIdentity
             return null;
         }
 
-        // Normalise aliases to one label: FP16/FP32 floats, "UD-" prefix, MXFP4 MoE as the server spells it.
+        // Normalise aliases to one label: FP16/FP32 floats, "UD-" prefix, every MXFP4(/MoE) spelling.
         var value = match.Value.ToUpperInvariant();
+        if (value.Contains("MXFP4", StringComparison.Ordinal))
+        {
+            return "MXFP4";
+        }
+
         if (value.StartsWith("UD-", StringComparison.Ordinal))
         {
             value = "UD_" + value[3..];
@@ -221,7 +230,6 @@ public static partial class ModelIdentity
         {
             "FP16" => "F16",
             "FP32" => "F32",
-            "MXFP4_MOE" or "MXFP4-MOE" => "MXFP4_MoE",
             _ => value
         };
     }
@@ -253,7 +261,7 @@ public static partial class ModelIdentity
     // Compound/prefixed tokens first (NVFP4-Q4_K_M, UD-Q4_K_XL), then IQ, K-quants with
     // _XL/_L/_M/_S recipes, legacy Qn_n (incl. Q1_0 and Q4_0_4_4), ternary TQ, FP4 formats, floats.
     private const string QuantPattern =
-        @"NVFP4[-_]Q[1-8]_K(?:_(?:XL|L|M|S))?|(?:UD[-_])?(?:IQ[1-4]_(?:XXS|XS|S|M|NL)|Q[1-8]_K(?:_(?:XXL|XL|L|M|S))?|Q[1-8]_[01](?:_[48]_[48])?|TQ[12]_0)|MXFP4(?:[-_]MOE)?|NVFP4|BF16|FP16|FP32|F16|F32";
+        @"NVFP4[-_]Q[1-8]_K(?:_(?:XL|L|M|S))?|(?:UD[-_])?(?:IQ[1-4]_(?:XXS|XS|S|M|NL)|Q[1-8]_K(?:_(?:XXL|XL|L|M|S))?|Q[1-8]_[01](?:_[48]_[48])?|TQ[12]_0)|(?:MOE[-_])?MXFP4(?:[-_]MOE)?|NVFP4|BF16|FP16|FP32|F16|F32";
 
     [GeneratedRegex(@"(?<![A-Za-z0-9])(" + QuantPattern + @")(?![A-Za-z0-9])", RegexOptions.IgnoreCase)]
     private static partial Regex QuantRegex();

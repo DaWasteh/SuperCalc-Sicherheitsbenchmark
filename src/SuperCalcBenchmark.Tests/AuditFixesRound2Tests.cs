@@ -59,6 +59,13 @@ internal static partial class TestRunner
         Assert(contradiction.Quant == "Q8_0", "a contradicting name still loses to the server ftype");
         Assert(ModelIdentity.Parse("Bonsai-8B-Q1_0.gguf").Quant == "Q1_0", "Q1_0 is a recognized quant");
         Assert(ModelIdentity.Parse("Qwen3.8-Flash-Next-UD-IQ1_S.gguf").Family == "qwen3-8-flash-next", "UD- prefixed quants are stripped from the family");
+
+        // Both MXFP4 spellings (and the server ftype) must land in one group.
+        var mxfp4a = ModelIdentity.Parse("VibeCoder-20b-RL1.0-MOE-MXFP4", serverFtype: "MXFP4 MoE");
+        var mxfp4b = ModelIdentity.Parse("VibeCoder-20b-RL1_0_MXFP4_MOE");
+        Assert(mxfp4a.GroupKey == mxfp4b.GroupKey && mxfp4a.GroupKey == "vibecoder-20b-rl1-0__MXFP4", $"MXFP4 spellings must share a group, got {mxfp4a.GroupKey} vs {mxfp4b.GroupKey}");
+        var nvfp4 = ModelIdentity.Parse("Qwen3.6-35B-A3B-NVFP4-Q4_K_M-mtp.gguf", serverFtype: "Q4_K - Medium");
+        Assert(nvfp4.GroupKey == "qwen3-6-35b-a3b-mtp__NVFP4-Q4_K_M", $"NVFP4-Q4_K_M refines the Q4_K_M ftype, got {nvfp4.GroupKey}");
     }
 
     private static void TruncatedRunsAreDegenerate()
