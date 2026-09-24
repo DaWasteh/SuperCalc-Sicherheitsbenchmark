@@ -4,7 +4,7 @@ namespace SuperCalcBenchmark.Core;
 
 public sealed class BenchmarkRunner
 {
-    private const string ToolVersion = "0.7.8";
+    private const string ToolVersion = "0.7.9";
 
     private readonly GroundTruthStore _groundTruthStore;
     private readonly PromptBuilder _promptBuilder;

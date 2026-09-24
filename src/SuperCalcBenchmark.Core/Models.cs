@@ -478,7 +478,7 @@ public sealed class BenchmarkRunArtifacts
 
 public sealed class BenchmarkRunResult
 {
-    public string ToolVersion { get; init; } = "0.7.8";
+    public string ToolVersion { get; init; } = "0.7.9";
     public BehavioralDiagnosticsEnvelope? BehavioralDiagnostics { get; set; }
     public string BenchmarkId { get; init; } = string.Empty;
     public string BenchmarkProfile { get; init; } = "official";
