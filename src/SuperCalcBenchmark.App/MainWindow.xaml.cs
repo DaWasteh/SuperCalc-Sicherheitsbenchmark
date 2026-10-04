@@ -92,10 +92,12 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
-        ScoringProfileComboBox.ItemsSource = ScoringProfiles.All.Select(profile => profile.Name).ToList();
-        ScoringProfileComboBox.SelectedItem = ScoringProfiles.DefaultName;
         _paths = BenchmarkPathResolver.Resolve();
         _repositoryRoot = _paths.AssetRoot;
+        // Selecting the profile fires SelectionChanged, which rebuilds the comparison and
+        // needs _repositoryRoot for ground_truth.json - so paths must be resolved first.
+        ScoringProfileComboBox.ItemsSource = ScoringProfiles.All.Select(profile => profile.Name).ToList();
+        ScoringProfileComboBox.SelectedItem = ScoringProfiles.DefaultName;
         RestoreWindowPlacement();
         SourceInitialized += MainWindow_SourceInitialized;
 
